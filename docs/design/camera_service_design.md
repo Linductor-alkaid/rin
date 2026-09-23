@@ -1,12 +1,13 @@
 # 相机服务与 viewer 架构设计
 
 > 状态：Active
-> 更新日期：2026-09-23
+> 更新日期：2026-09-24
 > 关联：[DEC-001](../decisions/DEC-001-dependency-pinning.md)、
 > [DEC-002](../decisions/DEC-002-runtime-ui-integration.md)、
 > [DEC-003](../decisions/DEC-003-depth-colormap.md)、
 > [DEC-006](../decisions/DEC-006-hotplug-device-selection.md)、
-> [DEC-007](../decisions/DEC-007-depth-palette.md)
+> [DEC-007](../decisions/DEC-007-depth-palette.md)、
+> [DEC-010](../decisions/DEC-010-imu-attitude-fusion.md)
 
 ## 分层
 
@@ -28,20 +29,27 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
 
 - `CameraServiceState`：`Idle / Opening / Streaming / Restreaming / Waiting / Stopping /
   Failed`（`Waiting` 为热插拔稳态，见 DEC-006）。
-- `StreamRequest`：彩色+深度的 width/height/fps（成对请求，M1 不支持单流）。
+- `StreamRequest`：彩色+深度的 width/height/fps（成对请求，M1 不支持单流）；
+  `enableMotion` 请求附加 ACCEL/GYRO 运动流（M3，设备无 IMU 时运动通道保持空）。
 - `DepthColorScheme`：深度图输出配色 `Jet / Grayscale`（DEC-007；灰度近白远黑，
   无效深度 0 输出不透明黑）。
 - `Frame`：`kind(Rgb|Depth)`、`width/height/stride`、`sequence`、`deviceTimestampMs`、
   像素缓冲（`std::shared_ptr<const std::vector<std::uint8_t>>`，RGBA8 打包）。
 - `IntrinsicsSnapshot`：彩色/深度各自的 `width/height/fx/fy/cx/cy` 与畸变系数/模型。
+- `MotionSample`（M3）：单个 IMU 三轴采样，`kind(Accel|Gyro)` 决定 `axes` 语义——
+  比力 m/s²（含重力）或角速度 rad/s，设备坐标系；附设备时间戳与通道序号。
+- `ImuSnapshot`（M3，DEC-010）：姿态单位四元数（w,x,y,z 标量在前，传感器系→世界系，
+  世界系 Z 轴向上、yaw 初值 0 且不可观）+ 源频率统计（实测 Hz + 累计样本数）+ 序号。
 - `StreamCapabilities`：设备名/序列号/固件 + 彩色/深度支持的分辨率档位（start 准入阶段
-  同步枚举后经能力通道发布）。
+  同步枚举后经能力通道发布）；`DeviceInfo` 另报 IMU 能力（`imuSupported` 与
+  ACCEL/GYRO 速率档位 Hz，M3）。
 - `ServiceEvent`：`kind`（Started/ResolutionChanged/Info/Stopped/Failed）、`state`、人读
   消息、时间戳。
 - `ICameraService`：`start(StreamRequest)`、`requestResolution(StreamRequest)`、
   `requestDevice(serial)`、`requestDepthColorScheme(DepthColorScheme)`、`stop()`、
-  `state()`、`lastError()`，以及四条"上次已见序号"语义的非阻塞读取通道
-  `tryLoadFrame / tryLoadIntrinsics / tryLoadCapabilities / tryLoadEvent`。
+  `state()`、`lastError()`，以及六条"上次已见序号"语义的非阻塞读取通道
+  `tryLoadFrame / tryLoadIntrinsics / tryLoadMotion / tryLoadPose / tryLoadCatalog /
+  tryLoadEvent`（M3 新增 motion/pose 两条；适配器发布由 M3-04 接入）。
   接口只使用 std 类型（RULE-01）；`executor::comm::LatestMailbox` 由实现内部持有。
 - `createRealSenseCameraService(executor::Executor&)`：工厂（声明在 adapter 头
   `src/adapters/realsense/realsense_camera_service.hpp`，viewer 只经工厂创建；
@@ -72,6 +80,7 @@ Failed --stop()--> Stopping --> Idle
 | UI→采集命令（分辨率切换 / 设备选择 / 深度配色） | `LatestMailbox<ControlCommand>` + `worker.wakeup()` | `RealSenseCamera` | 关闭时 mailbox 停止投递 |
 | 采集→UI 帧 | `LatestMailbox<Frame>` ×2（RGB/深度） | `RealSenseCamera` 提供、viewer 消费 | 关闭后不再发布 |
 | 采集→UI 事件/内参 | `LatestMailbox<ServiceEvent>` / `LatestMailbox<IntrinsicsSnapshot>` | 同上 | 同上 |
+| 采集→UI 运动采样/姿态快照（M3，`EXEC-06`） | `LatestMailbox<MotionSample>` / `LatestMailbox<ImuSnapshot>`（采集 worker 内分支处理 + 融合推进后最新态投递；适配器发布由 M3-04 接入） | 同上 | 同上 |
 
 采集循环骨架（worker 线程）：
 

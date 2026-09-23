@@ -4,6 +4,7 @@
 
 #include <executor/comm/mailbox.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -48,6 +49,13 @@ struct ControlCommand {
 
 const char* depthSchemeName(DepthColorScheme scheme) {
     return scheme == DepthColorScheme::Grayscale ? "grayscale" : "jet";
+}
+
+/// IMU 速率档位去重收集（升序在 enumerateDevice 收尾统一排序）。
+void addDistinctRate(std::vector<std::uint32_t>& ratesHz, std::uint32_t fpsHz) {
+    if (std::find(ratesHz.begin(), ratesHz.end(), fpsHz) == ratesHz.end()) {
+        ratesHz.push_back(fpsHz);
+    }
 }
 
 /// 热插拔监视桥（DEC-006）：librealsense 回调线程只做 alive 检查 + 有界投递
@@ -156,6 +164,13 @@ public:
         return intrinsics_.try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
     }
 
+    // 运动通道（M3-03 契约）：M3-04 接入 ACCEL/GYRO 采集分支与 LatestMailbox 发布前
+    // 无生产者，按"无新采样"返回 false（enableMotion 请求本身已被 start 准入接受）。
+    [[nodiscard]] bool tryLoadMotion(std::uint64_t&, MotionSample&) override { return false; }
+
+    // 姿态通道（M3-03 契约）：ImuFuser 于 M3-04/M3-05 接入采集 worker 后发布。
+    [[nodiscard]] bool tryLoadPose(std::uint64_t&, ImuSnapshot&) override { return false; }
+
     [[nodiscard]] bool tryLoadCatalog(std::uint64_t& lastSeenSequence,
                                       DeviceCatalog& out) override {
         return catalog_.try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
@@ -258,7 +273,7 @@ private:
 
 namespace {
 
-/// 枚举单台设备的名称/序列号/固件与 RGB8/Z16 分辨率档位。
+/// 枚举单台设备的名称/序列号/固件、RGB8/Z16 分辨率档位与 IMU 能力/速率档位。
 DeviceInfo enumerateDevice(const rs2::device& device) {
     DeviceInfo info;
     info.name = device.get_info(RS2_CAMERA_INFO_NAME);
@@ -287,9 +302,21 @@ DeviceInfo enumerateDevice(const rs2::device& device) {
                     {static_cast<std::uint32_t>(video.width()),
                      static_cast<std::uint32_t>(video.height()),
                      static_cast<std::uint32_t>(video.fps())});
+            } else if (profile.stream_type() == RS2_STREAM_ACCEL &&
+                       profile.format() == RS2_FORMAT_MOTION_XYZ32F) {
+                info.imuSupported = true;
+                addDistinctRate(info.imuAccelRatesHz,
+                                static_cast<std::uint32_t>(profile.fps()));
+            } else if (profile.stream_type() == RS2_STREAM_GYRO &&
+                       profile.format() == RS2_FORMAT_MOTION_XYZ32F) {
+                info.imuSupported = true;
+                addDistinctRate(info.imuGyroRatesHz,
+                                static_cast<std::uint32_t>(profile.fps()));
             }
         }
     }
+    std::sort(info.imuAccelRatesHz.begin(), info.imuAccelRatesHz.end());
+    std::sort(info.imuGyroRatesHz.begin(), info.imuGyroRatesHz.end());
     return info;
 }
 

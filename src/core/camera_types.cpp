@@ -1,5 +1,7 @@
 #include "rin/camera_types.hpp"
 
+#include <cmath>
+
 #include <chrono>
 
 namespace rin {
@@ -27,11 +29,40 @@ const char* toString(CameraServiceState state) noexcept {
 bool operator==(const StreamRequest& lhs, const StreamRequest& rhs) noexcept {
     return lhs.colorWidth == rhs.colorWidth && lhs.colorHeight == rhs.colorHeight &&
            lhs.colorFps == rhs.colorFps && lhs.depthWidth == rhs.depthWidth &&
-           lhs.depthHeight == rhs.depthHeight && lhs.depthFps == rhs.depthFps;
+           lhs.depthHeight == rhs.depthHeight && lhs.depthFps == rhs.depthFps &&
+           lhs.enableMotion == rhs.enableMotion;
 }
 
 bool operator!=(const StreamRequest& lhs, const StreamRequest& rhs) noexcept {
     return !(lhs == rhs);
+}
+
+bool MotionSample::valid() const noexcept {
+    if (kind != MotionStreamKind::Accel && kind != MotionStreamKind::Gyro) {
+        return false;
+    }
+    for (const float axis : axes) {
+        if (!std::isfinite(axis)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ImuSnapshot::valid() const noexcept {
+    double sumSquares = 0.0;
+    for (const float component : orientation) {
+        if (!std::isfinite(component)) {
+            return false;
+        }
+        sumSquares += static_cast<double>(component) * component;
+    }
+    // 发布前已归一化的单位四元数；容差覆盖 float 归一化舍入并拦截未初始化/损坏值。
+    if (std::fabs(sumSquares - 1.0) > 1e-3) {
+        return false;
+    }
+    return std::isfinite(sources.gyroHz) && sources.gyroHz >= 0.0f &&
+           std::isfinite(sources.accelHz) && sources.accelHz >= 0.0f;
 }
 
 }  // namespace rin

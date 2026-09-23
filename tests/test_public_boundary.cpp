@@ -22,6 +22,8 @@ public:
     std::string lastError() const override { return {}; }
     bool tryLoadFrame(rin::FrameKind, std::uint64_t&, rin::Frame&) override { return false; }
     bool tryLoadIntrinsics(std::uint64_t&, rin::IntrinsicsSnapshot&) override { return false; }
+    bool tryLoadMotion(std::uint64_t&, rin::MotionSample&) override { return false; }
+    bool tryLoadPose(std::uint64_t&, rin::ImuSnapshot&) override { return false; }
     bool tryLoadCatalog(std::uint64_t&, rin::DeviceCatalog&) override { return false; }
     bool tryLoadEvent(rin::ServiceEvent&) override { return false; }
 };

@@ -45,6 +45,18 @@ public:
     [[nodiscard]] virtual bool tryLoadIntrinsics(std::uint64_t& lastSeenSequence,
                                                  IntrinsicsSnapshot& out) = 0;
 
+    /// 取运动通道中 sequence > lastSeenSequence 的最新原始 IMU 采样（ACCEL/GYRO
+    /// 共用通道，最新态语义）；无新采样返回 false。未使能运动流或设备无 IMU 时恒为
+    /// false；原始采样仅作诊断，姿态消费方请使用 tryLoadPose()。
+    [[nodiscard]] virtual bool tryLoadMotion(std::uint64_t& lastSeenSequence,
+                                             MotionSample& out) = 0;
+
+    /// 取姿态通道中 sequence > lastSeenSequence 的最新融合姿态快照（最新态语义，
+    /// DEC-010/EXEC-06：采集 worker 内融合并发布）；无新快照返回 false。运动流未
+    /// 使能或姿态尚未首次收敛时可能长期为 false。
+    [[nodiscard]] virtual bool tryLoadPose(std::uint64_t& lastSeenSequence,
+                                           ImuSnapshot& out) = 0;
+
     /// 取在线设备目录（含各设备能力与活动设备）；无更新返回 false。
     [[nodiscard]] virtual bool tryLoadCatalog(std::uint64_t& lastSeenSequence,
                                               DeviceCatalog& out) = 0;
