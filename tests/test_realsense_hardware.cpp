@@ -1,13 +1,17 @@
 // 真机冒烟测试（hardware 标签）：D435if 在位时执行完整链路
-// start(640x480@30) -> Started 事件 -> RGB/Depth 帧 -> 内参 -> 设备目录（DEC-006）->
-// requestDevice(活动序列号) 幂等（不中断流）-> 深度配色运行时切换（DEC-007：Grayscale
-// 生效不重流、消息精确、帧内容灰度性质；切回 Jet 伪彩性质；同值幂等）->
-// requestResolution(848x480@30) -> ResolutionChanged + 新分辨率帧 -> stop() 收敛 Idle ->
-// 二次 stop() 幂等。
+// start(640x480@30, enableMotion) -> Started 事件 -> RGB/Depth 帧 -> motion 通道
+// （M3-04：ACCEL/GYRO 原始采样 + IdentityImuFuser 恒等姿态快照 + 源频率收敛）->
+// 内参（含 gyro→color 外参与 ACCEL/GYRO 出厂运动内参，内容级非全零防线）-> 设备目录
+// （DEC-006 + IMU 能力字段）-> requestDevice(活动序列号) 幂等（不中断流）-> 深度配色
+// 运行时切换（DEC-007：Grayscale 生效不重流、消息精确、帧内容灰度性质；切回 Jet 伪彩
+// 性质；同值幂等）-> requestResolution(848x480@30)（M3-04：restream 重建含 IMU，运动/
+// 姿态会话序号不回退、累计样本只增）-> ResolutionChanged + 新分辨率帧 -> stop() 收敛
+// Idle -> 二次 stop() 幂等。
 // DEC-006：start 不再因无设备拒绝（worker 进 Waiting 稳态）；无设备时测试经
 // Waiting + 空目录判定打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
 // Waiting 态的设备移除/恢复语义无法在真机上程序化模拟（无免密 sudo 拔 USB），
-// 由真机人工验收覆盖；本测试只覆盖单设备自动选择路径。
+// 由真机人工验收覆盖；本测试只覆盖单设备自动选择路径（无 IMU 设备的退化路径与
+// 多设备切换路径无第二台设备，由 M3-08 真机验收按规范补充）。
 // 全部等待为有界轮询（100ms 间隔），不使用裸 sleep 等待；退出前保证 stop() 收尾。
 #include "test_util.hpp"
 
@@ -148,8 +152,16 @@ bool hasChromaticPixel(const Frame& frame) {
 
 /// 冒烟主体。返回 0 = 通过（RIN_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
 int runSmokeTest(ICameraService& service) {
-    const rin::StreamRequest baseRequest{640, 480, 30, 640, 480, 30};  // D435if RGB8/Z16 均支持
-    const rin::StreamRequest altRequest{848, 480, 30, 848, 480, 30};
+    // M3-04：全程 enableMotion——D435if 具备 IMU，混合 pipeline（video + ACCEL/GYRO）
+    // 从首次 pipeline.start 起生效，motion 分支与视频链路并行验证。
+    const rin::StreamRequest baseRequest{640, 480, 30, 640, 480, 30, true};  // RGB8/Z16 均支持
+    const rin::StreamRequest altRequest{848, 480, 30, 848, 480, 30, true};
+
+    // M3-04 跨 restream 连续性记账（2c 采样、5c 复核）：会话序号与累计样本数。
+    std::uint64_t preMotionSessionSeq = 0;
+    std::uint64_t prePoseSessionSeq = 0;
+    std::uint64_t preGyroSamples = 0;
+    std::uint64_t preAccelSamples = 0;
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto elapsedMs = [&t0] {
@@ -209,6 +221,18 @@ int runSmokeTest(ICameraService& service) {
     });
     if (!startedEvent && failureMessage.find("no RealSense device") != std::string::npos) {
         std::printf("SKIP: no RealSense device (%s)\n", failureMessage.c_str());
+        return 77;
+    }
+    if (!startedEvent && failureMessage.find("scan_element") != std::string::npos &&
+        failureMessage.find("Permission denied") != std::string::npos) {
+        // M3-04 真机前置缺失：运动流启用需写 IMU 的 HID/IIO scan_elements sysfs
+        //（如 in_accel_y_en，root:root 0644），须安装 librealsense udev 规则或等价
+        // 授权。按工程规范显式 SKIP 并记录补跑条件：安装 librealsense udev 规则
+        //（上游 scripts/setup_udev_rules.sh）后复跑本测试；在此之前 motion 真机
+        // 验证保持未执行状态。
+        std::printf("SKIP: IMU motion stream blocked by iio scan_element permissions "
+                    "(install librealsense udev rules, then rerun); last error: %s\n",
+                    failureMessage.c_str());
         return 77;
     }
     if (!startedEvent && service.state() == CameraServiceState::Waiting) {
@@ -333,6 +357,64 @@ int runSmokeTest(ICameraService& service) {
     sampleContent(FrameKind::Rgb, rgbSequence, kRgbMinNonZeroRatio, "rgb");
     sampleContent(FrameKind::Depth, depthSequence, kDepthMinNonZeroRatio, "depth");
 
+    // --- 2c) M3-04 motion 通道：ACCEL/GYRO 原始采样与恒等姿态快照经通道发布 ---
+    // enableMotion 且设备具备 IMU（D435if）：采集 worker 的 motion 分支把原始采样
+    // 与 IdentityImuFuser 姿态快照投递到 motion/pose 通道；源频率 EMA 在数百毫秒内
+    // 收敛为正，会话累计样本数为正。
+    {
+        rin::MotionSample motion;
+        std::uint64_t motionSeq = 0;
+        bool gyroSeen = false;
+        bool accelSeen = false;
+        const bool motionArrived = pollUntil(5s, [&] {
+            if (!service.tryLoadMotion(motionSeq, motion)) {
+                return false;
+            }
+            gyroSeen = gyroSeen || motion.kind == rin::MotionStreamKind::Gyro;
+            accelSeen = accelSeen || motion.kind == rin::MotionStreamKind::Accel;
+            return gyroSeen && accelSeen;
+        });
+        RIN_CHECK(motionArrived);
+        if (motionArrived) {
+            RIN_CHECK(gyroSeen);
+            RIN_CHECK(accelSeen);
+            RIN_CHECK(motion.valid());
+            RIN_CHECK(motion.deviceTimestampMs >= 0.0);
+            std::printf("hardware: motion sample kind=%s ts=%.1f ms (gyro+accel both seen)\n",
+                        motion.kind == rin::MotionStreamKind::Gyro ? "gyro" : "accel",
+                        motion.deviceTimestampMs);
+        }
+
+        rin::ImuSnapshot pose;
+        std::uint64_t poseSeq = 0;
+        const bool poseArrived =
+            pollUntil(5s, [&] { return service.tryLoadPose(poseSeq, pose); });
+        RIN_CHECK(poseArrived);
+        if (poseArrived) {
+            RIN_CHECK(pose.valid());
+            // IdentityImuFuser 假实现契约：姿态恒等 {1,0,0,0}（M3-05 切换 Mahony
+            // 真身后本断言按新契约更新）。
+            RIN_CHECK_EQ(pose.orientation[0], 1.0f);
+            RIN_CHECK_EQ(pose.orientation[1], 0.0f);
+            RIN_CHECK_EQ(pose.orientation[2], 0.0f);
+            RIN_CHECK_EQ(pose.orientation[3], 0.0f);
+            RIN_CHECK(pose.sources.gyroHz > 0.0f);
+            RIN_CHECK(pose.sources.accelHz > 0.0f);
+            RIN_CHECK(pose.sources.gyroSamples > 0);
+            RIN_CHECK(pose.sources.accelSamples > 0);
+            preMotionSessionSeq = motion.sequence;
+            prePoseSessionSeq = pose.sequence;
+            preGyroSamples = pose.sources.gyroSamples;
+            preAccelSamples = pose.sources.accelSamples;
+            std::printf(
+                "hardware: pose seq %llu identity (gyro %.1f Hz / %llu samples, accel "
+                "%.1f Hz / %llu samples)\n",
+                static_cast<unsigned long long>(pose.sequence), pose.sources.gyroHz,
+                static_cast<unsigned long long>(pose.sources.gyroSamples),
+                pose.sources.accelHz, static_cast<unsigned long long>(pose.sources.accelSamples));
+        }
+    }
+
     // --- 3) 内参快照 color/depth valid()，且与当前档位一致 ---
     rin::IntrinsicsSnapshot intrinsics;
     std::uint64_t intrinsicsSequence = 0;
@@ -350,6 +432,31 @@ int runSmokeTest(ICameraService& service) {
         std::printf("hardware: intrinsics color %ux%u (fx=%.1f), depth %ux%u (fx=%.1f)\n",
                     intrinsics.color.width, intrinsics.color.height, intrinsics.color.fx,
                     intrinsics.depth.width, intrinsics.depth.height, intrinsics.depth.fx);
+
+        // --- M3-04：motion intrinsics 与 gyro→color 外参链（D435if 读取成功形态）。
+        // 内容级防线：全零旋转不可能是真实外参、全零刻度不可能是真实出厂内参——
+        // 即使 valid() 放行也能拦住"读取失败被静默当成功"（全零应可观察为无效，
+        // 契约面由 test_motion_intrinsics.cpp 锁定）。
+        RIN_CHECK(intrinsics.gyroToColor.valid());
+        RIN_CHECK(intrinsics.accelIntrinsics.valid());
+        RIN_CHECK(intrinsics.gyroIntrinsics.valid());
+        bool gyroRotationNonZero = false;
+        for (const float value : intrinsics.gyroToColor.rotation) {
+            gyroRotationNonZero = gyroRotationNonZero || value != 0.0f;
+        }
+        RIN_CHECK(gyroRotationNonZero);
+        RIN_CHECK(intrinsics.accelIntrinsics.scale[0] != 0.0f);
+        RIN_CHECK(intrinsics.accelIntrinsics.scale[8] != 0.0f);
+        RIN_CHECK(intrinsics.gyroIntrinsics.scale[0] != 0.0f);
+        RIN_CHECK(intrinsics.gyroIntrinsics.scale[8] != 0.0f);
+        std::printf(
+            "hardware: gyro->color t=(%.4f, %.4f, %.4f); scale diag accel (%.4f, %.4f, "
+            "%.4f) gyro (%.4f, %.4f, %.4f)\n",
+            intrinsics.gyroToColor.translation[0], intrinsics.gyroToColor.translation[1],
+            intrinsics.gyroToColor.translation[2], intrinsics.accelIntrinsics.scale[0],
+            intrinsics.accelIntrinsics.scale[4], intrinsics.accelIntrinsics.scale[8],
+            intrinsics.gyroIntrinsics.scale[0], intrinsics.gyroIntrinsics.scale[4],
+            intrinsics.gyroIntrinsics.scale[8]);
     }
 
     // --- 4) 设备目录（DEC-006）：单设备自动选择、目录项完整、与帧流来源一致 ---
@@ -371,6 +478,26 @@ int runSmokeTest(ICameraService& service) {
         RIN_CHECK(!device.firmwareVersion.empty());
         RIN_CHECK(!device.colorOptions.empty());
         RIN_CHECK(!device.depthOptions.empty());
+        // M3-04：D435if 内置 IMU——目录上报 imuSupported 与升序速率档位（混合
+        // pipeline 的设备能力依据，采集侧 deviceHasImu 查询该目录）。
+        RIN_CHECK(device.imuSupported);
+        RIN_CHECK(!device.imuAccelRatesHz.empty());
+        RIN_CHECK(!device.imuGyroRatesHz.empty());
+        for (std::size_t index = 1; index < device.imuAccelRatesHz.size(); ++index) {
+            RIN_CHECK(device.imuAccelRatesHz[index] > device.imuAccelRatesHz[index - 1]);
+        }
+        for (std::size_t index = 1; index < device.imuGyroRatesHz.size(); ++index) {
+            RIN_CHECK(device.imuGyroRatesHz[index] > device.imuGyroRatesHz[index - 1]);
+        }
+        std::printf("hardware: catalog imuSupported=%d accel rates:", device.imuSupported ? 1 : 0);
+        for (const std::uint32_t rate : device.imuAccelRatesHz) {
+            std::printf(" %u", rate);
+        }
+        std::printf(", gyro rates:");
+        for (const std::uint32_t rate : device.imuGyroRatesHz) {
+            std::printf(" %u", rate);
+        }
+        std::printf("\n");
         // 帧流来源一致性：Started 事件携带 "streaming <serial>"（适配器契约）。
         RIN_CHECK(startedMessage.find(activeSerial) != std::string::npos);
         std::printf(
@@ -636,6 +763,44 @@ int runSmokeTest(ICameraService& service) {
     }
     std::printf("hardware: ResolutionChanged after %.0f ms, 848x480 rgb=%s depth=%s\n", changedMs,
                 rgb848Arrived ? "ok" : "missing", depth848Arrived ? "ok" : "missing");
+
+    // --- 5c) M3-04 restream 重建含 IMU：运动/姿态通道恢复发布，会话序号不回退，
+    //     会话累计样本数只增（resetStreamState 只复位融合器与频率窗口，序号与统计
+    //     跨重建连续——消费方 lastSeen 序号不回退的契约）。
+    {
+        rin::MotionSample motion;
+        std::uint64_t motionSeq = 0;
+        const bool motionResumed = pollUntil(5s, [&] {
+            return service.tryLoadMotion(motionSeq, motion) &&
+                   motion.sequence > preMotionSessionSeq;
+        });
+        RIN_CHECK(motionResumed);
+
+        rin::ImuSnapshot pose;
+        std::uint64_t poseSeq = 0;
+        const bool poseResumed = pollUntil(5s, [&] {
+            return service.tryLoadPose(poseSeq, pose) && pose.sequence > prePoseSessionSeq;
+        });
+        RIN_CHECK(poseResumed);
+        if (poseResumed) {
+            RIN_CHECK(pose.valid());
+            // 复位后重新收敛（假实现：首个采样即收敛且姿态恒等）。
+            RIN_CHECK_EQ(pose.orientation[0], 1.0f);
+            RIN_CHECK(pose.sources.gyroSamples >= preGyroSamples);
+            RIN_CHECK(pose.sources.accelSamples >= preAccelSamples);
+            std::printf(
+                "hardware: motion resumed post-restream (motion seq %llu > %llu, pose seq "
+                "%llu > %llu, gyro samples %llu >= %llu, accel samples %llu >= %llu)\n",
+                static_cast<unsigned long long>(motion.sequence),
+                static_cast<unsigned long long>(preMotionSessionSeq),
+                static_cast<unsigned long long>(pose.sequence),
+                static_cast<unsigned long long>(prePoseSessionSeq),
+                static_cast<unsigned long long>(pose.sources.gyroSamples),
+                static_cast<unsigned long long>(preGyroSamples),
+                static_cast<unsigned long long>(pose.sources.accelSamples),
+                static_cast<unsigned long long>(preAccelSamples));
+        }
+    }
 
     // --- 6) stop() 收敛 Idle；二次 stop() 幂等不崩溃 ---
     service.stop();

@@ -21,6 +21,34 @@ target_include_directories(test_motion_contracts PRIVATE ${CMAKE_SOURCE_DIR}/inc
 add_test(NAME motion_contracts COMMAND test_motion_contracts)
 set_tests_properties(motion_contracts PROPERTIES LABELS "unit")
 
+# M3-04 IntrinsicsSnapshot 契约扩展（仅公开头）：Extrinsics/MotionIntrinsics
+# 的 valid() 语义（全零无效可观察、非有限拒绝）与快照"纯视频/完整"装配形态。
+add_executable(test_motion_intrinsics test_motion_intrinsics.cpp)
+target_link_libraries(test_motion_intrinsics PRIVATE rin::core)
+target_include_directories(test_motion_intrinsics PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME motion_intrinsics COMMAND test_motion_intrinsics)
+set_tests_properties(motion_intrinsics PROPERTIES LABELS "unit")
+
+# M3-04 ImuFuser 接缝（Core 纯逻辑）：IdentityImuFuser 假实现契约（初态不可用、
+# 推进后恒等姿态、reset 幂等）、多态/不可拷贝接缝与 createImuFuser 工厂可用性
+# （刻意不锁定工厂返回的具体实现，M3-05 切换 Mahony 不破坏本测试）。
+add_executable(test_imu_fuser test_imu_fuser.cpp)
+target_link_libraries(test_imu_fuser PRIVATE rin::core)
+target_include_directories(test_imu_fuser PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
+add_test(NAME imu_fuser COMMAND test_imu_fuser)
+set_tests_properties(imu_fuser PROPERTIES LABELS "unit")
+
+# M3-04 MotionIngest（rs2-free 离线行为，EXEC-06 采集分支语义）：有效/无效采样
+# 分支、会话序号单调与最新态邮箱语义、EMA 源频率（已知 dt/收敛/异常时间戳/长间隙）、
+# resetStreamState（restream 语义：融合器复位 + 序号/累计样本连续）、ImuFuser 接缝
+# （测试桩验证推进次数/原始采样/姿态门控），以及 Executor 生产者 + 主线程消费者的
+# 跨上下文发布/读取与 shutdown 收敛（tsan 预设复跑目标）。
+add_executable(test_motion_ingest test_motion_ingest.cpp)
+target_link_libraries(test_motion_ingest PRIVATE rin::realsense_adapter)
+target_include_directories(test_motion_ingest PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
+add_test(NAME motion_ingest COMMAND test_motion_ingest)
+set_tests_properties(motion_ingest PROPERTIES LABELS "unit")
+
 # 公开头第三方类型边界（RULE-01）：本目标只拿到 include/，不链接任何第三方；
 # 若公开头引入 rs2/eui 类型将因找不到头文件而编译失败。
 add_executable(test_public_boundary test_public_boundary.cpp)
