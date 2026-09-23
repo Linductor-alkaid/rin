@@ -18,6 +18,7 @@
 #include <executor/executor.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -392,12 +393,15 @@ int runSmokeTest(ICameraService& service) {
         RIN_CHECK(poseArrived);
         if (poseArrived) {
             RIN_CHECK(pose.valid());
-            // IdentityImuFuser 假实现契约：姿态恒等 {1,0,0,0}（M3-05 切换 Mahony
-            // 真身后本断言按新契约更新）。
-            RIN_CHECK_EQ(pose.orientation[0], 1.0f);
-            RIN_CHECK_EQ(pose.orientation[1], 0.0f);
-            RIN_CHECK_EQ(pose.orientation[2], 0.0f);
-            RIN_CHECK_EQ(pose.orientation[3], 0.0f);
+            // M3-05 起 createImuFuser() 返回 Mahony 真身（DEC-010）：姿态随真实
+            // 运动变化，恒等断言不再成立；真机噪声下契约约束为单位四元数
+            // （ImuSnapshot::valid() 已含 norm² 容差 1e-3，此处显式复核数值面）。
+            const double poseNormSq =
+                static_cast<double>(pose.orientation[0]) * pose.orientation[0] +
+                static_cast<double>(pose.orientation[1]) * pose.orientation[1] +
+                static_cast<double>(pose.orientation[2]) * pose.orientation[2] +
+                static_cast<double>(pose.orientation[3]) * pose.orientation[3];
+            RIN_CHECK(std::fabs(poseNormSq - 1.0) <= 1e-3);
             RIN_CHECK(pose.sources.gyroHz > 0.0f);
             RIN_CHECK(pose.sources.accelHz > 0.0f);
             RIN_CHECK(pose.sources.gyroSamples > 0);
@@ -407,7 +411,7 @@ int runSmokeTest(ICameraService& service) {
             preGyroSamples = pose.sources.gyroSamples;
             preAccelSamples = pose.sources.accelSamples;
             std::printf(
-                "hardware: pose seq %llu identity (gyro %.1f Hz / %llu samples, accel "
+                "hardware: pose seq %llu unit-norm (gyro %.1f Hz / %llu samples, accel "
                 "%.1f Hz / %llu samples)\n",
                 static_cast<unsigned long long>(pose.sequence), pose.sources.gyroHz,
                 static_cast<unsigned long long>(pose.sources.gyroSamples),
