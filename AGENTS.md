@@ -122,7 +122,8 @@ capability card，不读取无关卡片或实现源码：
 
 - 核心对象必须实现为可推进、可观测、可中断的显式状态机，而不是不可中断的单体 `run()`。
   realsense-vision 相机服务的标准状态集：`Idle / Opening / Streaming / Restreaming /
-  Stopping / Failed`。
+  Waiting / Stopping / Failed`（`Waiting` 为"等待相机接入/用户选择"的设计稳态，
+  见 DEC-006）。
 - 每个推进步骤应是有界工作单元；librealsense 的阻塞采集交给 Executor blocking worker
   管理，并通过结构化结果推动状态转换。
 - 服务生命周期必须有稳定 ID、取消上下文和生命周期所有者。终态必须幂等；迟到的帧或控制

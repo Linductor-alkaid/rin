@@ -11,14 +11,20 @@ bool CameraStateMachine::isAllowed(CameraServiceState from, CameraServiceState t
         case CameraServiceState::Idle:
             return to == CameraServiceState::Opening;
         case CameraServiceState::Opening:
-            return to == CameraServiceState::Streaming || to == CameraServiceState::Failed ||
-                   to == CameraServiceState::Stopping;
+            // 设备未接入时进入 Waiting（设计稳态，DEC-006）。
+            return to == CameraServiceState::Streaming || to == CameraServiceState::Waiting ||
+                   to == CameraServiceState::Failed || to == CameraServiceState::Stopping;
         case CameraServiceState::Streaming:
-            return to == CameraServiceState::Restreaming || to == CameraServiceState::Stopping ||
-                   to == CameraServiceState::Failed;
+            return to == CameraServiceState::Restreaming ||
+                   to == CameraServiceState::Waiting ||  // 活动设备被移除
+                   to == CameraServiceState::Stopping || to == CameraServiceState::Failed;
         case CameraServiceState::Restreaming:
-            return to == CameraServiceState::Streaming || to == CameraServiceState::Failed ||
-                   to == CameraServiceState::Stopping;
+            return to == CameraServiceState::Streaming ||
+                   to == CameraServiceState::Waiting ||  // 切换目标设备被移除
+                   to == CameraServiceState::Failed || to == CameraServiceState::Stopping;
+        case CameraServiceState::Waiting:
+            // 设备到达或用户选定后重新尝试打开；等待中亦可直接停止。
+            return to == CameraServiceState::Opening || to == CameraServiceState::Stopping;
         case CameraServiceState::Stopping:
             return to == CameraServiceState::Idle;
         case CameraServiceState::Failed:

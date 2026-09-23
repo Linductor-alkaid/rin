@@ -1,14 +1,13 @@
 // rsv_viewer：EUI-NEO 前端。Executor 生命周期 owner 为 viewer::Context（DEC-002）：
 // dslAppConfig() 首调点惰性启动，DslAppConfig::onShutdown（主线程、GPU 销毁前）关闭。
 // 视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局代码不出现一次性
-// 颜色/字号/圆角，层级靠文本层级与背景对比表达，阴影仅用于浮层。
+// 颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机连接，运行中经设备
+// 目录自动识别，多设备时用户选择、唯一设备自动选择。
 
 #include "gpu_frame_view.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
-
-#include <components/dropdown.h>
 
 #include <executor/executor.hpp>
 
@@ -18,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -31,11 +31,16 @@ using namespace viewer::theme;
 using rsv::FrameKind;
 using rsv::StreamRequest;
 
-/// 默认流请求（DEC-004 暂定默认值）。
+/// 默认流请求（DEC-004 暂定默认值）；设备选择独立于流请求（DEC-006）。
 constexpr StreamRequest kDefaultRequest{};
 
 struct ResolutionUiOption {
     StreamRequest request;
+    std::string label;
+};
+
+struct DeviceUiOption {
+    std::string serial;
     std::string label;
 };
 
@@ -48,13 +53,16 @@ struct ViewerContext {
     std::uint64_t lastRgbSequence = 0;
     std::uint64_t lastDepthSequence = 0;
     std::uint64_t lastIntrinsicsSequence = 0;
-    std::uint64_t lastCapabilitiesSequence = 0;
+    std::uint64_t lastCatalogSequence = 0;
 
-    rsv::StreamCapabilities capabilities;
-    bool hasCapabilities = false;
+    rsv::DeviceCatalog catalog;
+    bool hasCatalog = false;
     rsv::IntrinsicsSnapshot intrinsics;
     bool hasIntrinsics = false;
 
+    std::vector<DeviceUiOption> deviceOptions;
+    eui::Signal<int> deviceIndex{0};
+    eui::Signal<bool> deviceOpen{false};
     std::vector<ResolutionUiOption> resolutionOptions;
     eui::Signal<int> resolutionIndex{0};
     eui::Signal<bool> resolutionOpen{false};
@@ -69,7 +77,8 @@ struct ViewerContext {
     bool shutdownDone = false;
 
     void applyResolutionChoice(int index);
-    void applyKeyboardSelection(int digit);
+    void applyDeviceChoice(int index);
+    void rebuildDeviceOptions();
     void rebuildResolutionOptions();
     void pump();
     void shutdown();
@@ -89,6 +98,7 @@ void ensureStarted() {
             return false;
         }
         ctx.service = rsv::createRealSenseCameraService(ctx.executor);
+        // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
         const rsv::StartOutcome outcome = ctx.service->start(kDefaultRequest);
         if (!outcome.admitted) {
             ctx.startError = outcome.error;
@@ -100,6 +110,22 @@ void ensureStarted() {
         return true;
     }();
     (void)once;
+}
+
+const rsv::DeviceInfo* activeDevice(const ViewerContext& ctx) {
+    if (!ctx.hasCatalog) {
+        return nullptr;
+    }
+    for (const rsv::DeviceInfo& device : ctx.catalog.devices) {
+        if (device.serial == ctx.catalog.activeSerial) {
+            return &device;
+        }
+    }
+    return nullptr;
+}
+
+std::string shortSerial(const std::string& serial) {
+    return serial.size() <= 5 ? serial : serial.substr(serial.size() - 5);
 }
 
 const char* distortionName(rsv::DistortionModel model) {
@@ -122,7 +148,7 @@ const char* distortionName(rsv::DistortionModel model) {
     return "Unknown";
 }
 
-/// 单流内参数值（等宽内容用统一小数位对齐；无打包等宽字体，见 DEC-005 限制）。
+/// 单流内参数值（统一小数位对齐；无打包等宽字体，见 DEC-005 限制）。
 std::string formatIntrinsicsValues(const rsv::StreamIntrinsics& intrinsics) {
     if (!intrinsics.valid()) {
         return "n/a";
@@ -136,13 +162,29 @@ std::string formatIntrinsicsValues(const rsv::StreamIntrinsics& intrinsics) {
     return buffer;
 }
 
+void ViewerContext::rebuildDeviceOptions() {
+    std::vector<DeviceUiOption> options;
+    options.reserve(catalog.devices.size());
+    for (const rsv::DeviceInfo& device : catalog.devices) {
+        DeviceUiOption option;
+        option.serial = device.serial;
+        option.label = device.name + " · " + shortSerial(device.serial);
+        options.push_back(std::move(option));
+    }
+    deviceOptions = std::move(options);
+}
+
 void ViewerContext::rebuildResolutionOptions() {
-    std::vector<ResolutionUiOption> options;
+    resolutionOptions.clear();
+    const rsv::DeviceInfo* device = activeDevice(*this);
+    if (device == nullptr) {
+        return;  // 未选定设备（等待接入/用户选择）时不提供分辨率档位。
+    }
     const auto byWidthHeight = [](const rsv::ResolutionOption& option) {
         return std::pair<std::uint32_t, std::uint32_t>{option.width, option.height};
     };
     std::set<std::pair<std::uint32_t, std::uint32_t>> seen;
-    for (const rsv::ResolutionOption& color : capabilities.colorOptions) {
+    for (const rsv::ResolutionOption& color : device->colorOptions) {
         if (color.fps != kDefaultRequest.colorFps) {
             continue;  // M1：固定 30fps 档位
         }
@@ -150,7 +192,7 @@ void ViewerContext::rebuildResolutionOptions() {
             continue;
         }
         bool depthMatch = false;
-        for (const rsv::ResolutionOption& depth : capabilities.depthOptions) {
+        for (const rsv::ResolutionOption& depth : device->depthOptions) {
             if (depth.width == color.width && depth.height == color.height &&
                 depth.fps == kDefaultRequest.depthFps) {
                 depthMatch = true;
@@ -168,17 +210,8 @@ void ViewerContext::rebuildResolutionOptions() {
         option.request.depthHeight = color.height;
         option.request.depthFps = kDefaultRequest.depthFps;
         option.label = std::to_string(color.width) + " x " + std::to_string(color.height);
-        options.push_back(std::move(option));
+        resolutionOptions.push_back(std::move(option));
     }
-    std::sort(options.begin(), options.end(),
-              [](const ResolutionUiOption& lhs, const ResolutionUiOption& rhs) {
-                  const auto areaOf = [](const ResolutionUiOption& option) {
-                      return static_cast<std::uint64_t>(option.request.colorWidth) *
-                             option.request.colorHeight;
-                  };
-                  return areaOf(lhs) < areaOf(rhs);
-              });
-    resolutionOptions = std::move(options);
 }
 
 void ViewerContext::applyResolutionChoice(int index) {
@@ -193,14 +226,15 @@ void ViewerContext::applyResolutionChoice(int index) {
     }
 }
 
-void ViewerContext::applyKeyboardSelection(int digit) {
-    // 键盘直达：1-9 选择第 N 个分辨率档位（keyboard-first，操作型 UI 一等输入路径）。
-    const int index = digit - 1;
-    if (index < 0 || index >= static_cast<int>(resolutionOptions.size())) {
+void ViewerContext::applyDeviceChoice(int index) {
+    if (service == nullptr || index < 0 || index >= static_cast<int>(deviceOptions.size())) {
         return;
     }
-    resolutionIndex.set(index);
-    applyResolutionChoice(index);
+    std::string error;
+    if (!service->requestDevice(deviceOptions[static_cast<std::size_t>(index)].serial,
+                                &error)) {
+        statusMessage = "device select rejected: " + error;
+    }
 }
 
 void ViewerContext::pump() {
@@ -230,21 +264,21 @@ void ViewerContext::pump() {
         hasIntrinsics = true;
     }
 
-    rsv::StreamCapabilities caps;
-    if (service->tryLoadCapabilities(lastCapabilitiesSequence, caps)) {
-        capabilities = std::move(caps);
-        hasCapabilities = true;
+    rsv::DeviceCatalog newCatalog;
+    if (service->tryLoadCatalog(lastCatalogSequence, newCatalog)) {
+        catalog = std::move(newCatalog);
+        hasCatalog = true;
+        rebuildDeviceOptions();
         rebuildResolutionOptions();
-        int defaultIndex = 0;
+        // 默认选中项：分辨率档位回到 848x480（DEC-004）。
         for (std::size_t index = 0; index < resolutionOptions.size(); ++index) {
             const ResolutionUiOption& option = resolutionOptions[index];
             if (option.request.colorWidth == kDefaultRequest.colorWidth &&
                 option.request.colorHeight == kDefaultRequest.colorHeight) {
-                defaultIndex = static_cast<int>(index);
+                resolutionIndex.set(static_cast<int>(index));
                 break;
             }
         }
-        resolutionIndex.set(defaultIndex);
     }
 
     rsv::ServiceEvent event;
@@ -362,89 +396,138 @@ void composeViewCard(eui::Ui& ui, const char* id, float width, float height, con
         })
         .build();
 }
-/// 控制行标签与设备元数据（下拉触发器本体由 overlay 层最后合成，保证弹层浮顶）。
-void composeControls(eui::Ui& ui, ViewerContext& ctx, float width) {
-    ui.text("controls.label")
+
+/// 控制行标签与提示（下拉触发器本体由 overlay 层最后合成，保证弹层浮顶）。
+void composeControls(eui::Ui& ui, const ViewerContext& ctx, float width) {
+    ui.text("controls.device.label")
         .position(kSpace4, 65.0f)
+        .text("Device")
+        .fontSize(kFontSm)
+        .fontWeight(kWeightMedium)
+        .color(dark().fgSubtle)
+        .build();
+    // 分辨率控件右对齐（响应式：随窗口宽度变化不溢出）。
+    const float resolutionX = width - 200.0f;
+    ui.text("controls.resolution.label")
+        .position(resolutionX - 86.0f, 65.0f)
         .text("Resolution")
         .fontSize(kFontSm)
         .fontWeight(kWeightMedium)
         .color(dark().fgSubtle)
         .build();
-    if (!ctx.resolutionOptions.empty()) {
-        ui.text("controls.none")
-            .position(kSpace4 + 260.0f, 65.0f)
-            .text("device options: " + std::to_string(ctx.resolutionOptions.size()))
+    if (ctx.hasCatalog && ctx.catalog.activeSerial.empty() &&
+        ctx.catalog.devices.size() > 1) {
+        ui.text("controls.hint")
+            .position(kSpace4 + 340.0f + 105.0f + 210.0f, 65.0f)
+            .text("multiple devices, select one")
+            .fontSize(kFontXs)
+            .color(dark().warning)
+            .build();
+    } else if (ctx.hasCatalog && !ctx.catalog.activeSerial.empty() &&
+               ctx.catalog.activeIsAuto && ctx.catalog.devices.size() > 1) {
+        ui.text("controls.hint")
+            .position(kSpace4 + 340.0f + 105.0f + 210.0f, 65.0f)
+            .text("auto-selected, click Device to change")
             .fontSize(kFontXs)
             .color(dark().fgSubtlest)
             .build();
-    } else {
-        ui.text("controls.none")
-            .position(kSpace4 + 260.0f, 65.0f)
-            .text(ctx.hasCapabilities ? "no common RGB+depth option" : "detecting device")
+    } else if (!ctx.deviceOptions.empty() && ctx.catalog.activeSerial.empty()) {
+        ui.text("controls.hint")
+            .position(kSpace4 + 120.0f, 65.0f)
+            .text("select device")
             .fontSize(kFontXs)
-            .color(dark().fgSubtlest)
+            .color(dark().warning)
             .build();
-    }
-    if (ctx.hasCapabilities && !ctx.capabilities.deviceName.empty()) {
-        ui.text("controls.device")
-            .position(width - 240.0f - kSpace4, 65.0f)
-            .size(240.0f, kFontSm)
-            .text(ctx.capabilities.deviceName)
+    } else if (ctx.hasCatalog && ctx.catalog.devices.empty()) {
+        ui.text("controls.hint")
+            .position(kSpace4 + 120.0f, 65.0f)
+            .text("no camera connected - plug in and it appears here")
             .fontSize(kFontXs)
             .color(dark().fgSubtlest)
-            .horizontalAlign(eui::HorizontalAlign::Right)
             .build();
     }
 }
 
-/// 下拉触发器 + 弹层。作为根 stack 的最后一个兄弟合成（EUI 的 zIndex 不跨父容器，
-/// 绘制顺序即层叠顺序），使弹层浮于视图卡与内参卡之上。
-void composeResolutionDropdown(eui::Ui& ui, ViewerContext& ctx) {
-    if (ctx.resolutionOptions.empty()) {
-        return;
-    }
-    components::DropdownStyle dropdownStyle;
-    dropdownStyle.field = dark().input;
-    dropdownStyle.fieldHover = dark().input;
-    dropdownStyle.fieldPressed = dark().input;
-    dropdownStyle.popup = dark().menu;
-    dropdownStyle.optionHover = dark().menuHover;
-    dropdownStyle.optionPressed = dark().menuHover;
-    dropdownStyle.selected = dark().accentSurface;
-    dropdownStyle.text = dark().fg;
-    dropdownStyle.mutedText = dark().fgSubtlest;
-    dropdownStyle.accent = dark().brand;
-    dropdownStyle.border = dark().inputBorder;
-    dropdownStyle.radius = kRadiusLg;
+/// 轻量选择控件（viewer 内自研，绕开 components::dropdown 的弹层缺陷
+/// EUI-20260923-003/004）：字段 + 展开式菜单面板，全部使用主题令牌；
+/// 由根 stack 最后合成，菜单自然浮于卡片之上。onClick 只在字段/菜单行上。
+void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
+                   const std::string& placeholder, const std::vector<std::string>& items,
+                   int selectedIndex, bool open, const std::function<void()>& toggleOpen,
+                   const std::function<void(int)>& onPick) {
+    const float fieldHeight = 38.0f;
+    const float itemHeight = 34.0f;
+    const float menuPad = kSpace1;
+    const int count = static_cast<int>(items.size());
+    const bool hasSelection = selectedIndex >= 0 && selectedIndex < count;
+    const float menuHeight = menuPad * 2.0f + itemHeight * count;
+    const float totalHeight = fieldHeight + (open ? kSpace1 + menuHeight : 0.0f);
 
-    ui.stack("controls.dropdown.overlay")
-        .position(kSpace4 + 131.0f, 52.0f)
-        .size(200.0f, 38.0f)
+    ui.stack(id)
+        .position(x, y)
+        .size(width, totalHeight)
         .content([&] {
-    components::dropdown(ui, "controls.resolution")
-        .size(200.0f, 38.0f)
-        .items([&] {
-            std::vector<std::string> labels;
-            labels.reserve(ctx.resolutionOptions.size());
-            for (const ResolutionUiOption& option : ctx.resolutionOptions) {
-                labels.push_back(option.label);
+            ui.rect(std::string(id) + ".field")
+                .size(width, fieldHeight)
+                .radius(kRadiusLg)
+                .color(dark().input)
+                .border(kBorderHairline, dark().inputBorder)
+                .onClick([toggleOpen] { toggleOpen(); })
+                .build();
+            ui.text(std::string(id) + ".value")
+                .position(kSpace3, 0.0f)
+                .size(width - kSpace3 * 2.0f - kSpace4, fieldHeight)
+                .text(hasSelection ? items[static_cast<std::size_t>(selectedIndex)]
+                                   : placeholder)
+                .fontSize(kFontBase)
+                .fontWeight(kWeightMedium)
+                .color(hasSelection ? dark().fg : dark().fgSubtlest)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
+            ui.text(std::string(id) + ".chevron")
+                .position(width - kSpace4, 0.0f)
+                .size(kSpace4, fieldHeight)
+                .text(open ? "\uF077" : "\uF078")
+                .fontSize(kFontXs)
+                .color(dark().brand)
+                .horizontalAlign(eui::HorizontalAlign::Center)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
+
+            if (open && count > 0) {
+                ui.rect(std::string(id) + ".menu")
+                    .position(0.0f, fieldHeight + kSpace1)
+                    .size(width, menuHeight)
+                    .radius(kRadiusLg)
+                    .color(dark().menu)
+                    .border(kBorderHairline, dark().border)
+                    .shadow(18.0f, 10.0f, 8.0f, {0.0f, 0.0f, 0.0f, 0.35f})
+                    .build();
+                for (int index = 0; index < count; ++index) {
+                    const bool active = index == selectedIndex;
+                    const float itemY = menuPad + itemHeight * index;
+                    ui.rect(std::string(id) + ".item" + std::to_string(index))
+                        .position(kSpace1, fieldHeight + kSpace1 + itemY)
+                        .size(width - kSpace2, itemHeight)
+                        .radius(kRadiusMd)
+                        .color(active ? dark().accentSurface
+                                      : (dark().menu))
+                        .onClick([index, onPick] { onPick(index); })
+                        .build();
+                    ui.text(std::string(id) + ".itemText" + std::to_string(index))
+                        .position(kSpace3, fieldHeight + kSpace1 + itemY)
+                        .size(width - kSpace3 * 2.0f, itemHeight)
+                        .text(items[static_cast<std::size_t>(index)])
+                        .fontSize(kFontBase)
+                        .color(active ? dark().brand : dark().fg)
+                        .verticalAlign(eui::VerticalAlign::Center)
+                        .build();
+                }
             }
-            return labels;
-        }())
-        .selected(ctx.resolutionIndex.get())
-        .bindOpen(ctx.resolutionOpen)
-        .style(dropdownStyle)
-        .onOpenChange([&ctx](bool open) { ctx.resolutionOpen.set(open); })
-        .onChange([&ctx](int value) {
-            ctx.resolutionIndex.set(value);
-            ctx.resolutionOpen.set(false);
-            ctx.applyResolutionChoice(value);
-        })
-        .build();
         })
         .build();
 }
+
 void composeIntrinsicsCard(eui::Ui& ui, const ViewerContext& ctx, float width, float height,
                            float x, float y) {
     const float pad = kSpace3;
@@ -545,8 +628,40 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 })
                 .build();
             composeIntrinsicsCard(ui, ctx, contentWidth, intrinsicsHeight, pad,
-                          screen.height - pad - intrinsicsHeight);
-            composeResolutionDropdown(ui, ctx);
+                                  screen.height - pad - intrinsicsHeight);
+
+            // overlay 层（最后合成 = 浮于卡片之上）：设备选择 + 分辨率。
+            std::vector<std::string> deviceLabels;
+            deviceLabels.reserve(ctx.deviceOptions.size());
+            for (const DeviceUiOption& option : ctx.deviceOptions) {
+                deviceLabels.push_back(option.label);
+            }
+            if (!deviceLabels.empty()) {
+                composeSelect(ui, "controls.device", kSpace4 + 90.0f, 52.0f, 240.0f,
+                              "select device", deviceLabels, ctx.deviceIndex.get(),
+                              ctx.deviceOpen.get(), [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
+                              [&ctx](int index) {
+                                  ctx.deviceOpen.set(false);
+                                  ctx.deviceIndex.set(index);
+                                  ctx.applyDeviceChoice(index);
+                              });
+            }
+            if (!ctx.resolutionOptions.empty()) {
+                std::vector<std::string> resolutionLabels;
+                resolutionLabels.reserve(ctx.resolutionOptions.size());
+                for (const ResolutionUiOption& option : ctx.resolutionOptions) {
+                    resolutionLabels.push_back(option.label);
+                }
+                composeSelect(ui, "controls.resolution", contentWidth - 200.0f, 52.0f, 180.0f,
+                              "select", resolutionLabels, ctx.resolutionIndex.get(),
+                              ctx.resolutionOpen.get(),
+                              [&] { ctx.resolutionOpen.set(!ctx.resolutionOpen.get()); },
+                              [&ctx](int index) {
+                                  ctx.resolutionOpen.set(false);
+                                  ctx.resolutionIndex.set(index);
+                                  ctx.applyResolutionChoice(index);
+                              });
+            }
         })
         .build();
 }
@@ -572,7 +687,7 @@ const DslAppConfig& dslAppConfig() {
                 const int digit =
                     static_cast<int>(event.key) - static_cast<int>(eui::InputKey::Digit1) + 1;
                 if (digit >= 1 && digit <= 9) {
-                    viewer::context().applyKeyboardSelection(digit);
+                    viewer::context().applyResolutionChoice(digit - 1);
                 }
             })
             .onShutdown([] { viewer::context().shutdown(); });

@@ -12,14 +12,13 @@ class NullService final : public rsv::ICameraService {
 public:
     rsv::StartOutcome start(const rsv::StreamRequest&) override { return {}; }
     bool requestResolution(const rsv::StreamRequest&, std::string*) override { return false; }
+    bool requestDevice(const std::string&, std::string*) override { return false; }
     void stop() override {}
     rsv::CameraServiceState state() const override { return rsv::CameraServiceState::Idle; }
     std::string lastError() const override { return {}; }
     bool tryLoadFrame(rsv::FrameKind, std::uint64_t&, rsv::Frame&) override { return false; }
     bool tryLoadIntrinsics(std::uint64_t&, rsv::IntrinsicsSnapshot&) override { return false; }
-    bool tryLoadCapabilities(std::uint64_t&, rsv::StreamCapabilities&) override {
-        return false;
-    }
+    bool tryLoadCatalog(std::uint64_t&, rsv::DeviceCatalog&) override { return false; }
     bool tryLoadEvent(rsv::ServiceEvent&) override { return false; }
 };
 

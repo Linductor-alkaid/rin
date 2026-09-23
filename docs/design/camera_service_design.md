@@ -23,7 +23,8 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
 
 ## 公共契约（include/rs_vision/）
 
-- `CameraServiceState`：`Idle / Opening / Streaming / Restreaming / Stopping / Failed`。
+- `CameraServiceState`：`Idle / Opening / Streaming / Restreaming / Waiting / Stopping /
+  Failed`（`Waiting` 为热插拔稳态，见 DEC-006）。
 - `StreamRequest`：彩色+深度的 width/height/fps（成对请求，M1 不支持单流）。
 - `Frame`：`kind(Rgb|Depth)`、`width/height/stride`、`sequence`、`deviceTimestampMs`、
   像素缓冲（`std::shared_ptr<const std::vector<std::uint8_t>>`，RGBA8 打包）。
@@ -43,11 +44,12 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
 ## 状态机
 
 ```
-Idle --start()--> Opening --profile就绪--> Streaming --requestResolution()--> Restreaming
-                     |                          |                                  |
-                     v                          v                                  v
-                   Failed                     Failed                        Streaming/Failed
-Streaming --stop()--> Stopping --> Idle        Failed --stop()--> Stopping --> Idle
+Idle --start()--> Opening --无设备--> Waiting --设备到达/用户选定--> Opening
+                                     \--profile就绪--> Streaming --requestResolution()--> Restreaming
+Streaming/Restreaming --活动设备移除--> Waiting（DEC-006 热插拔稳态）
+Streaming/Restreaming --流错误(设备在位,有界重试耗尽)--> Failed
+Waiting/Streaming/Restreaming --stop()--> Stopping --> Idle
+Failed --stop()--> Stopping --> Idle
 ```
 
 - 所有转换在 `RealSenseCamera` 内单线程推进（worker 线程或 start/stop 调用线程），
@@ -96,8 +98,11 @@ run(StopToken):
   （自有 GL 纹理 + `importGpuImage` 导入，EUI-20260923-003 绕行；ImageStream 路径在
   当前 GL 栈渲染异常且官方示例可复现）→ 组装控件。不阻塞等待，不在 UI 线程调用
   librealsense。外部纹理非动画元素：有新帧时调用 `app::requestUpdate()` 驱动重绘。
-- 分辨率档位：`start()` 准入阶段在调用线程枚举设备能力并发布到能力通道；viewer 首次
-  pump 后构建下拉档位（RGB8/Z16 同尺寸且 30fps 的交集，按面积排序）。
+- 设备目录与热插拔（DEC-006）：适配器构造时长驻 `rs2::context` 并注册
+  `set_devices_changed_callback`；回调（librealsense 线程）仅向 `LatestMailbox` 投递
+  信号（规则 11），worker 以 ≤300ms 有界轮询消费并重新枚举发布 `DeviceCatalog`
+  （requested 在线优先 > 唯一设备自动 > 多台未选保持 Waiting）。流中断且活动序列号
+  不在总线上 → Waiting；设备仍在则有界重试后 Failed。
 - 内参面板：compose 消费 `IntrinsicsSnapshot` 邮箱，渲染文本。
 
 ## 失败与可观测

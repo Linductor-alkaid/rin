@@ -14,6 +14,8 @@ const char* toString(CameraServiceState state) noexcept {
             return "Streaming";
         case CameraServiceState::Restreaming:
             return "Restreaming";
+        case CameraServiceState::Waiting:
+            return "Waiting";
         case CameraServiceState::Stopping:
             return "Stopping";
         case CameraServiceState::Failed:

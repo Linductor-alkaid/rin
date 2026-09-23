@@ -1,8 +1,11 @@
 // 真机冒烟测试（hardware 标签）：D435if 在位时执行完整链路
-// start(640x480@30) -> Started 事件 -> RGB/Depth 帧 -> 内参 -> 能力 ->
-// requestResolution(848x480@30) -> ResolutionChanged + 新分辨率帧 ->
-// stop() 收敛 Idle -> 二次 stop() 幂等。
-// 无设备时打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
+// start(640x480@30) -> Started 事件 -> RGB/Depth 帧 -> 内参 -> 设备目录（DEC-006）->
+// requestDevice(活动序列号) 幂等（不中断流）-> requestResolution(848x480@30) ->
+// ResolutionChanged + 新分辨率帧 -> stop() 收敛 Idle -> 二次 stop() 幂等。
+// DEC-006：start 不再因无设备拒绝（worker 进 Waiting 稳态）；无设备时测试经
+// Waiting + 空目录判定打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
+// Waiting 态的设备移除/恢复语义无法在真机上程序化模拟（无免密 sudo 拔 USB），
+// 由真机人工验收覆盖；本测试只覆盖单设备自动选择路径。
 // 全部等待为有界轮询（100ms 间隔），不使用裸 sleep 等待；退出前保证 stop() 收尾。
 #include "test_util.hpp"
 
@@ -100,20 +103,25 @@ int runSmokeTest(ICameraService& service) {
             .count();
     };
 
-    // --- start 准入；无设备 -> SKIP 77 ---
+    // --- 0) Idle 态 requestDevice 守卫（DEC-006：Waiting/Opening/Streaming/Restreaming
+    //     之外的状态必须拒绝）---
+    {
+        std::string selectError = "<untouched>";
+        RSV_CHECK(!service.requestDevice("nonexistent-serial", &selectError));
+        RSV_CHECK(selectError.find("Idle") != std::string::npos);
+    }
+
+    // --- start 准入（DEC-006：不再因无设备拒绝）---
     const rsv::StartOutcome outcome = service.start(baseRequest);
     if (!outcome.admitted) {
-        if (outcome.error.find("no RealSense device") != std::string::npos) {
-            std::printf("SKIP: no RealSense device (%s)\n", outcome.error.c_str());
-            return 77;
-        }
         std::printf("FAIL: start rejected: %s\n", outcome.error.c_str());
         return 1;
     }
 
-    // --- 1) <=5s 收到 Started 事件（Failed + no device -> SKIP 77）---
+    // --- 1) <=5s 收到 Started 事件；超时且 state==Waiting => 无设备 SKIP 77 ---
     ServiceEvent event;
     bool startedEvent = false;
+    std::string startedMessage;
     std::string failureMessage;
     pollUntil(5s, [&] {
         if (!service.tryLoadEvent(event)) {
@@ -121,6 +129,7 @@ int runSmokeTest(ICameraService& service) {
         }
         if (event.kind == ServiceEventKind::Started) {
             startedEvent = true;
+            startedMessage = event.message;
             return true;
         }
         if (event.kind == ServiceEventKind::Failed) {
@@ -133,6 +142,12 @@ int runSmokeTest(ICameraService& service) {
         std::printf("SKIP: no RealSense device (%s)\n", failureMessage.c_str());
         return 77;
     }
+    if (!startedEvent && service.state() == CameraServiceState::Waiting) {
+        // DEC-006：无设备时 worker 停在 Waiting 稳态（真机人工验收覆盖热插拔恢复）。
+        std::printf("SKIP: no RealSense device (state=Waiting after 5s, last event '%s')\n",
+                    event.message.c_str());
+        return 77;
+    }
     RSV_CHECK(startedEvent);
     if (!startedEvent) {
         std::printf(
@@ -142,7 +157,8 @@ int runSmokeTest(ICameraService& service) {
             service.lastError().c_str());
         return 1;
     }
-    std::printf("hardware: Started event after %.0f ms\n", elapsedMs());
+    std::printf("hardware: Started event after %.0f ms (message='%s')\n", elapsedMs(),
+                startedMessage.c_str());
 
     // --- 2) <=5s 各收到 >=1 帧 RGB 与 Depth；valid()、宽高匹配 640x480 ---
     double firstRgbMs = -1.0;
@@ -267,23 +283,75 @@ int runSmokeTest(ICameraService& service) {
                     intrinsics.depth.width, intrinsics.depth.height, intrinsics.depth.fx);
     }
 
-    // --- 4) 能力快照：设备在位、序列号与档位列表非空 ---
-    rsv::StreamCapabilities caps;
+    // --- 4) 设备目录（DEC-006）：单设备自动选择、目录项完整、与帧流来源一致 ---
+    rsv::DeviceCatalog caps;
     std::uint64_t capsSequence = 0;
     const bool capsArrived = pollUntil(5s, [&] {
-        return service.tryLoadCapabilities(capsSequence, caps);
+        return service.tryLoadCatalog(capsSequence, caps);
     });
     RSV_CHECK(capsArrived);
+    std::string activeSerial;
     if (capsArrived) {
-        RSV_CHECK(caps.devicePresent);
-        RSV_CHECK(!caps.serial.empty());
-        RSV_CHECK(!caps.colorOptions.empty());
-        RSV_CHECK(!caps.depthOptions.empty());
+        RSV_CHECK_EQ(caps.devices.size(), std::size_t{1});  // 本台架单设备；多设备由人工验收
+        RSV_CHECK(caps.activeIsAuto);  // 唯一设备 → 自动选择（DEC-006）
+        const rsv::DeviceInfo& device = caps.devices.front();
+        activeSerial = device.serial;
+        RSV_CHECK(!activeSerial.empty());
+        RSV_CHECK_EQ(caps.activeSerial, activeSerial);
+        RSV_CHECK(!device.name.empty());
+        RSV_CHECK(!device.firmwareVersion.empty());
+        RSV_CHECK(!device.colorOptions.empty());
+        RSV_CHECK(!device.depthOptions.empty());
+        // 帧流来源一致性：Started 事件携带 "streaming <serial>"（适配器契约）。
+        RSV_CHECK(startedMessage.find(activeSerial) != std::string::npos);
         std::printf(
-            "hardware: device='%s' serial='%s' firmware='%s' (color options=%zu, depth "
-            "options=%zu)\n",
-            caps.deviceName.c_str(), caps.serial.c_str(), caps.firmwareVersion.c_str(),
-            caps.colorOptions.size(), caps.depthOptions.size());
+            "hardware: catalog device='%s' serial='%s' firmware='%s' auto=%d "
+            "(color options=%zu, depth options=%zu)\n",
+            device.name.c_str(), device.serial.c_str(), device.firmwareVersion.c_str(),
+            caps.activeIsAuto ? 1 : 0, device.colorOptions.size(), device.depthOptions.size());
+    }
+
+    // --- 4b) requestDevice(活动序列号) 幂等：不中断流、不重开管线（DEC-006）---
+    {
+        // 选择当前活动设备：粘性意图生效（目录 activeIsAuto 应翻转为 false），
+        // 但同设备选择不得触发 restream——帧序号持续前移即流未被中断的直接证据。
+        std::string selectError = "<untouched>";
+        RSV_CHECK(service.requestDevice(activeSerial, &selectError));
+        Frame frame;
+        std::uint64_t selectRgbSeq = rgbSequence;
+        const bool rgbContinued = pollUntil(3s, [&] {
+            return service.tryLoadFrame(FrameKind::Rgb, selectRgbSeq, frame) &&
+                   frame.sequence > rgbSequence;
+        });
+        RSV_CHECK(rgbContinued);  // 选择命令消费后帧流继续（无重开窗口）
+        rsv::DeviceCatalog afterSelect;
+        std::uint64_t selectCatalogSeq = 0;
+        const bool catalogUpdated = pollUntil(3s, [&] {
+            if (!service.tryLoadCatalog(selectCatalogSeq, afterSelect)) {
+                return false;
+            }
+            return !afterSelect.activeSerial.empty() && !afterSelect.activeIsAuto;
+        });
+        RSV_CHECK(catalogUpdated);
+        if (catalogUpdated) {
+            RSV_CHECK_EQ(afterSelect.devices.size(), std::size_t{1});
+            RSV_CHECK_EQ(afterSelect.activeSerial, activeSerial);  // 活动设备未变
+            RSV_CHECK(!afterSelect.activeIsAuto);  // 用户指定（粘性）
+            std::printf("hardware: requestDevice(%s) sticky, frames continued, auto=%d\n",
+                        activeSerial.c_str(), afterSelect.activeIsAuto ? 1 : 0);
+        }
+        if (rgbContinued) {
+            RSV_CHECK(service.tryLoadEvent(event));
+            RSV_CHECK(event.kind == ServiceEventKind::Info);  // 同设备选择仅发 Info
+            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+        }
+        // 深度流同样保持存活（双流契约）。
+        std::uint64_t selectDepthSeq = depthSequence;
+        const bool depthContinued = pollUntil(3s, [&] {
+            return service.tryLoadFrame(FrameKind::Depth, selectDepthSeq, frame) &&
+                   frame.sequence > depthSequence;
+        });
+        RSV_CHECK(depthContinued);
     }
 
     // --- 5) requestResolution 848x480：统一 6s 期限等 ResolutionChanged + 新帧 ---
@@ -321,13 +389,42 @@ int runSmokeTest(ICameraService& service) {
     RSV_CHECK(changedEvent);
     RSV_CHECK(rgb848Arrived);
     RSV_CHECK(depth848Arrived);
+
+    // --- 5b) restream 后占比断言：有界窗口取最大（容忍切档后孤立瞬态坏帧）---
+    // 实测：管线重开后个别深度帧有效率瞬时塌陷（如 1.6%），1-2 帧内恢复；
+    // 单帧断言会假阳性，故与 640 段同策略：最多 kContentSampleFrames 帧 / 3s 取最大。
+    const auto sampleMaxRatioAfterRestream = [&](FrameKind kind, std::uint64_t& mailboxSequence,
+                                                 const char* label) {
+        double maxRatio = 0.0;
+        int framesSeen = 0;
+        Frame frame;
+        pollUntil(3s, [&] {
+            if (framesSeen >= kContentSampleFrames) {
+                return true;
+            }
+            if (!service.tryLoadFrame(kind, mailboxSequence, frame)) {
+                return false;
+            }
+            ++framesSeen;
+            RSV_CHECK(frame.valid());
+            RSV_CHECK_EQ(frame.width, 848u);
+            RSV_CHECK_EQ(frame.height, 480u);
+            if (const double ratio = contentNonZeroRatio(frame); ratio > maxRatio) {
+                maxRatio = ratio;
+            }
+            return false;  // 采满窗口才结束
+        });
+        std::printf("hardware: %s post-restream ratio over %d frames: max %.1f%%\n", label,
+                    framesSeen, maxRatio * 100.0);
+        return maxRatio;
+    };
+
     if (rgb848Arrived) {
         RSV_CHECK(rgb848.valid());
         RSV_CHECK_EQ(rgb848.width, 848u);
         RSV_CHECK_EQ(rgb848.height, 480u);
         RSV_CHECK(rgb848.sequence > rgbSeqBeforeChange);  // 跨 restream 序号前移
-        const double ratio = contentNonZeroRatio(rgb848);
-        std::printf("hardware: 848x480 rgb non-zero ratio %.1f%%\n", ratio * 100.0);
+        const double ratio = sampleMaxRatioAfterRestream(FrameKind::Rgb, rgbSequence, "rgb");
         RSV_CHECK(ratio >= kRgbMinNonZeroRatio);
     }
     if (depth848Arrived) {
@@ -335,8 +432,7 @@ int runSmokeTest(ICameraService& service) {
         RSV_CHECK_EQ(depth848.width, 848u);
         RSV_CHECK_EQ(depth848.height, 480u);
         RSV_CHECK(depth848.sequence > depthSeqBeforeChange);
-        const double ratio = contentNonZeroRatio(depth848);
-        std::printf("hardware: 848x480 depth non-zero ratio %.1f%%\n", ratio * 100.0);
+        const double ratio = sampleMaxRatioAfterRestream(FrameKind::Depth, depthSequence, "depth");
         RSV_CHECK(ratio >= kDepthMinNonZeroRatio);
     }
     std::printf("hardware: ResolutionChanged after %.0f ms, 848x480 rgb=%s depth=%s\n", changedMs,

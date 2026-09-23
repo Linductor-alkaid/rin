@@ -8,12 +8,14 @@
 
 namespace rsv {
 
-/// 相机服务显式状态集（AGENTS.md "Runtime 与状态模型"）。
+/// 相机服务显式状态集（AGENTS.md "Runtime 与状态模型"；热插拔语义见 DEC-006）。
 enum class CameraServiceState {
     Idle,
     Opening,
     Streaming,
     Restreaming,
+    /// 等待相机接入/用户选择设备（设计稳态，非错误）。
+    Waiting,
     Stopping,
     Failed,
 };
@@ -94,14 +96,22 @@ struct ResolutionOption {
     std::uint32_t fps = 0;
 };
 
-/// 设备静态能力（在 start() 准入阶段同步枚举，经邮箱发布）。
-struct StreamCapabilities {
-    std::string deviceName;
+/// 单台在线设备的静态信息与能力。
+struct DeviceInfo {
+    std::string name;
     std::string serial;
     std::string firmwareVersion;
     std::vector<ResolutionOption> colorOptions;
     std::vector<ResolutionOption> depthOptions;
-    bool devicePresent = false;
+};
+
+/// 在线设备目录（热插拔时由 worker 重新枚举并发布；DEC-006）。
+struct DeviceCatalog {
+    std::vector<DeviceInfo> devices;
+    /// 当前活动设备序列号；空 = 尚未选择（多台设备时等待用户选择）。
+    std::string activeSerial;
+    /// activeSerial 为自动选择（唯一设备）时为 true；false = 用户指定。
+    bool activeIsAuto = false;
 };
 
 enum class ServiceEventKind {

@@ -90,6 +90,26 @@
     物理挪动的环境瞬态，恰好验证内容断言有效。
 - 同步：EUI 台账、设计文档 compose 流程、CHANGELOG。
 
+### 2026-09-23：热插拔与多设备选择（DEC-006）实现并复验
+
+- 范围：状态机新增 `Waiting` 稳态（启动不依赖相机连接）；适配器长驻 `rs2::context`
+  热插拔回调（回调线程仅投递信号，规则 11）+ 在线设备目录（`DeviceCatalog`）+
+  `requestDevice` 选择命令（用户指定粘性 > 唯一自动 > 多台待选）；流中断且设备不在
+  总线 → Waiting 自动恢复；viewer 新增 Device 下拉（自研 select，见
+  EUI-20260923-003/004）与等待态提示。
+- 验证（Independent-Verification-Agent 独立复验）：
+  - 状态机单测扩为 7x7 全矩阵（238→341 checks），Waiting 全部转换与 Failed 不可
+    直达 Waiting 显式覆盖；
+  - hardware 测试 67→144 checks：目录断言（唯一设备自动选择 activeIsAuto、序列号
+    一致性）、requestDevice 幂等（选择活动设备不打断流、粘性翻转 activeIsAuto）、
+    既有内容级/分辨率切换断言保持；
+  - debug/asan/ubsan 三预设 4/4 通过、两次稳定性复跑全过；依赖 commit 校验通过。
+  - 一次 848 段深度占比失败经归因为 restream 后首帧有效率瞬态（探针佐证），断言
+    改为有界窗口取最大（生产代码无缺陷）。
+- 真机人工验收项（D435if 在位）：无相机启动 → Waiting 提示；插入 → 自动出流；
+  流中拔出 → Waiting → 重插恢复；多设备选择（当前台架单设备，多设备用例待扩展）。
+- 同步：DEC-006、AGENTS.md 状态集、设计文档、CHANGELOG。
+
 ### 2026-09-23：视觉层按 ZCode Design System 重构（DEC-005）并复验
 
 - 范围：新增 `apps/viewer/viewer_theme.hpp` 令牌层（语义色/字阶/圆角层级/间距节奏），

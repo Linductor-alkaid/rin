@@ -21,6 +21,10 @@ public:
     /// Streaming/Restreaming 中请求切换分辨率；入队成功返回 true，worker 在循环边界应用。
     virtual bool requestResolution(const StreamRequest& request, std::string* error = nullptr) = 0;
 
+    /// 请求切换到指定序列号的设备（Waiting/Streaming/Restreaming 下有效）；
+    /// 设备当前不在线时同样入队，worker 在其到达后自动应用。
+    virtual bool requestDevice(const std::string& serial, std::string* error = nullptr) = 0;
+
     /// 任意状态 -> Stopping -> Idle；幂等。阻塞至 worker 回收完成。
     virtual void stop() = 0;
 
@@ -35,8 +39,9 @@ public:
     [[nodiscard]] virtual bool tryLoadIntrinsics(std::uint64_t& lastSeenSequence,
                                                  IntrinsicsSnapshot& out) = 0;
 
-    [[nodiscard]] virtual bool tryLoadCapabilities(std::uint64_t& lastSeenSequence,
-                                                   StreamCapabilities& out) = 0;
+    /// 取在线设备目录（含各设备能力与活动设备）；无更新返回 false。
+    [[nodiscard]] virtual bool tryLoadCatalog(std::uint64_t& lastSeenSequence,
+                                              DeviceCatalog& out) = 0;
 
     /// 最新事件快照（无序号语义；调用方只关心最近一条）。
     [[nodiscard]] virtual bool tryLoadEvent(ServiceEvent& out) = 0;
