@@ -49,5 +49,8 @@ realsense-vision 的前端（EUI-NEO）需要统一视觉语言。团队以 ZCod
 
 ## 关联文档和工作项
 
-`M1-05`、[camera_service_design.md](../design/camera_service_design.md)、
+`M1-05`、
+[viewer 设计系统基准（ZCode Design System 翻译层）](../design/viewer_design_system.md)
+（基准原文 pin `zai-org/ZCode@872ad96`）、
+[camera_service_design.md](../design/camera_service_design.md)、
 [EUI-NEO 台账 EUI-20260923-002](../dependency_feedback/eui-neo/ledger.md)
