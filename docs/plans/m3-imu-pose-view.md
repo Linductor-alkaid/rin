@@ -66,7 +66,7 @@
 - [x] `M3-05` Core `ImuFuser` 实现（按 `DEC-010`）：纯逻辑、可注入初值与参数、
       时间戳单调、复位语义幂等。完成判据：数值测试（静态重力对齐收敛、已知旋转
       序列跟踪误差上界、复位幂等）通过。
-- [ ] `M3-06` 3D 位姿视图控件（按 `DEC-011`）：固定世界坐标系（坐标轴 + 地面
+- [x] `M3-06` 3D 位姿视图控件（按 `DEC-011`）：固定世界坐标系（坐标轴 + 地面
       网格），相机视锥与相机轴随姿态实时更新，视图重置，姿态不可用时的空态。
       完成判据：投影数学单测通过，UI 集成可用。
 - [ ] `M3-07` viewer 集成与关闭回归：IMU 状态面板（源频率、姿态数值）、3D 视图
@@ -91,7 +91,7 @@
 - [ ] `ctest`（debug/asan/ubsan/tsan 预设）全绿，新增：IMU 契约、融合数值、
       投影数学、关闭回归测试。
 - [x] `ImuFuser` 数值验收（`M3-05` 判据）通过并留验证记录。
-- [ ] 3D 投影数学测试通过（`M3-06`）。
+- [x] 3D 投影数学测试通过（`M3-06`）。
 - [ ] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
 - [ ] 真机验收记录或规范化未执行记录（`M3-08`）。
 - [ ] 文档同步：`camera_service_design.md` IMU 通路、`DEC-010`/`DEC-011`、总计划
@@ -336,3 +336,64 @@
   验收闭环，无新增依赖缺口；退出条件其余小项（ctest 全绿含投影数学/关闭
   回归测试、投影数学、关闭回归 + tsan、真机矩阵、文档收尾）分属
   `M3-06`…`M3-08`，维持未勾。
+
+2026-09-24：`M3-06` 3D 位姿视图控件（CPU 投影 + polygon）
+
+- 范围：Core 投影数学（`include/rin/pose_math.hpp` + `src/core/pose_math.cpp`：
+  四元数归一化/复合/矩阵转换、orbit 视图基、屏幕投影、线段 quad 组装）与
+  viewer 位姿视图状态（`apps/viewer/pose_view.hpp`：空态、快照更新、Reset
+  重锚定、clear）及 app 集成卡位（`apps/viewer/app.cpp`）；两套离线单元测试。
+  不含 pump() 门控的关闭回归（`M3-07`）与真机视觉验收（`M3-08`）。
+- 依据：
+  - `f73908c` feat(viewer)：M3-06 实现（649 insertions，含 `pose_math` 新模块
+    与 `pose_view.hpp` 317 行）。
+  - `b8af343` test(tests)：新增 `tests/test_pose_math.cpp`（715 行，ctest
+    `pose_math`，LABELS unit，201 checks）与 `tests/test_pose_view_state.cpp`
+    （216 行，ctest `pose_view_state`，32 checks），注册于
+    `tests/CMakeLists.txt`（pose_view_state 经 `eui_neo` 目标用法属性注入
+    EUI-NEO 公开头包含路径，仅头、不链接 EUI 库），共 963 行、全部位于 tests/。
+  - DEC-011（Accepted）：CPU 投影 + `polygon` 原语、固定世界系构图
+    （0.62/0.50/3.8）、`RULE-01` 投影数学为 Core 纯逻辑。
+- 验证（独立验证执行；debug/asan/ubsan 门禁通过）：
+  - 配置/构建：`cmake --preset debug`（带三个本地依赖源参数）→
+    Configuring/Generating done；`cmake --build build/debug --target
+    test_pose_math test_pose_view_state` 成功。
+  - `setarch -R ctest --test-dir build/debug -R "pose_math|pose_view_state"`
+    → 2/2 通过（"100% tests passed, 0 tests failed out of 2"）；直接运行
+    `test_pose_math` → `OK: 201 checks, 0 failures`（golden 最大偏差
+    1.866e-05 px），`test_pose_view_state` → `OK: 32 checks, 0 failures`。
+  - 覆盖要点：四元数归一化回退/复合方向契约（测试侧 double q⊗v⊗q* 交叉
+    验证）、orientationToMatrix 精确值/RᵀR=I/det=+1/pitch≈±89.9° 无表示
+    奇异（DEC-011 关切）、`Extrinsics::rotation` 列主序契约、orbit 视图基
+    不变量（正交、左手 det≈−1 的文档约定、仰角截断、非法输入回退）、
+    projectToScreen y 向下约定与失败路径不写出参（哨兵逐位保持）、
+    segmentToQuad 平行四边形不变量与整段剔除；golden 端到端已知位姿
+    （ZYX 30°/20°/40° 与 +90° yaw）对独立 double 参考最大偏差 1.866e-05 px
+    （容差 0.05 px），世界固定参考点投影与位姿无关、相机光轴端点随 90° yaw
+    移动 23.7 px（姿态驱动旋转成立）。
+  - `pose_view_state`：空态初值、update() 逐字段快照且不动 baseline、Reset
+    以当前姿态重锚定 conj(baseline)⊗current→恒等且 memcmp 幂等（DEC-011
+    风险 3）、空态 Reset no-op、clear() 复位恒等与会话重锚定；显示公式与
+    double 参考逐数值一致。
+  - 消毒剂目标级复验（非全量门禁）：asan/ubsan/tsan 三预设各自 configure +
+    构建两目标成功，`setarch -R ctest` 各跑两目标均 2/2 通过；tsan 对两新
+    目标跑通（干净）。
+  - 完成判据对照：投影数学单测通过（201 checks 含 DEC-011 验证方式 1 的
+    golden 端到端）；UI 状态语义单测通过，polygon compose 组装与视觉呈现
+    需活动 EUI-NEO 运行时，归真机验收（`M3-08`）。
+- 限制：
+  - compose 期 polygon 组装需活动 EUI-NEO 运行时，headless 不可单测，真机
+    视觉验收归 `M3-08`；app.cpp pump() 门控属 `M3-07` 关闭回归范围。
+  - 测试编写中发现的 5 处问题均为测试侧错误（y 向下翻转期望写反、组合旋转
+    条件路径、非正交矩阵误用 R·Rᵀ=I、容差低于 float→double 表示间隙、
+    视图基左手系误断言 det=+1），无实现缺陷；视图基左手系符号约定
+    （det=−1）经本轮锁定为契约。
+  - DOD-02：pose_math 为无堆分配值语义纯函数、PoseViewState 为 UI 线程独占
+    普通状态，无线程/队列/任务/取消/超时/shutdown 语义，并发矩阵不适用；
+    采集 worker→`LatestMailbox`→pump 跨上下文通路不在本单元（motion_ingest
+    已覆盖并有 tsan 复跑在档，`M3-07` 承接关闭回归）。
+  - 全量 debug/asan/ubsan/tsan 门禁按交接约定由脚本复跑；测试提交（
+    `b8af343`）尚未 push。
+- 同步：本文件勾选 `M3-06`，并勾选退出条件"3D 投影数学测试通过（`M3-06`）"
+  （pose_math 201 checks 通过且已入库）；退出条件其余小项（ctest 全绿、
+  关闭回归 + tsan、真机矩阵、文档收尾）分属 `M3-07`/`M3-08`，维持未勾。
