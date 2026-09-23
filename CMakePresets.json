@@ -13,7 +13,7 @@
             "binaryDir": "${sourceDir}/build/${presetName}",
             "cacheVariables": {
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "RSV_BUILD_TESTS": "ON"
+                "RIN_BUILD_TESTS": "ON"
             }
         },
         {
@@ -38,7 +38,7 @@
             "displayName": "Debug + ASAN",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "RSV_ENABLE_ASAN": "ON"
+                "RIN_ENABLE_ASAN": "ON"
             }
         },
         {
@@ -47,7 +47,7 @@
             "displayName": "Debug + UBSAN",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "RSV_ENABLE_UBSAN": "ON"
+                "RIN_ENABLE_UBSAN": "ON"
             }
         },
         {
@@ -56,7 +56,7 @@
             "displayName": "Debug + TSAN",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "RSV_ENABLE_TSAN": "ON"
+                "RIN_ENABLE_TSAN": "ON"
             }
         }
     ],

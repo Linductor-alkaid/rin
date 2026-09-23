@@ -13,8 +13,8 @@
 
 namespace {
 
-using rsv::CameraServiceState;
-using rsv::detail::CameraStateMachine;
+using rin::CameraServiceState;
+using rin::detail::CameraStateMachine;
 
 constexpr int kStateCount = 7;
 
@@ -78,7 +78,7 @@ int main() {
     for (int from = 0; from < kStateCount; ++from) {
         for (int to = 0; to < kStateCount; ++to) {
             const bool expected = kExpectedAllowed[from][to];
-            RSV_CHECK_EQ(CameraStateMachine::isAllowed(kStates[from], kStates[to]), expected);
+            RIN_CHECK_EQ(CameraStateMachine::isAllowed(kStates[from], kStates[to]), expected);
         }
     }
 
@@ -87,24 +87,24 @@ int main() {
         for (int to = 0; to < kStateCount; ++to) {
             const bool expected = kExpectedAllowed[from][to];
             CameraStateMachine machine;
-            RSV_CHECK(driveTo(machine, kStates[from]));
-            RSV_CHECK_EQ(machine.state(), kStates[from]);
+            RIN_CHECK(driveTo(machine, kStates[from]));
+            RIN_CHECK_EQ(machine.state(), kStates[from]);
 
             std::string error = "<untouched>";
             const bool ok = machine.transitionTo(kStates[to], &error);
-            RSV_CHECK_EQ(ok, expected);
+            RIN_CHECK_EQ(ok, expected);
 
             if (expected && from != to) {
-                RSV_CHECK_EQ(machine.state(), kStates[to]);
+                RIN_CHECK_EQ(machine.state(), kStates[to]);
             } else {
                 // 拒绝：状态不变，error 含 from/to 状态名。
                 // 同状态幂等接受：状态保持不变。
-                RSV_CHECK_EQ(machine.state(), kStates[from]);
+                RIN_CHECK_EQ(machine.state(), kStates[from]);
                 if (!expected) {
-                    const std::string fromName = rsv::toString(kStates[from]);
-                    const std::string toName = rsv::toString(kStates[to]);
-                    RSV_CHECK(error.find(fromName) != std::string::npos);
-                    RSV_CHECK(error.find(toName) != std::string::npos);
+                    const std::string fromName = rin::toString(kStates[from]);
+                    const std::string toName = rin::toString(kStates[to]);
+                    RIN_CHECK(error.find(fromName) != std::string::npos);
+                    RIN_CHECK(error.find(toName) != std::string::npos);
                 }
             }
         }
@@ -113,85 +113,85 @@ int main() {
     // --- 3) 默认构造为 Idle；拒绝路径 error 文本含两端状态名 ---
     {
         CameraStateMachine machine;
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
         std::string error;
-        RSV_CHECK(!machine.transitionTo(CameraServiceState::Streaming, &error));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
-        RSV_CHECK(error.find("Idle") != std::string::npos);
-        RSV_CHECK(error.find("Streaming") != std::string::npos);
+        RIN_CHECK(!machine.transitionTo(CameraServiceState::Streaming, &error));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK(error.find("Idle") != std::string::npos);
+        RIN_CHECK(error.find("Streaming") != std::string::npos);
         // nullptr error 出参不崩溃。
-        RSV_CHECK(!machine.transitionTo(CameraServiceState::Failed, nullptr));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK(!machine.transitionTo(CameraServiceState::Failed, nullptr));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
     }
 
     // --- 4) Failed 不可直达 Waiting；须经理 Stopping 收敛后再恢复 ---
     {
         CameraStateMachine machine;
-        RSV_CHECK(driveTo(machine, CameraServiceState::Failed));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Failed);
+        RIN_CHECK(driveTo(machine, CameraServiceState::Failed));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Failed);
         std::string error;
-        RSV_CHECK(!machine.transitionTo(CameraServiceState::Waiting, &error));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Failed);
-        RSV_CHECK(error.find("Failed") != std::string::npos);
-        RSV_CHECK(error.find("Waiting") != std::string::npos);
+        RIN_CHECK(!machine.transitionTo(CameraServiceState::Waiting, &error));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Failed);
+        RIN_CHECK(error.find("Failed") != std::string::npos);
+        RIN_CHECK(error.find("Waiting") != std::string::npos);
         // Failed -> Stopping -> Idle 收敛，收敛后可重新进入 Opening（恢复）。
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Stopping));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Stopping);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Idle));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Opening));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Opening);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Stopping));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Stopping);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Idle));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Opening));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Opening);
     }
 
     // --- 5) Waiting 相关场景（DEC-006 热插拔语义）---
     {
         // 启动无设备：Opening -> Waiting 稳态；设备到达 -> Opening -> Streaming。
         CameraStateMachine machine;
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Opening));
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Waiting));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Waiting);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Opening));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Opening);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Streaming));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Streaming);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Opening));
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Waiting));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Waiting);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Opening));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Opening);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Streaming));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Streaming);
     }
     {
         // 活动设备被移除：Streaming -> Waiting，随后恢复 Opening。
         CameraStateMachine machine;
-        RSV_CHECK(driveTo(machine, CameraServiceState::Streaming));
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Waiting));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Waiting);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Opening));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Opening);
+        RIN_CHECK(driveTo(machine, CameraServiceState::Streaming));
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Waiting));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Waiting);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Opening));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Opening);
     }
     {
         // 切换目标设备被移除：Restreaming -> Waiting。
         CameraStateMachine machine;
-        RSV_CHECK(driveTo(machine, CameraServiceState::Restreaming));
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Waiting));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Waiting);
+        RIN_CHECK(driveTo(machine, CameraServiceState::Restreaming));
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Waiting));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Waiting);
     }
     {
         // 等待中直接停止：Waiting -> Stopping -> Idle（设计稳态可取消）。
         CameraStateMachine machine;
-        RSV_CHECK(driveTo(machine, CameraServiceState::Waiting));
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Stopping));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Stopping);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Idle));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK(driveTo(machine, CameraServiceState::Waiting));
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Stopping));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Stopping);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Idle));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
     }
 
     // --- 6) Opening 中途 Stopping -> Idle（start 阶段取消路径）---
     {
         CameraStateMachine machine;
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Opening));
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Stopping));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Stopping);
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Idle));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Opening));
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Stopping));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Stopping);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Idle));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
         // Idle 上的重复 transitionTo(Idle) 幂等。
-        RSV_CHECK(machine.transitionTo(CameraServiceState::Idle));
-        RSV_CHECK_EQ(machine.state(), CameraServiceState::Idle);
+        RIN_CHECK(machine.transitionTo(CameraServiceState::Idle));
+        RIN_CHECK_EQ(machine.state(), CameraServiceState::Idle);
     }
-    return rsv_test::exitStatus();
+    return rin_test::exitStatus();
 }

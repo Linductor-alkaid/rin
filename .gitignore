@@ -25,3 +25,6 @@ compile_commands.json.local
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent session state
+.zcode/

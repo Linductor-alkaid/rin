@@ -4,11 +4,12 @@
 > 日期：2026-09-23
 > 负责人：Linductor-alkaid
 > 冻结里程碑：M1
-> 替代/被替代：无
+> 替代/被替代：librealsense2 的 system 类引入被 [DEC-009](DEC-009-self-contained-deb-distribution.md)
+> 取代（2026-09-23，改为 external 源码构建）；executor / eui-neo 部分继续有效
 
 ## 背景与问题
 
-realsense-vision 依赖 executor（C++20 并发库）、EUI-NEO（UI 框架）与 librealsense2
+Rin 依赖 executor（C++20 并发库）、EUI-NEO（UI 框架）与 librealsense2
 （设备 SDK）。工程规范 9.1 允许两种锁定方式（submodule+锁文件 / lock 清单+CMake 拉取），
 需要为三个依赖选择统一且可离线校验的方案。
 
@@ -24,7 +25,7 @@ realsense-vision 依赖 executor（C++20 并发库）、EUI-NEO（UI 框架）�
   `/usr/local` 安装版本 v2.58.3-6-g7c3ee3fb7，与锁清单 pinned commit 同源）；源码
   级引入成本过高（全量构建十余分钟），当前阶段不打包。
 
-external 依赖优先接受 `RSV_<NAME>_SOURCE_DIR` 指向的本地 clone（configure 时
+external 依赖优先接受 `RIN_<NAME>_SOURCE_DIR` 指向的本地 clone（configure 时
 `git rev-parse HEAD` 必须等于 pinned commit），否则按 URL 拉取；离线构建
 （`FETCHCONTENT_FULLY_DISCONNECTED=ON`）必须提供本地源目录。
 

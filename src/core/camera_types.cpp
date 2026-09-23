@@ -1,8 +1,8 @@
-#include "rs_vision/camera_types.hpp"
+#include "rin/camera_types.hpp"
 
 #include <chrono>
 
-namespace rsv {
+namespace rin {
 
 const char* toString(CameraServiceState state) noexcept {
     switch (state) {
@@ -34,4 +34,4 @@ bool operator!=(const StreamRequest& lhs, const StreamRequest& rhs) noexcept {
     return !(lhs == rhs);
 }
 
-}  // namespace rsv
+}  // namespace rin

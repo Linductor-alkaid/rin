@@ -1,6 +1,6 @@
 #include "camera_state_machine.hpp"
 
-namespace rsv::detail {
+namespace rin::detail {
 
 bool CameraStateMachine::isAllowed(CameraServiceState from, CameraServiceState to) noexcept {
     if (from == to) {
@@ -49,4 +49,4 @@ bool CameraStateMachine::transitionTo(CameraServiceState next, std::string* erro
     return true;
 }
 
-}  // namespace rsv::detail
+}  // namespace rin::detail

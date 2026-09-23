@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace rsv {
+namespace rin {
 
 void jetColor(float t, std::uint8_t out[4]) noexcept {
     t = std::clamp(t, 0.0f, 1.0f);
@@ -114,4 +114,4 @@ bool convertDepth16ToRgba8Jet(const std::uint16_t* src,
                                  nearMeters, farMeters, DepthColorScheme::Jet, dst);
 }
 
-}  // namespace rsv
+}  // namespace rin

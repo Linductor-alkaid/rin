@@ -85,6 +85,25 @@
   切回 `.stream()` 路径并删除 GpuFrameView。
 - 跟进：2026-09-23 登记；同日真机验证绕行后完整画面 + 键盘/鼠标切换 + 干净退出。
 
+### EUI-20260923-004：`eui_neo_configure_app` 目标被施加 `-fno-exceptions`，与 Executor 异常式 API 冲突
+
+- 级别：P3（宿主策略冲突，应用侧可绕行，非缺口）
+- 现象/证据：`CMakeLists.txt` 的 `eui_apply_compile_options()` 对全部 app 目标在非
+  Debug 配置统一追加 `-fno-exceptions`（及 `-fno-rtti`）。viewer 的 `app.cpp` 直接
+  内联 Executor 公开头（`executor/task_cancellation.hpp` 等会抛出取消异常），Release
+  构建报 `error: exception handling disabled`；Debug 配置不触发，故 M1（仅 debug/
+  asan/ubsan 预设）未暴露，Release 打包构建时复现。
+- 影响：任何集成 Executor 异常式 API 的 app 目标都无法在非 Debug 配置按默认编译
+  选项通过。
+- 期望语义：框架宿主策略不应假定应用不使用异常，或提供显式的 opt-out 目标属性。
+- 建议最小能力：`eui_neo_configure_app` 增加 `NO_EXCEPTIONS` 选项（默认保持现行为），
+  或将 `-fno-exceptions` 限定于框架注入的入口 TU 而非整个应用目标。
+- 绕行方案（单一边界内）：`apps/viewer/CMakeLists.txt` 在 `eui_neo_configure_app(rin)`
+  之后对该目标追加 `-fexceptions -frtti`（GCC 后写优先，仅覆盖 app 目标自身）。
+- 移除条件：上游提供 opt-out 后改用官方开关。
+- 状态：Reported（绕行已实施；Release 打包验证通过）
+- 跟进：2026-09-23 登记。
+
 ## 跟进记录表
 
 | 编号 | 状态 | 优先级 | 跟进 |
@@ -92,3 +111,4 @@
 | EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
 | EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 已绕行（GpuFrameView），上游修复后回归 |
+| EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "rs_vision/camera_types.hpp"
+#include "rin/camera_types.hpp"
 
-namespace rsv {
+namespace rin {
 
 /// 相机服务契约：生命周期入口 + 有界最新态数据通道。
 ///
@@ -53,4 +53,4 @@ public:
     [[nodiscard]] virtual bool tryLoadEvent(ServiceEvent& out) = 0;
 };
 
-}  // namespace rsv
+}  // namespace rin

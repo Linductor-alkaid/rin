@@ -11,20 +11,20 @@
 ## 分层
 
 ```
-apps/viewer (rsv_viewer, EUI-NEO 前端)
+apps/viewer (rin, EUI-NEO 前端)
         │  依赖
         ▼
-include/rs_vision (公开契约：ICameraService + POD 类型，零第三方类型)
+include/rin (公开契约：ICameraService + POD 类型，零第三方类型)
         ▲
         │ 实现
-src/adapters/realsense (rsv_realsense_adapter, librealsense2 + executor)
-src/core (rsv_core, 状态机 + 公共类型实现, executor::comm)
+src/adapters/realsense (rin_realsense_adapter, librealsense2 + executor)
+src/core (rin_core, 状态机 + 公共类型实现, executor::comm)
 ```
 
 依赖方向：viewer → 契约 + 适配器工厂；adapter → core 契约。core 与契约不反向依赖任何
 adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `tests/test_public_boundary.cpp`）。
 
-## 公共契约（include/rs_vision/）
+## 公共契约（include/rin/）
 
 - `CameraServiceState`：`Idle / Opening / Streaming / Restreaming / Waiting / Stopping /
   Failed`（`Waiting` 为热插拔稳态，见 DEC-006）。

@@ -1,15 +1,15 @@
-# realsense-vision 项目管理与工程规范
+# Rin 项目管理与工程规范
 
 > 状态：Active
 > 版本：1.0
 > 生效日期：2026-09-23
-> 适用范围：`realsense-vision` 的代码、测试、设计、计划、决策、验证记录、发布材料和 Git 仓库操作
+> 适用范围：`Rin` 的代码、测试、设计、计划、决策、验证记录、发布材料和 Git 仓库操作
 
 本规范由 Mira（Agent Runtime）与 Heyaki（设备通信基础设施）两个 C++20 项目的实践归纳而成：
 项目管理与文档规则以 Mira 的 `docs/project/project_management_and_documentation.md` 为基础，
 里程碑拆分、稳定编号、退出条件和验证记录方法沿用 Heyaki 的总计划结构，Git 提交与 MR 规范
 来自团队《Git Commit / Merge Request 提交规范》并补充标准仓库管理方法，Executor 依赖纪律
-合并两个项目根 `AGENTS.md` 的强制条款。使用前将 `realsense-vision` 替换为实际项目名，并按第 1 节
+合并两个项目根 `AGENTS.md` 的强制条款。使用前将 `Rin` 替换为实际项目名，并按第 1 节
 裁剪与本项目无关的条目。
 
 ## 1. 目的与规范效力
@@ -179,7 +179,7 @@
 
 > 状态：Planned
 > 负责人：姓名或团队
-> 所属计划：realsense-vision 实施总计划（创建文件时改为实际相对链接）
+> 所属计划：Rin 实施总计划（创建文件时改为实际相对链接）
 > 前置：M0
 > 建议发布点：<release-alpha>
 > 更新日期：YYYY-MM-DD
@@ -316,7 +316,7 @@ Executor（`third_party/executor`，C++20 并发与生命周期库）是项目�
   记录 source、精确 commit、版本号、许可证及许可文件路径；CMake configure 时校验 commit。
 - **lock 清单 + CMake 拉取**：`third_party/dependencies.lock` 逐行记录
   `name|url|pinned_commit|expected_commit|submodule|class`，configure 时同步缺失仓库并
-  校验 commit；离线/CI 构建可用 `-Drealsense-vision_FETCH_DEPENDENCIES=OFF` 走只校验路径。
+  校验 commit；离线/CI 构建可用 `-DRin_FETCH_DEPENDENCIES=OFF` 走只校验路径。
 
 未经明确授权不得修改 pinned executor；升级必须记录旧版本、新 commit、能力变化、受影响
 范围和回归结果。

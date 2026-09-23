@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace rsv {
+namespace rin {
 
 /// 相机服务显式状态集（AGENTS.md "Runtime 与状态模型"；热插拔语义见 DEC-006）。
 enum class CameraServiceState {
@@ -143,4 +143,4 @@ struct StartOutcome {
     std::string error;
 };
 
-}  // namespace rsv
+}  // namespace rin

@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <vector>
 
-#include "rs_vision/camera_types.hpp"
+#include "rin/camera_types.hpp"
 
-namespace rsv {
+namespace rin {
 
 /// RGB8（打包，srcStride 字节行距）-> RGBA8（打包，dst 行距 width*4）。
 /// dst 由函数调整大小；src 长度不足返回 false 且不写 dst。
@@ -44,4 +44,4 @@ void jetColor(float t, std::uint8_t out[4]) noexcept;
 /// 灰度映射纯函数（DEC-007）：t=0（近）白、t=1（远）黑，R=G=B，A=255。
 void grayscaleColor(float t, std::uint8_t out[4]) noexcept;
 
-}  // namespace rsv
+}  // namespace rin

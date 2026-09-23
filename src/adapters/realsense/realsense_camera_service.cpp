@@ -16,9 +16,9 @@
 
 #include "camera_state_machine.hpp"
 #include "pixel_format.hpp"
-#include "rs_vision/camera_types.hpp"
+#include "rin/camera_types.hpp"
 
-namespace rsv {
+namespace rin {
 namespace {
 
 using executor::comm::LatestMailbox;
@@ -233,13 +233,13 @@ private:
     executor::Executor& executor_;
     detail::CameraStateMachine machine_;
 
-    LatestMailbox<Frame> rgbFrames_{"rsv.frames.rgb"};
-    LatestMailbox<Frame> depthFrames_{"rsv.frames.depth"};
-    LatestMailbox<IntrinsicsSnapshot> intrinsics_{"rsv.intrinsics"};
-    LatestMailbox<DeviceCatalog> catalog_{"rsv.catalog"};
-    LatestMailbox<ServiceEvent> events_{"rsv.events"};
-    LatestMailbox<ControlCommand> commands_{"rsv.commands"};
-    LatestMailbox<int> hotPlug_{"rsv.hotplug"};
+    LatestMailbox<Frame> rgbFrames_{"rin.frames.rgb"};
+    LatestMailbox<Frame> depthFrames_{"rin.frames.depth"};
+    LatestMailbox<IntrinsicsSnapshot> intrinsics_{"rin.intrinsics"};
+    LatestMailbox<DeviceCatalog> catalog_{"rin.catalog"};
+    LatestMailbox<ServiceEvent> events_{"rin.events"};
+    LatestMailbox<ControlCommand> commands_{"rin.commands"};
+    LatestMailbox<int> hotPlug_{"rin.hotplug"};
 
     executor::WorkerHandle worker_{};
     std::atomic<bool> workerRunning_{false};
@@ -817,8 +817,8 @@ StartOutcome RealSenseCamera::start(const StreamRequest& request) {
 
     // 启动不依赖相机连接（DEC-006）：无设备时 worker 进入 Waiting 等待接入。
     executor::BlockingWorkerSpec spec;
-    spec.name = "rsv-capture";
-    spec.config.thread_name = "rsv-capture";
+    spec.name = "rin-capture";
+    spec.config.thread_name = "rin-capture";
     spec.config.startup_timeout = std::chrono::milliseconds(2000);
     spec.worker = std::make_unique<CaptureLoop>(*this, request);
     worker_ = executor_.start_worker(std::move(spec));
@@ -839,4 +839,4 @@ std::shared_ptr<ICameraService> createRealSenseCameraService(executor::Executor&
     return std::make_shared<RealSenseCamera>(executor);
 }
 
-}  // namespace rsv
+}  // namespace rin

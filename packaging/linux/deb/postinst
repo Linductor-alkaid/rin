@@ -1,0 +1,14 @@
+#!/bin/sh
+# Rin deb postinst：重载 udev 规则使 RealSense 设备免 root 可用，并刷新图标缓存。
+set -e
+
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+    udevadm trigger --subsystem-match=usb || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -f /usr/share/icons/hicolor || true
+fi
+
+exit 0

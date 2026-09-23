@@ -14,7 +14,7 @@ jet 伪彩不利于观察深度连续层次，需要提供灰度黑白（黑白�
 
 ## 决策
 
-- 公共契约新增 `rsv::DepthColorScheme { Jet, Grayscale }` 与
+- 公共契约新增 `rin::DepthColorScheme { Jet, Grayscale }` 与
   `ICameraService::requestDepthColorScheme`（Waiting/Opening/Streaming/Restreaming
   下有效，粘性跨插拔/设备切换保留；Idle/Failed/Stopping 拒绝）。
 - 配色命令沿用 DEC-006 的 `LatestMailbox<ControlCommand>` 通道：worker 在 Waiting

@@ -1,8 +1,8 @@
-# realsense-vision 项目协作约定
+# Rin 项目协作约定
 
 ## 适用范围
 
-本文件适用于 realsense-vision 仓库中的全部自研代码、测试、文档与构建配置。
+本文件适用于 Rin 仓库中的全部自研代码、测试、文档与构建配置。
 `third_party/` 中的上游代码遵循其自身约定；除非任务明确要求升级或修复依赖，否则不要修改
 其中的代码。本文件是仓库级最高强制约束，与[项目管理与工程规范](docs/project/project-standards.md)
 （下称"工程规范"）配套使用：本文件定义底线，工程规范定义完整流程、模板与证据要求。
@@ -16,7 +16,7 @@
 
 ## 产品目标
 
-realsense-vision 是使用现代 C++ 构建的 Intel RealSense 视觉库，当前交付一个基于
+Rin 是使用现代 C++ 构建的 Intel RealSense 视觉库，当前交付一个基于
 librealsense2 SDK 的实时预览应用：连接与主机相连的 RealSense 深度相机，开窗实时显示
 RGB 彩色图像与深度图像，允许选择输出分辨率，并显示当前流配置下的相机内参。核心闭环为：
 
@@ -25,13 +25,13 @@ RGB 彩色图像与深度图像，允许选择输出分辨率，并显示当前�
 实现必须保持 Core 与具体设备供应商、窗口系统解耦：librealsense2、EUI-NEO/GLFW 等
 宿主能力只能通过 Adapter 接入，不得渗入 Core。优先围绕以下接口形成稳定边界：
 
-- `rsv::ICameraService`：相机服务的生命周期与控制入口（启动、停止、切换分辨率、查询状态）。
-- `rsv::IFrameSink` / `executor::comm` 邮箱：帧数据从采集上下文到消费上下文的有界传递。
-- `rsv::CameraEventSink`：设备错误、流状态变化等事件向观察者的通知通道。
+- `rin::ICameraService`：相机服务的生命周期与控制入口（启动、停止、切换分辨率、查询状态）。
+- `rin::IFrameSink` / `executor::comm` 邮箱：帧数据从采集上下文到消费上下文的有界传递。
+- `rin::CameraEventSink`：设备错误、流状态变化等事件向观察者的通知通道。
 
 ## Executor 是强制并发基础设施
 
-realsense-vision 必须依赖仓库中的 pinned `third_party/executor` 管理所有并发任务和运行
+Rin 必须依赖仓库中的 pinned `third_party/executor` 管理所有并发任务和运行
 生命周期。集成时以其公开头文件、`third_party/executor/docs/API.md` 和
 `third_party/executor/docs/skill/executor-integration/SKILL.md` 为准；本地资源与 pinned
 版本一致，优先于其他版本的文档。
@@ -60,7 +60,7 @@ realsense-vision 必须依赖仓库中的 pinned `third_party/executor` 管理�
    排队期与运行期取消进入 Executor 生命周期视图。采集循环必须定期检查取消状态，并保证
    `wait_for_frames()` 之外的动作具有可解除阻塞的路径。超时不是强制终止，queued soft
    timeout 不覆盖运行中任务。
-7. Executor 必须由明确的外部 owner 初始化和关闭，每个进程的 owner 唯一。realsense-vision
+7. Executor 必须由明确的外部 owner 初始化和关闭，每个进程的 owner 唯一。Rin
    的 viewer 应用中，owner 是应用侧 `AppRuntime`：在主线程的 `dslAppConfig()` 首次调用点
    初始化，在 EUI-NEO `DslAppConfig::onShutdown` 回调（主线程、GPU 设备销毁前）中按顺序
    关闭：停止任务生产者（相机服务），发出取消或停止请求，回收 blocking worker，等待需要
@@ -92,7 +92,7 @@ capability card，不读取无关卡片或实现源码：
 ## Executor 能力缺口与依赖反馈台账
 
 不得为了绕过 Executor 的能力边界而静默引入另一套并发或生命周期设施。当确认 Executor 无法
-满足 realsense-vision 的合理需求时，必须按工程规范第 9.4 节执行反馈流程：
+满足 Rin 的合理需求时，必须按工程规范第 9.4 节执行反馈流程：
 
 1. 先核对当前版本的公开头文件、API 文档、集成指南及相关测试，排除 API 选型错误、配置
    错误、平台限制和应用层职责。
@@ -106,7 +106,7 @@ capability card，不读取无关卡片或实现源码：
    下沉到通用 Executor；先报告并等待明确指示。
 
 以下情况不是 Executor 能力缺口：RealSense 设备适配、窗口平台映射、业务状态机策略、
-错误使用已有 API、平台本身不提供所需权限。它们应在 realsense-vision 对应层解决。
+错误使用已有 API、平台本身不提供所需权限。它们应在 Rin 对应层解决。
 
 ### 依赖独立台账（本仓库扩展要求）
 
@@ -121,7 +121,7 @@ capability card，不读取无关卡片或实现源码：
 ## Runtime 与状态模型
 
 - 核心对象必须实现为可推进、可观测、可中断的显式状态机，而不是不可中断的单体 `run()`。
-  realsense-vision 相机服务的标准状态集：`Idle / Opening / Streaming / Restreaming /
+  Rin 相机服务的标准状态集：`Idle / Opening / Streaming / Restreaming /
   Waiting / Stopping / Failed`（`Waiting` 为"等待相机接入/用户选择"的设计稳态，
   见 DEC-006）。
 - 每个推进步骤应是有界工作单元；librealsense 的阻塞采集交给 Executor blocking worker
@@ -166,7 +166,7 @@ Commit、分支、MR、评审与合并必须遵循工程规范第 10 节。要�
 
 ## 完成定义
 
-一项 realsense-vision 变更只有在以下条件满足时才算完成：职责位于正确层；全部任务受
+一项 Rin 变更只有在以下条件满足时才算完成：职责位于正确层；全部任务受
 Executor 管理；取消和 shutdown 路径闭合；失败对调用方和 Observer 可见；关键事件可复现；
 相关测试通过；计划状态、设计、决策和验收证据已经同步；Commit 与 MR 符合仓库纪律；若遇到
 Executor 或其他依赖的能力缺口，对应反馈台账已经按要求登记并被实现引用。

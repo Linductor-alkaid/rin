@@ -2,7 +2,7 @@
 
 > 状态：Completed（tsan 有一项环境限制记录，见验证记录）
 > 负责人：Linductor-alkaid
-> 所属计划：[realsense-vision 实施总计划](realsense-vision-implementation-plan.md)
+> 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：无
 > 建议发布点：v0.1.0
 > 更新日期：2026-09-23
@@ -192,7 +192,7 @@
     无线程用例同样触发，属环境限制）；经 `setarch -R` 旁路验证 4/4 通过、零竞态报告。
     补跑条件：宿主机调整 `vm.mmap_rnd_bits` 或为测试包 setarch 启动器。
 - 验证（GUI 真机验收，主循环执行）：
-  - 命令：`cmake --build --preset debug` 后 `DISPLAY=:0 ./build/debug/apps/viewer/rsv_viewer`。
+  - 命令：`cmake --build --preset debug` 后 `DISPLAY=:0 ./build/debug/apps/viewer/rin`。
   - 窗口以 59-60 FPS 渲染；RGB/Depth 双画面实时更新（间隔 2s 双截图 xwd 哈希不同：
     `8ad81114…` vs `5d280c16…`）。
   - 分辨率切换经真实 UI 点击完成：下拉 848x480 → 640x360，状态栏 `Streaming -

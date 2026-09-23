@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <string>
 
-namespace rsv_test {
+namespace rin_test {
 
 inline int& failureCount() {
     static int count = 0;
@@ -28,20 +28,20 @@ inline int exitStatus() {
     return failures == 0 ? 0 : 1;
 }
 
-}  // namespace rsv_test
+}  // namespace rin_test
 
-#define RSV_CHECK(cond)                                              \
+#define RIN_CHECK(cond)                                              \
     do {                                                             \
-        ++rsv_test::checkCount();                                    \
+        ++rin_test::checkCount();                                    \
         if (!(cond)) {                                               \
-            rsv_test::recordFailure(__FILE__, __LINE__, #cond);      \
+            rin_test::recordFailure(__FILE__, __LINE__, #cond);      \
         }                                                            \
     } while (0)
 
-#define RSV_CHECK_EQ(a, b)                                                              \
+#define RIN_CHECK_EQ(a, b)                                                              \
     do {                                                                                \
-        ++rsv_test::checkCount();                                                       \
+        ++rin_test::checkCount();                                                       \
         if (!((a) == (b))) {                                                            \
-            rsv_test::recordFailure(__FILE__, __LINE__, std::string(#a " == ") + #b);   \
+            rin_test::recordFailure(__FILE__, __LINE__, std::string(#a " == ") + #b);   \
         }                                                                               \
     } while (0)

@@ -28,13 +28,13 @@ bool sameColor(const std::uint8_t* pixel, std::uint8_t r, std::uint8_t g, std::u
 
 Rgba jetAt(float t) {
     Rgba c{};
-    rsv::jetColor(t, c.data());
+    rin::jetColor(t, c.data());
     return c;
 }
 
 Rgba grayAt(float t) {
     Rgba c{};
-    rsv::grayscaleColor(t, c.data());
+    rin::grayscaleColor(t, c.data());
     return c;
 }
 
@@ -47,13 +47,13 @@ int main() {
     {
         const std::uint8_t rgb[9] = {0x10, 0x20, 0x30, 0xAA, 0xBB, 0xCC, 0x00, 0x7F, 0xFF};
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertRgb8ToRgba8(rgb, 3, 1, 9, rgba));
-        RSV_CHECK_EQ(rgba.size(), std::size_t{12});
+        RIN_CHECK(rin::convertRgb8ToRgba8(rgb, 3, 1, 9, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{12});
         for (int p = 0; p < 3; ++p) {
-            RSV_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 0], rgb[p * 3 + 0]);
-            RSV_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 1], rgb[p * 3 + 1]);
-            RSV_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 2], rgb[p * 3 + 2]);
-            RSV_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 3], std::uint8_t{255});
+            RIN_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 0], rgb[p * 3 + 0]);
+            RIN_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 1], rgb[p * 3 + 1]);
+            RIN_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 2], rgb[p * 3 + 2]);
+            RIN_CHECK_EQ(rgba[static_cast<std::size_t>(p) * 4 + 3], std::uint8_t{255});
         }
     }
 
@@ -76,22 +76,22 @@ int main() {
             }
         }
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertRgb8ToRgba8(src.data(), kWidth, kHeight, kStride, rgba));
-        RSV_CHECK_EQ(rgba.size(), std::size_t{kWidth * kHeight * 4});
+        RIN_CHECK(rin::convertRgb8ToRgba8(src.data(), kWidth, kHeight, kStride, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{kWidth * kHeight * 4});
         for (std::uint32_t row = 0; row < kHeight; ++row) {
             for (std::uint32_t col = 0; col < kWidth; ++col) {
                 const std::uint8_t* s = src.data() + row * kStride + col * 3;
                 const std::uint8_t* d =
                     rgba.data() + (row * kWidth + col) * 4;
-                RSV_CHECK_EQ(d[0], s[0]);
-                RSV_CHECK_EQ(d[1], s[1]);
-                RSV_CHECK_EQ(d[2], s[2]);
-                RSV_CHECK_EQ(d[3], std::uint8_t{255});
+                RIN_CHECK_EQ(d[0], s[0]);
+                RIN_CHECK_EQ(d[1], s[1]);
+                RIN_CHECK_EQ(d[2], s[2]);
+                RIN_CHECK_EQ(d[3], std::uint8_t{255});
             }
         }
         // 结果不含任何 padding 哨兵字节（合法输出只有数据值 1..22 与 alpha=255）。
         for (const std::uint8_t byte : rgba) {
-            RSV_CHECK(byte != 0xEE);
+            RIN_CHECK(byte != 0xEE);
         }
     }
 
@@ -100,12 +100,12 @@ int main() {
         const std::uint8_t rgb[9] = {};
         std::vector<std::uint8_t> dst{0x5A, 0x5A, 0x5A};
         const std::vector<std::uint8_t> sentinel = dst;
-        RSV_CHECK(!rsv::convertRgb8ToRgba8(nullptr, 3, 1, 3, dst));   // nullptr
-        RSV_CHECK(!rsv::convertRgb8ToRgba8(rgb, 0, 1, 3, dst));       // width=0
-        RSV_CHECK(!rsv::convertRgb8ToRgba8(rgb, 3, 0, 9, dst));       // height=0
-        RSV_CHECK(!rsv::convertRgb8ToRgba8(rgb, 3, 1, 8, dst));       // stride < width*3
-        RSV_CHECK(!rsv::convertRgb8ToRgba8(rgb, 3, 1, 0, dst));       // stride=0
-        RSV_CHECK(dst == sentinel);
+        RIN_CHECK(!rin::convertRgb8ToRgba8(nullptr, 3, 1, 3, dst));   // nullptr
+        RIN_CHECK(!rin::convertRgb8ToRgba8(rgb, 0, 1, 3, dst));       // width=0
+        RIN_CHECK(!rin::convertRgb8ToRgba8(rgb, 3, 0, 9, dst));       // height=0
+        RIN_CHECK(!rin::convertRgb8ToRgba8(rgb, 3, 1, 8, dst));       // stride < width*3
+        RIN_CHECK(!rin::convertRgb8ToRgba8(rgb, 3, 1, 0, dst));       // stride=0
+        RIN_CHECK(dst == sentinel);
     }
 
     // ================= convertDepth16ToRgba8Jet =================
@@ -118,19 +118,19 @@ int main() {
         constexpr float kFar = 3.0f;
         const std::uint16_t depth[4] = {0, 1000, 2000, 3000};
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8Jet(depth, 4, 1, 4, kScale, kNear, kFar, rgba));
-        RSV_CHECK_EQ(rgba.size(), std::size_t{16});
+        RIN_CHECK(rin::convertDepth16ToRgba8Jet(depth, 4, 1, 4, kScale, kNear, kFar, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{16});
 
-        RSV_CHECK(sameColor(rgba.data(), 0, 0, 0, 255));  // raw=0 无效深度
+        RIN_CHECK(sameColor(rgba.data(), 0, 0, 0, 255));  // raw=0 无效深度
         const float expectedT[4] = {0.0f, 0.0f, 0.5f, 1.0f};
         for (int p = 1; p < 4; ++p) {
             const Rgba ref = jetAt(expectedT[p]);
-            RSV_CHECK(sameColor(rgba.data() + p * 4, ref[0], ref[1], ref[2], ref[3]));
+            RIN_CHECK(sameColor(rgba.data() + p * 4, ref[0], ref[1], ref[2], ref[3]));
         }
         // 精确语义色：t=0 暗蓝、t=0.5 绿峰（jet 绿峰带 128 红/蓝）、t=1 暗红。
-        RSV_CHECK(sameColor(rgba.data() + 4, 0, 0, 128, 255));
-        RSV_CHECK(sameColor(rgba.data() + 8, 128, 255, 128, 255));
-        RSV_CHECK(sameColor(rgba.data() + 12, 128, 0, 0, 255));
+        RIN_CHECK(sameColor(rgba.data() + 4, 0, 0, 128, 255));
+        RIN_CHECK(sameColor(rgba.data() + 8, 128, 255, 128, 255));
+        RIN_CHECK(sameColor(rgba.data() + 12, 128, 0, 0, 255));
     }
 
     // 5) depthScale 换算：scale=0.001、raw=2000 -> 2.0m；near=0/far=4 -> t=0.5。
@@ -138,22 +138,22 @@ int main() {
     {
         const std::uint16_t depth[2] = {2000, 1000};
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 0.0f, 4.0f, rgba));
+        RIN_CHECK(rin::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 0.0f, 4.0f, rgba));
         const Rgba mid = jetAt(0.5f);
         const Rgba quarter = jetAt(0.25f);
-        RSV_CHECK(sameColor(rgba.data(), mid[0], mid[1], mid[2], mid[3]));
-        RSV_CHECK(sameColor(rgba.data() + 4, quarter[0], quarter[1], quarter[2], quarter[3]));
+        RIN_CHECK(sameColor(rgba.data(), mid[0], mid[1], mid[2], mid[3]));
+        RIN_CHECK(sameColor(rgba.data() + 4, quarter[0], quarter[1], quarter[2], quarter[3]));
     }
 
     // 6) 区间外截断：raw 低于 near / 高于 far 分别等价 t=0 / t=1。
     {
         const std::uint16_t depth[2] = {1, 65000};  // 0.001 m 与 65 m
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 1.0f, 3.0f, rgba));
+        RIN_CHECK(rin::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 1.0f, 3.0f, rgba));
         const Rgba lo = jetAt(0.0f);
         const Rgba hi = jetAt(1.0f);
-        RSV_CHECK(sameColor(rgba.data(), lo[0], lo[1], lo[2], lo[3]));
-        RSV_CHECK(sameColor(rgba.data() + 4, hi[0], hi[1], hi[2], hi[3]));
+        RIN_CHECK(sameColor(rgba.data(), lo[0], lo[1], lo[2], lo[3]));
+        RIN_CHECK(sameColor(rgba.data() + 4, hi[0], hi[1], hi[2], hi[3]));
     }
 
     // 7) srcStrideUnits padding：2x3、strideUnits=5（每行 2 个 padding 单元），
@@ -170,20 +170,20 @@ int main() {
             depth[kStrideUnits + c] = row1[c];
         }
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8Jet(depth.data(), kWidth, kHeight, kStrideUnits,
+        RIN_CHECK(rin::convertDepth16ToRgba8Jet(depth.data(), kWidth, kHeight, kStrideUnits,
                                                 0.001f, 1.0f, 3.0f, rgba));
-        RSV_CHECK_EQ(rgba.size(), std::size_t{kWidth * kHeight * 4});
+        RIN_CHECK_EQ(rgba.size(), std::size_t{kWidth * kHeight * 4});
         const Rgba t0 = jetAt(0.0f);
         const Rgba t05 = jetAt(0.5f);
         const Rgba t1 = jetAt(1.0f);
         // 行 0：1000/2000/3000 -> t=0/0.5/1
-        RSV_CHECK(sameColor(rgba.data() + 0, t0[0], t0[1], t0[2], t0[3]));
-        RSV_CHECK(sameColor(rgba.data() + 4, t05[0], t05[1], t05[2], t05[3]));
-        RSV_CHECK(sameColor(rgba.data() + 8, t1[0], t1[1], t1[2], t1[3]));
+        RIN_CHECK(sameColor(rgba.data() + 0, t0[0], t0[1], t0[2], t0[3]));
+        RIN_CHECK(sameColor(rgba.data() + 4, t05[0], t05[1], t05[2], t05[3]));
+        RIN_CHECK(sameColor(rgba.data() + 8, t1[0], t1[1], t1[2], t1[3]));
         // 行 1：3000/2000/1000 -> t=1/0.5/0（错位到行 0 padding 0xFFFF 会得 t=1）
-        RSV_CHECK(sameColor(rgba.data() + 12, t1[0], t1[1], t1[2], t1[3]));
-        RSV_CHECK(sameColor(rgba.data() + 16, t05[0], t05[1], t05[2], t05[3]));
-        RSV_CHECK(sameColor(rgba.data() + 20, t0[0], t0[1], t0[2], t0[3]));
+        RIN_CHECK(sameColor(rgba.data() + 12, t1[0], t1[1], t1[2], t1[3]));
+        RIN_CHECK(sameColor(rgba.data() + 16, t05[0], t05[1], t05[2], t05[3]));
+        RIN_CHECK(sameColor(rgba.data() + 20, t0[0], t0[1], t0[2], t0[3]));
     }
 
     // 8) 非法参数：返回 false 且 dst 不被写。
@@ -191,36 +191,36 @@ int main() {
         const std::uint16_t depth[4] = {100, 200, 300, 400};
         std::vector<std::uint8_t> dst{0x5A, 0x5A};
         const std::vector<std::uint8_t> sentinel = dst;
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(nullptr, 2, 1, 2, 0.001f, 1.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 0, 1, 0, 0.001f, 1.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 2, 0, 2, 0.001f, 1.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 3, 1, 2, 0.001f, 1.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.0f, 1.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 2, 1, 2, -1.0f, 1.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 3.0f, 3.0f, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 3.0f, 1.0f, dst));
-        RSV_CHECK(dst == sentinel);
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(nullptr, 2, 1, 2, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 0, 1, 0, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 2, 0, 2, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 3, 1, 2, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.0f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 2, 1, 2, -1.0f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 3.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8Jet(depth, 2, 1, 2, 0.001f, 3.0f, 1.0f, dst));
+        RIN_CHECK(dst == sentinel);
     }
 
     // ================= jetColor =================
 
     // 9) 端点精确值（实现为经典 jet 三角波近似）。
     {
-        RSV_CHECK(jetAt(0.0f) == (Rgba{0, 0, 128, 255}));
-        RSV_CHECK(jetAt(0.25f) == (Rgba{0, 128, 255, 255}));
-        RSV_CHECK(jetAt(0.5f) == (Rgba{128, 255, 128, 255}));
-        RSV_CHECK(jetAt(0.75f) == (Rgba{255, 128, 0, 255}));
-        RSV_CHECK(jetAt(1.0f) == (Rgba{128, 0, 0, 255}));
+        RIN_CHECK(jetAt(0.0f) == (Rgba{0, 0, 128, 255}));
+        RIN_CHECK(jetAt(0.25f) == (Rgba{0, 128, 255, 255}));
+        RIN_CHECK(jetAt(0.5f) == (Rgba{128, 255, 128, 255}));
+        RIN_CHECK(jetAt(0.75f) == (Rgba{255, 128, 0, 255}));
+        RIN_CHECK(jetAt(1.0f) == (Rgba{128, 0, 0, 255}));
     }
 
     // 10) t 超界 clamp：下/上界外与边界一致。
     {
         const Rgba j0 = jetAt(0.0f);
         const Rgba j1 = jetAt(1.0f);
-        RSV_CHECK(jetAt(-0.5f) == j0);
-        RSV_CHECK(jetAt(-0.0001f) == j0);
-        RSV_CHECK(jetAt(1.0001f) == j1);
-        RSV_CHECK(jetAt(2.0f) == j1);
+        RIN_CHECK(jetAt(-0.5f) == j0);
+        RIN_CHECK(jetAt(-0.0001f) == j0);
+        RIN_CHECK(jetAt(1.0001f) == j1);
+        RIN_CHECK(jetAt(2.0f) == j1);
     }
 
     // 11) 单调区间：b 升[0,0.25]降[0.25,0.5]；g 升[0.25,0.5]降[0.5,0.75]；
@@ -233,10 +233,10 @@ int main() {
                 const Rgba c0 = jetAt(t0);
                 const Rgba c1 = jetAt(t1);
                 if (increasing) {
-                    RSV_CHECK(c0[static_cast<std::size_t>(channel)] <=
+                    RIN_CHECK(c0[static_cast<std::size_t>(channel)] <=
                               c1[static_cast<std::size_t>(channel)]);
                 } else {
-                    RSV_CHECK(c0[static_cast<std::size_t>(channel)] >=
+                    RIN_CHECK(c0[static_cast<std::size_t>(channel)] >=
                               c1[static_cast<std::size_t>(channel)]);
                 }
             }
@@ -250,7 +250,7 @@ int main() {
 
         for (int i = -20; i <= 120; i += 5) {  // 含超界样本
             const float t = static_cast<float>(i) / 100.0f;
-            RSV_CHECK_EQ(jetAt(t)[3], std::uint8_t{255});
+            RIN_CHECK_EQ(jetAt(t)[3], std::uint8_t{255});
         }
     }
 
@@ -258,19 +258,19 @@ int main() {
 
     // 12) 端点精确值：t=0（近）纯白、t=1（远）纯黑；alpha 恒 255。
     {
-        RSV_CHECK(grayAt(0.0f) == (Rgba{255, 255, 255, 255}));
-        RSV_CHECK(grayAt(1.0f) == (Rgba{0, 0, 0, 255}));
+        RIN_CHECK(grayAt(0.0f) == (Rgba{255, 255, 255, 255}));
+        RIN_CHECK(grayAt(1.0f) == (Rgba{0, 0, 0, 255}));
     }
 
     // 13) 中点精确值：t=0.5 -> level=(1-0.5)*255+0.5=128；R==G==B 且 A=255。
     {
-        RSV_CHECK(grayAt(0.5f) == (Rgba{128, 128, 128, 255}));
+        RIN_CHECK(grayAt(0.5f) == (Rgba{128, 128, 128, 255}));
         for (int i = 0; i <= 20; ++i) {  // 任意 t：R==G==B 且 alpha 恒 255（含超界样本）
             const float t = static_cast<float>(i) / 20.0f - 0.25f;  // [-0.25, 0.75]
             const Rgba c = grayAt(t);
-            RSV_CHECK_EQ(c[0], c[1]);
-            RSV_CHECK_EQ(c[1], c[2]);
-            RSV_CHECK_EQ(c[3], std::uint8_t{255});
+            RIN_CHECK_EQ(c[0], c[1]);
+            RIN_CHECK_EQ(c[1], c[2]);
+            RIN_CHECK_EQ(c[3], std::uint8_t{255});
         }
     }
 
@@ -278,14 +278,14 @@ int main() {
     {
         const Rgba g0 = grayAt(0.0f);
         const Rgba g1 = grayAt(1.0f);
-        RSV_CHECK(grayAt(-0.5f) == g0);
-        RSV_CHECK(grayAt(-0.0001f) == g0);
-        RSV_CHECK(grayAt(1.0001f) == g1);
-        RSV_CHECK(grayAt(2.0f) == g1);
+        RIN_CHECK(grayAt(-0.5f) == g0);
+        RIN_CHECK(grayAt(-0.0001f) == g0);
+        RIN_CHECK(grayAt(1.0001f) == g1);
+        RIN_CHECK(grayAt(2.0f) == g1);
         // level(0.25) = 0.75*255+0.5 = 191.75 -> 截断 191。
-        RSV_CHECK(grayAt(0.25f) == (Rgba{191, 191, 191, 255}));
+        RIN_CHECK(grayAt(0.25f) == (Rgba{191, 191, 191, 255}));
         // level(0.75) = 0.25*255+0.5 = 64.25 -> 截断 64。
-        RSV_CHECK(grayAt(0.75f) == (Rgba{64, 64, 64, 255}));
+        RIN_CHECK(grayAt(0.75f) == (Rgba{64, 64, 64, 255}));
     }
 
     // ============ convertDepth16ToRgba8 统一入口（DEC-007）============
@@ -295,17 +295,17 @@ int main() {
         const std::uint16_t depth[4] = {100, 200, 300, 400};
         std::vector<std::uint8_t> dst{0x5A, 0x5A};
         const std::vector<std::uint8_t> sentinel = dst;
-        const auto scheme = rsv::DepthColorScheme::Grayscale;
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(nullptr, 2, 1, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 0, 1, 0, 0.001f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 2, 0, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 3, 1, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 2, 1, 1, 0.001f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 2, 1, 2, 0.0f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 2, 1, 2, -1.0f, 0.2f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 2, 1, 2, 0.001f, 6.5f, 6.5f, scheme, dst));
-        RSV_CHECK(!rsv::convertDepth16ToRgba8(depth, 2, 1, 2, 0.001f, 6.5f, 0.2f, scheme, dst));
-        RSV_CHECK(dst == sentinel);
+        const auto scheme = rin::DepthColorScheme::Grayscale;
+        RIN_CHECK(!rin::convertDepth16ToRgba8(nullptr, 2, 1, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 0, 1, 0, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 0, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 3, 1, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 1, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, 0.0f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, -1.0f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, 0.001f, 6.5f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, 0.001f, 6.5f, 0.2f, scheme, dst));
+        RIN_CHECK(dst == sentinel);
     }
 
     // 16) Grayscale 转换语义（scale=0.001、near=0.2、far=6.5，与适配器常量一致）：
@@ -315,36 +315,36 @@ int main() {
         constexpr float kScale = 0.001f;
         constexpr float kNear = 0.2f;
         constexpr float kFar = 6.5f;
-        const auto scheme = rsv::DepthColorScheme::Grayscale;
+        const auto scheme = rin::DepthColorScheme::Grayscale;
         const std::uint16_t depth[4] = {0, 200, 3350, 6500};
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8(depth, 4, 1, 4, kScale, kNear, kFar, scheme, rgba));
-        RSV_CHECK_EQ(rgba.size(), std::size_t{16});
-        RSV_CHECK(sameColor(rgba.data(), 0, 0, 0, 255));  // raw=0 无效深度
-        RSV_CHECK(sameColor(rgba.data() + 4, 255, 255, 255, 255));  // t=0 近白
-        RSV_CHECK(sameColor(rgba.data() + 8, 128, 128, 128, 255));  // t=0.5 中灰
-        RSV_CHECK(sameColor(rgba.data() + 12, 0, 0, 0, 255));       // t=1 远黑
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 4, 1, 4, kScale, kNear, kFar, scheme, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{16});
+        RIN_CHECK(sameColor(rgba.data(), 0, 0, 0, 255));  // raw=0 无效深度
+        RIN_CHECK(sameColor(rgba.data() + 4, 255, 255, 255, 255));  // t=0 近白
+        RIN_CHECK(sameColor(rgba.data() + 8, 128, 128, 128, 255));  // t=0.5 中灰
+        RIN_CHECK(sameColor(rgba.data() + 12, 0, 0, 0, 255));       // t=1 远黑
     }
 
     // 17) 区间外截断：raw=100（<near）与 raw=200 同值；raw=65535（>far）与 raw=6500 同值。
     {
-        const auto scheme = rsv::DepthColorScheme::Grayscale;
+        const auto scheme = rin::DepthColorScheme::Grayscale;
         const std::uint16_t depth[4] = {100, 200, 6500, 65535};
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8(depth, 4, 1, 4, 0.001f, 0.2f, 6.5f, scheme, rgba));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 4, 1, 4, 0.001f, 0.2f, 6.5f, scheme, rgba));
         for (int p = 0; p < 4; ++p) {
             const Rgba ref = grayAt(p < 2 ? 0.0f : 1.0f);
-            RSV_CHECK(sameColor(rgba.data() + static_cast<std::size_t>(p) * 4, ref[0], ref[1],
+            RIN_CHECK(sameColor(rgba.data() + static_cast<std::size_t>(p) * 4, ref[0], ref[1],
                                 ref[2], ref[3]));
         }
-        RSV_CHECK(sameColor(rgba.data(), 255, 255, 255, 255));  // 下方截断 == t=0
-        RSV_CHECK(sameColor(rgba.data() + 8, 0, 0, 0, 255));    // 上方截断 == t=1
+        RIN_CHECK(sameColor(rgba.data(), 255, 255, 255, 255));  // 下方截断 == t=0
+        RIN_CHECK(sameColor(rgba.data() + 8, 0, 0, 0, 255));    // 上方截断 == t=1
     }
 
     // 18) 随距离单调不增：区间内递增 raw 序列，灰度亮度序列非增；
     //     且任意样本 R==G==B（逐像素经 grayscaleColor 参照核对）。
     {
-        const auto scheme = rsv::DepthColorScheme::Grayscale;
+        const auto scheme = rin::DepthColorScheme::Grayscale;
         constexpr float kScale = 0.001f;
         constexpr float kNear = 0.2f;
         constexpr float kFar = 6.5f;
@@ -358,23 +358,23 @@ int main() {
                 200 + (6500 - 200) * s / (kSamples - 1)));
         }
         std::vector<std::uint8_t> rgba;
-        RSV_CHECK(rsv::convertDepth16ToRgba8(depth.data(), static_cast<std::uint32_t>(
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), static_cast<std::uint32_t>(
                                                        depth.size()),
                                              1, static_cast<std::uint32_t>(depth.size()),
                                              kScale, kNear, kFar, scheme, rgba));
         for (int s = 0; s < kSamples; ++s) {
             const std::size_t offset = static_cast<std::size_t>(s) * 4;
-            RSV_CHECK_EQ(rgba[offset + 0], rgba[offset + 1]);
-            RSV_CHECK_EQ(rgba[offset + 1], rgba[offset + 2]);
-            RSV_CHECK_EQ(rgba[offset + 3], std::uint8_t{255});
+            RIN_CHECK_EQ(rgba[offset + 0], rgba[offset + 1]);
+            RIN_CHECK_EQ(rgba[offset + 1], rgba[offset + 2]);
+            RIN_CHECK_EQ(rgba[offset + 3], std::uint8_t{255});
             // 参照核对：经 grayscaleColor 纯函数重算同一 t。
             const float t =
                 (static_cast<float>(depth[static_cast<std::size_t>(s)]) * kScale - kNear) /
                 kRange;
             const Rgba ref = grayAt(t);
-            RSV_CHECK(sameColor(rgba.data() + offset, ref[0], ref[1], ref[2], ref[3]));
+            RIN_CHECK(sameColor(rgba.data() + offset, ref[0], ref[1], ref[2], ref[3]));
             if (s > 0) {
-                RSV_CHECK(rgba[offset] <= rgba[offset - 4]);  // 亮度非增
+                RIN_CHECK(rgba[offset] <= rgba[offset - 4]);  // 亮度非增
             }
         }
     }
@@ -384,7 +384,7 @@ int main() {
         constexpr std::uint32_t kWidth = 3;
         constexpr std::uint32_t kHeight = 2;
         constexpr std::uint32_t kStrideUnits = 5;
-        const auto scheme = rsv::DepthColorScheme::Grayscale;
+        const auto scheme = rin::DepthColorScheme::Grayscale;
         const std::uint16_t compact[6] = {0, 1000, 3350, 6500, 200, 40000};
         std::vector<std::uint16_t> padded(kStrideUnits * kHeight, 0xFFFF);  // 哨兵 padding
         for (std::uint32_t row = 0; row < kHeight; ++row) {
@@ -394,11 +394,11 @@ int main() {
         }
         std::vector<std::uint8_t> fromCompact;
         std::vector<std::uint8_t> fromPadded;
-        RSV_CHECK(rsv::convertDepth16ToRgba8(compact, kWidth, kHeight, kWidth, 0.001f, 0.2f,
+        RIN_CHECK(rin::convertDepth16ToRgba8(compact, kWidth, kHeight, kWidth, 0.001f, 0.2f,
                                              6.5f, scheme, fromCompact));
-        RSV_CHECK(rsv::convertDepth16ToRgba8(padded.data(), kWidth, kHeight, kStrideUnits,
+        RIN_CHECK(rin::convertDepth16ToRgba8(padded.data(), kWidth, kHeight, kStrideUnits,
                                              0.001f, 0.2f, 6.5f, scheme, fromPadded));
-        RSV_CHECK(fromCompact == fromPadded);  // padding 单元不泄漏、行间不错位
+        RIN_CHECK(fromCompact == fromPadded);  // padding 单元不泄漏、行间不错位
     }
 
     // 20) 回归锁定：Jet 薄包装与统一入口 Jet 输出逐字节一致（含 raw=0 与区间外样本）。
@@ -406,10 +406,10 @@ int main() {
         const std::uint16_t depth[7] = {0, 100, 200, 1500, 3350, 6500, 65535};
         std::vector<std::uint8_t> viaWrapper;
         std::vector<std::uint8_t> viaUnified;
-        RSV_CHECK(rsv::convertDepth16ToRgba8Jet(depth, 7, 1, 7, 0.001f, 0.2f, 6.5f, viaWrapper));
-        RSV_CHECK(rsv::convertDepth16ToRgba8(depth, 7, 1, 7, 0.001f, 0.2f, 6.5f,
-                                             rsv::DepthColorScheme::Jet, viaUnified));
-        RSV_CHECK(viaWrapper == viaUnified);
+        RIN_CHECK(rin::convertDepth16ToRgba8Jet(depth, 7, 1, 7, 0.001f, 0.2f, 6.5f, viaWrapper));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 7, 1, 7, 0.001f, 0.2f, 6.5f,
+                                             rin::DepthColorScheme::Jet, viaUnified));
+        RIN_CHECK(viaWrapper == viaUnified);
     }
 
     // 21) 同一输入下 Grayscale 与 Jet 存在差异（非端点 raw：3350 -> t=0.5）。
@@ -417,21 +417,21 @@ int main() {
         const std::uint16_t depth[3] = {200, 3350, 6500};
         std::vector<std::uint8_t> gray;
         std::vector<std::uint8_t> jet;
-        RSV_CHECK(rsv::convertDepth16ToRgba8(depth, 3, 1, 3, 0.001f, 0.2f, 6.5f,
-                                             rsv::DepthColorScheme::Grayscale, gray));
-        RSV_CHECK(rsv::convertDepth16ToRgba8(depth, 3, 1, 3, 0.001f, 0.2f, 6.5f,
-                                             rsv::DepthColorScheme::Jet, jet));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 3, 1, 3, 0.001f, 0.2f, 6.5f,
+                                             rin::DepthColorScheme::Grayscale, gray));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 3, 1, 3, 0.001f, 0.2f, 6.5f,
+                                             rin::DepthColorScheme::Jet, jet));
         bool differs = false;
         for (std::size_t i = 0; i < gray.size(); ++i) {
             if (gray[i] != jet[i]) {
                 differs = true;
             }
         }
-        RSV_CHECK(differs);
+        RIN_CHECK(differs);
         // 差异应出现在非端点像素（raw=3350）：灰度 128 vs jet 绿峰 {128,255,128}。
-        RSV_CHECK(sameColor(jet.data() + 4, 128, 255, 128, 255));
-        RSV_CHECK(sameColor(gray.data() + 4, 128, 128, 128, 255));
+        RIN_CHECK(sameColor(jet.data() + 4, 128, 255, 128, 255));
+        RIN_CHECK(sameColor(gray.data() + 4, 128, 128, 128, 255));
     }
 
-    return rsv_test::exitStatus();
+    return rin_test::exitStatus();
 }

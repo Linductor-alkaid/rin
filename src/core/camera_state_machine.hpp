@@ -3,9 +3,9 @@
 #include <atomic>
 #include <string>
 
-#include "rs_vision/camera_types.hpp"
+#include "rin/camera_types.hpp"
 
-namespace rsv::detail {
+namespace rin::detail {
 
 /// 相机服务显式状态机。转换规则集中于此，非法转换被拒绝并给出原因；
 /// 终态（Idle/Failed 上的 stop 幂等）由调用方配合 isAllowed() 保证。
@@ -25,4 +25,4 @@ private:
     std::atomic<CameraServiceState> state_{CameraServiceState::Idle};
 };
 
-}  // namespace rsv::detail
+}  // namespace rin::detail

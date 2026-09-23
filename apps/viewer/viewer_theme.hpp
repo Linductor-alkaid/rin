@@ -10,7 +10,7 @@
 
 #include <eui_neo.h>
 
-#include <rs_vision/camera_types.hpp>
+#include <rin/camera_types.hpp>
 
 namespace viewer::theme {
 
@@ -89,18 +89,18 @@ inline const ThemeTokens& dark() {
 }
 
 /// 服务状态 → 语义色（仅真实语义状态使用语义色；非法借用视为设计缺陷）。
-inline eui::Color stateColor(const rsv::CameraServiceState state) {
+inline eui::Color stateColor(const rin::CameraServiceState state) {
     const ThemeTokens& tokens = dark();
     switch (state) {
-        case rsv::CameraServiceState::Streaming:
+        case rin::CameraServiceState::Streaming:
             return tokens.success;
-        case rsv::CameraServiceState::Restreaming:
-        case rsv::CameraServiceState::Opening:
+        case rin::CameraServiceState::Restreaming:
+        case rin::CameraServiceState::Opening:
             return tokens.warning;
-        case rsv::CameraServiceState::Failed:
+        case rin::CameraServiceState::Failed:
             return tokens.destructive;
-        case rsv::CameraServiceState::Idle:
-        case rsv::CameraServiceState::Stopping:
+        case rin::CameraServiceState::Idle:
+        case rin::CameraServiceState::Stopping:
             return tokens.fgSubtle;
     }
     return tokens.fgSubtle;

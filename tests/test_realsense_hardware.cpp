@@ -21,18 +21,18 @@
 #include <utility>
 
 #include "realsense_camera_service.hpp"
-#include "rs_vision/camera_service.hpp"
+#include "rin/camera_service.hpp"
 
 namespace {
 
 using namespace std::chrono_literals;
 
-using rsv::CameraServiceState;
-using rsv::Frame;
-using rsv::FrameKind;
-using rsv::ICameraService;
-using rsv::ServiceEvent;
-using rsv::ServiceEventKind;
+using rin::CameraServiceState;
+using rin::Frame;
+using rin::FrameKind;
+using rin::ICameraService;
+using rin::ServiceEvent;
+using rin::ServiceEventKind;
 
 /// 有界轮询：每 100ms 谓词一次，budget 内为真返回 true，超时返回 false。
 template <typename Pred>
@@ -146,10 +146,10 @@ bool hasChromaticPixel(const Frame& frame) {
     return false;
 }
 
-/// 冒烟主体。返回 0 = 通过（RSV_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
+/// 冒烟主体。返回 0 = 通过（RIN_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
 int runSmokeTest(ICameraService& service) {
-    const rsv::StreamRequest baseRequest{640, 480, 30, 640, 480, 30};  // D435if RGB8/Z16 均支持
-    const rsv::StreamRequest altRequest{848, 480, 30, 848, 480, 30};
+    const rin::StreamRequest baseRequest{640, 480, 30, 640, 480, 30};  // D435if RGB8/Z16 均支持
+    const rin::StreamRequest altRequest{848, 480, 30, 848, 480, 30};
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto elapsedMs = [&t0] {
@@ -161,27 +161,27 @@ int runSmokeTest(ICameraService& service) {
     //     之外的状态必须拒绝）---
     {
         std::string selectError = "<untouched>";
-        RSV_CHECK(!service.requestDevice("nonexistent-serial", &selectError));
-        RSV_CHECK(selectError.find("Idle") != std::string::npos);
+        RIN_CHECK(!service.requestDevice("nonexistent-serial", &selectError));
+        RIN_CHECK(selectError.find("Idle") != std::string::npos);
     }
 
     // --- 0b) Idle 态 requestDepthColorScheme 守卫（DEC-007：Idle/Failed/Stopping 拒绝
     //     并回填 error；start 之前不允许预设配色）---
     {
         std::string schemeError = "<untouched>";
-        RSV_CHECK(!service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale,
+        RIN_CHECK(!service.requestDepthColorScheme(rin::DepthColorScheme::Grayscale,
                                                    &schemeError));
-        RSV_CHECK(!schemeError.empty());
-        RSV_CHECK(schemeError.find("Idle") != std::string::npos);
+        RIN_CHECK(!schemeError.empty());
+        RIN_CHECK(schemeError.find("Idle") != std::string::npos);
         // Jet 同样拒绝（Idle 态不区分取值）。
         std::string jetError = "<untouched>";
-        RSV_CHECK(!service.requestDepthColorScheme(rsv::DepthColorScheme::Jet, &jetError));
-        RSV_CHECK(!jetError.empty());
-        RSV_CHECK(jetError.find("Idle") != std::string::npos);
+        RIN_CHECK(!service.requestDepthColorScheme(rin::DepthColorScheme::Jet, &jetError));
+        RIN_CHECK(!jetError.empty());
+        RIN_CHECK(jetError.find("Idle") != std::string::npos);
     }
 
     // --- start 准入（DEC-006：不再因无设备拒绝）---
-    const rsv::StartOutcome outcome = service.start(baseRequest);
+    const rin::StartOutcome outcome = service.start(baseRequest);
     if (!outcome.admitted) {
         std::printf("FAIL: start rejected: %s\n", outcome.error.c_str());
         return 1;
@@ -217,12 +217,12 @@ int runSmokeTest(ICameraService& service) {
                     event.message.c_str());
         return 77;
     }
-    RSV_CHECK(startedEvent);
+    RIN_CHECK(startedEvent);
     if (!startedEvent) {
         std::printf(
             "FAIL: Started event not observed within 5s (state=%s, last event kind=%d "
             "message='%s', lastError='%s')\n",
-            rsv::toString(service.state()), static_cast<int>(event.kind), event.message.c_str(),
+            rin::toString(service.state()), static_cast<int>(event.kind), event.message.c_str(),
             service.lastError().c_str());
         return 1;
     }
@@ -252,25 +252,25 @@ int runSmokeTest(ICameraService& service) {
             }
             return false;
         });
-    RSV_CHECK(rgbArrived);
-    RSV_CHECK(depthArrived);
+    RIN_CHECK(rgbArrived);
+    RIN_CHECK(depthArrived);
     if (rgbArrived) {
-        RSV_CHECK(rgbFrame.valid());
-        RSV_CHECK(rgbFrame.kind == FrameKind::Rgb);
-        RSV_CHECK(rgbFrame.width > 0);
-        RSV_CHECK(rgbFrame.height > 0);
-        RSV_CHECK(rgbFrame.sequence > 0);
-        RSV_CHECK_EQ(rgbFrame.width, 640u);
-        RSV_CHECK_EQ(rgbFrame.height, 480u);
+        RIN_CHECK(rgbFrame.valid());
+        RIN_CHECK(rgbFrame.kind == FrameKind::Rgb);
+        RIN_CHECK(rgbFrame.width > 0);
+        RIN_CHECK(rgbFrame.height > 0);
+        RIN_CHECK(rgbFrame.sequence > 0);
+        RIN_CHECK_EQ(rgbFrame.width, 640u);
+        RIN_CHECK_EQ(rgbFrame.height, 480u);
     }
     if (depthArrived) {
-        RSV_CHECK(depthFrame.valid());
-        RSV_CHECK(depthFrame.kind == FrameKind::Depth);
-        RSV_CHECK(depthFrame.width > 0);
-        RSV_CHECK(depthFrame.height > 0);
-        RSV_CHECK(depthFrame.sequence > 0);
-        RSV_CHECK_EQ(depthFrame.width, 640u);
-        RSV_CHECK_EQ(depthFrame.height, 480u);
+        RIN_CHECK(depthFrame.valid());
+        RIN_CHECK(depthFrame.kind == FrameKind::Depth);
+        RIN_CHECK(depthFrame.width > 0);
+        RIN_CHECK(depthFrame.height > 0);
+        RIN_CHECK(depthFrame.sequence > 0);
+        RIN_CHECK_EQ(depthFrame.width, 640u);
+        RIN_CHECK_EQ(depthFrame.height, 480u);
     }
     std::printf("hardware: first rgb frame %.0f ms, first depth frame %.0f ms\n", firstRgbMs,
                 firstDepthMs);
@@ -297,11 +297,11 @@ int runSmokeTest(ICameraService& service) {
                 return false;  // 尚无新帧，轮询重试
             }
             ++framesSeen;
-            RSV_CHECK(frame.valid());
-            RSV_CHECK_EQ(frame.width, 640u);   // 采样期档位未变，尺寸断言逐帧维持
-            RSV_CHECK_EQ(frame.height, 480u);
+            RIN_CHECK(frame.valid());
+            RIN_CHECK_EQ(frame.width, 640u);   // 采样期档位未变，尺寸断言逐帧维持
+            RIN_CHECK_EQ(frame.height, 480u);
             if (haveSequence) {
-                RSV_CHECK(frame.sequence > previousSequence);  // 邮箱序号严格单调
+                RIN_CHECK(frame.sequence > previousSequence);  // 邮箱序号严格单调
             }
             previousSequence = frame.sequence;
             haveSequence = true;
@@ -326,53 +326,53 @@ int runSmokeTest(ICameraService& service) {
             std::printf(" %.1f%%", ratios[i] * 100.0);
         }
         std::printf("\n");
-        RSV_CHECK(framesSeen >= 2);  // 变化检测至少需要两帧
-        RSV_CHECK(checksumVariation);
-        RSV_CHECK(maxRatio >= threshold);
+        RIN_CHECK(framesSeen >= 2);  // 变化检测至少需要两帧
+        RIN_CHECK(checksumVariation);
+        RIN_CHECK(maxRatio >= threshold);
     };
     sampleContent(FrameKind::Rgb, rgbSequence, kRgbMinNonZeroRatio, "rgb");
     sampleContent(FrameKind::Depth, depthSequence, kDepthMinNonZeroRatio, "depth");
 
     // --- 3) 内参快照 color/depth valid()，且与当前档位一致 ---
-    rsv::IntrinsicsSnapshot intrinsics;
+    rin::IntrinsicsSnapshot intrinsics;
     std::uint64_t intrinsicsSequence = 0;
     const bool intrinsicsArrived = pollUntil(5s, [&] {
         return service.tryLoadIntrinsics(intrinsicsSequence, intrinsics);
     });
-    RSV_CHECK(intrinsicsArrived);
+    RIN_CHECK(intrinsicsArrived);
     if (intrinsicsArrived) {
-        RSV_CHECK(intrinsics.color.valid());
-        RSV_CHECK(intrinsics.depth.valid());
-        RSV_CHECK_EQ(intrinsics.color.width, 640u);
-        RSV_CHECK_EQ(intrinsics.color.height, 480u);
-        RSV_CHECK_EQ(intrinsics.depth.width, 640u);
-        RSV_CHECK_EQ(intrinsics.depth.height, 480u);
+        RIN_CHECK(intrinsics.color.valid());
+        RIN_CHECK(intrinsics.depth.valid());
+        RIN_CHECK_EQ(intrinsics.color.width, 640u);
+        RIN_CHECK_EQ(intrinsics.color.height, 480u);
+        RIN_CHECK_EQ(intrinsics.depth.width, 640u);
+        RIN_CHECK_EQ(intrinsics.depth.height, 480u);
         std::printf("hardware: intrinsics color %ux%u (fx=%.1f), depth %ux%u (fx=%.1f)\n",
                     intrinsics.color.width, intrinsics.color.height, intrinsics.color.fx,
                     intrinsics.depth.width, intrinsics.depth.height, intrinsics.depth.fx);
     }
 
     // --- 4) 设备目录（DEC-006）：单设备自动选择、目录项完整、与帧流来源一致 ---
-    rsv::DeviceCatalog caps;
+    rin::DeviceCatalog caps;
     std::uint64_t capsSequence = 0;
     const bool capsArrived = pollUntil(5s, [&] {
         return service.tryLoadCatalog(capsSequence, caps);
     });
-    RSV_CHECK(capsArrived);
+    RIN_CHECK(capsArrived);
     std::string activeSerial;
     if (capsArrived) {
-        RSV_CHECK_EQ(caps.devices.size(), std::size_t{1});  // 本台架单设备；多设备由人工验收
-        RSV_CHECK(caps.activeIsAuto);  // 唯一设备 → 自动选择（DEC-006）
-        const rsv::DeviceInfo& device = caps.devices.front();
+        RIN_CHECK_EQ(caps.devices.size(), std::size_t{1});  // 本台架单设备；多设备由人工验收
+        RIN_CHECK(caps.activeIsAuto);  // 唯一设备 → 自动选择（DEC-006）
+        const rin::DeviceInfo& device = caps.devices.front();
         activeSerial = device.serial;
-        RSV_CHECK(!activeSerial.empty());
-        RSV_CHECK_EQ(caps.activeSerial, activeSerial);
-        RSV_CHECK(!device.name.empty());
-        RSV_CHECK(!device.firmwareVersion.empty());
-        RSV_CHECK(!device.colorOptions.empty());
-        RSV_CHECK(!device.depthOptions.empty());
+        RIN_CHECK(!activeSerial.empty());
+        RIN_CHECK_EQ(caps.activeSerial, activeSerial);
+        RIN_CHECK(!device.name.empty());
+        RIN_CHECK(!device.firmwareVersion.empty());
+        RIN_CHECK(!device.colorOptions.empty());
+        RIN_CHECK(!device.depthOptions.empty());
         // 帧流来源一致性：Started 事件携带 "streaming <serial>"（适配器契约）。
-        RSV_CHECK(startedMessage.find(activeSerial) != std::string::npos);
+        RIN_CHECK(startedMessage.find(activeSerial) != std::string::npos);
         std::printf(
             "hardware: catalog device='%s' serial='%s' firmware='%s' auto=%d "
             "(color options=%zu, depth options=%zu)\n",
@@ -385,15 +385,15 @@ int runSmokeTest(ICameraService& service) {
         // 选择当前活动设备：粘性意图生效（目录 activeIsAuto 应翻转为 false），
         // 但同设备选择不得触发 restream——帧序号持续前移即流未被中断的直接证据。
         std::string selectError = "<untouched>";
-        RSV_CHECK(service.requestDevice(activeSerial, &selectError));
+        RIN_CHECK(service.requestDevice(activeSerial, &selectError));
         Frame frame;
         std::uint64_t selectRgbSeq = rgbSequence;
         const bool rgbContinued = pollUntil(3s, [&] {
             return service.tryLoadFrame(FrameKind::Rgb, selectRgbSeq, frame) &&
                    frame.sequence > rgbSequence;
         });
-        RSV_CHECK(rgbContinued);  // 选择命令消费后帧流继续（无重开窗口）
-        rsv::DeviceCatalog afterSelect;
+        RIN_CHECK(rgbContinued);  // 选择命令消费后帧流继续（无重开窗口）
+        rin::DeviceCatalog afterSelect;
         std::uint64_t selectCatalogSeq = 0;
         const bool catalogUpdated = pollUntil(3s, [&] {
             if (!service.tryLoadCatalog(selectCatalogSeq, afterSelect)) {
@@ -401,18 +401,18 @@ int runSmokeTest(ICameraService& service) {
             }
             return !afterSelect.activeSerial.empty() && !afterSelect.activeIsAuto;
         });
-        RSV_CHECK(catalogUpdated);
+        RIN_CHECK(catalogUpdated);
         if (catalogUpdated) {
-            RSV_CHECK_EQ(afterSelect.devices.size(), std::size_t{1});
-            RSV_CHECK_EQ(afterSelect.activeSerial, activeSerial);  // 活动设备未变
-            RSV_CHECK(!afterSelect.activeIsAuto);  // 用户指定（粘性）
+            RIN_CHECK_EQ(afterSelect.devices.size(), std::size_t{1});
+            RIN_CHECK_EQ(afterSelect.activeSerial, activeSerial);  // 活动设备未变
+            RIN_CHECK(!afterSelect.activeIsAuto);  // 用户指定（粘性）
             std::printf("hardware: requestDevice(%s) sticky, frames continued, auto=%d\n",
                         activeSerial.c_str(), afterSelect.activeIsAuto ? 1 : 0);
         }
         if (rgbContinued) {
-            RSV_CHECK(service.tryLoadEvent(event));
-            RSV_CHECK(event.kind == ServiceEventKind::Info);  // 同设备选择仅发 Info
-            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RIN_CHECK(service.tryLoadEvent(event));
+            RIN_CHECK(event.kind == ServiceEventKind::Info);  // 同设备选择仅发 Info
+            RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
         }
         // 深度流同样保持存活（双流契约）。
         std::uint64_t selectDepthSeq = depthSequence;
@@ -420,18 +420,18 @@ int runSmokeTest(ICameraService& service) {
             return service.tryLoadFrame(FrameKind::Depth, selectDepthSeq, frame) &&
                    frame.sequence > depthSequence;
         });
-        RSV_CHECK(depthContinued);
+        RIN_CHECK(depthContinued);
     }
 
     // --- 4c) 深度配色运行时切换（DEC-007）：Grayscale 生效不重流、事件消息精确、
     //     帧内容满足灰度性质；切回 Jet 恢复伪彩性质；同值幂等不打断流 ---
     {
-        RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+        RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
 
         // (a) Streaming 下切到 Grayscale：请求被接受（返回 true；error 仅在拒绝时回填，
         //     接受路径对 error 不作约定，与 requestDevice 测试口径一致）。
         std::string grayError = "<untouched>";
-        RSV_CHECK(service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale, &grayError));
+        RIN_CHECK(service.requestDepthColorScheme(rin::DepthColorScheme::Grayscale, &grayError));
 
         // (b) 有界窗口（3s）等到 "depth palette: grayscale" Info 事件（消息精确匹配）；
         //     期间状态持续采样保持 Streaming——配色切换不得进入 Restreaming 停启管线。
@@ -449,9 +449,9 @@ int runSmokeTest(ICameraService& service) {
             }
             return false;
         });
-        RSV_CHECK(!grayStateDeviated);
-        RSV_CHECK(grayEventSeen);
-        RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+        RIN_CHECK(!grayStateDeviated);
+        RIN_CHECK(grayEventSeen);
+        RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
 
         // (c) 事件后逐帧采样（切换边界前发布的最后一帧可能是残余 jet 帧）：
         //     找到首个整帧满足灰度性质的深度帧——所有像素 R==G==B 且至少一个非黑像素。
@@ -466,7 +466,7 @@ int runSmokeTest(ICameraService& service) {
                 if (!service.tryLoadFrame(FrameKind::Depth, paletteSeq, paletteFrame)) {
                     return false;
                 }
-                RSV_CHECK(paletteFrame.valid());
+                RIN_CHECK(paletteFrame.valid());
                 if (const GrayscaleCheck check = grayscaleProperty(paletteFrame);
                     check.allGray && check.hasNonBlack) {
                     grayFrameVerified = true;
@@ -474,9 +474,9 @@ int runSmokeTest(ICameraService& service) {
                 }
                 return false;  // 切换边界残余帧，继续等下一帧
             });
-            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
-            RSV_CHECK(gotGrayFrame);
-            RSV_CHECK(grayFrameVerified);
+            RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RIN_CHECK(gotGrayFrame);
+            RIN_CHECK(grayFrameVerified);
             depthSequence = paletteSeq;
         }
         std::printf(
@@ -487,20 +487,20 @@ int runSmokeTest(ICameraService& service) {
         //     已被 worker 在帧检查点消费）后无新 palette 事件产生。
         {
             std::string idempotentError = "<untouched>";
-            RSV_CHECK(service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale,
+            RIN_CHECK(service.requestDepthColorScheme(rin::DepthColorScheme::Grayscale,
                                                       &idempotentError));
             Frame frame;
             std::uint64_t idempotentSeq = depthSequence;
             const bool framesContinued = pollUntil(3s, [&] {
-                RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+                RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
                 return service.tryLoadFrame(FrameKind::Depth, idempotentSeq, frame) &&
                        frame.sequence > depthSequence + 1;
             });
-            RSV_CHECK(framesContinued);
+            RIN_CHECK(framesContinued);
             depthSequence = idempotentSeq;
             // 同值命令消费后不得重复发事件：最近事件仍是 (b) 的 palette Info。
-            RSV_CHECK(service.tryLoadEvent(event));
-            RSV_CHECK_EQ(event.message, std::string("depth palette: grayscale"));
+            RIN_CHECK(service.tryLoadEvent(event));
+            RIN_CHECK_EQ(event.message, std::string("depth palette: grayscale"));
             std::printf("hardware: duplicate grayscale request idempotent at %.0f ms\n",
                         elapsedMs());
         }
@@ -509,7 +509,7 @@ int runSmokeTest(ICameraService& service) {
         //     其后深度帧存在彩色像素（伪彩性质恢复；jet 任何像素都不满足 R==G==B）。
         {
             std::string jetError = "<untouched>";
-            RSV_CHECK(service.requestDepthColorScheme(rsv::DepthColorScheme::Jet, &jetError));
+            RIN_CHECK(service.requestDepthColorScheme(rin::DepthColorScheme::Jet, &jetError));
             bool jetEventSeen = false;
             pollUntil(3s, [&] {
                 if (service.state() != CameraServiceState::Streaming) {
@@ -522,9 +522,9 @@ int runSmokeTest(ICameraService& service) {
                 }
                 return false;
             });
-            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
-            RSV_CHECK(jetEventSeen);
-            RSV_CHECK_EQ(event.message, std::string("depth palette: jet"));
+            RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RIN_CHECK(jetEventSeen);
+            RIN_CHECK_EQ(event.message, std::string("depth palette: jet"));
 
             bool chromaticVerified = false;
             Frame paletteFrame;
@@ -536,16 +536,16 @@ int runSmokeTest(ICameraService& service) {
                 if (!service.tryLoadFrame(FrameKind::Depth, jetSeq, paletteFrame)) {
                     return false;
                 }
-                RSV_CHECK(paletteFrame.valid());
+                RIN_CHECK(paletteFrame.valid());
                 if (hasChromaticPixel(paletteFrame)) {
                     chromaticVerified = true;
                     return true;
                 }
                 return false;  // 切换边界残余灰度帧，继续等下一帧
             });
-            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
-            RSV_CHECK(gotChromatic);
-            RSV_CHECK(chromaticVerified);
+            RIN_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RIN_CHECK(gotChromatic);
+            RIN_CHECK(chromaticVerified);
             depthSequence = jetSeq;
             std::printf(
                 "hardware: depth palette jet restored at %.0f ms (chromatic pixel verified)\n",
@@ -557,7 +557,7 @@ int runSmokeTest(ICameraService& service) {
     std::string requestError = "<untouched>";
     const std::uint64_t rgbSeqBeforeChange = rgbSequence;
     const std::uint64_t depthSeqBeforeChange = depthSequence;
-    RSV_CHECK(service.requestResolution(altRequest, &requestError));
+    RIN_CHECK(service.requestResolution(altRequest, &requestError));
     bool changedEvent = false;
     bool rgb848Arrived = false;
     bool depth848Arrived = false;
@@ -585,9 +585,9 @@ int runSmokeTest(ICameraService& service) {
         }
         std::this_thread::sleep_for(100ms);
     }
-    RSV_CHECK(changedEvent);
-    RSV_CHECK(rgb848Arrived);
-    RSV_CHECK(depth848Arrived);
+    RIN_CHECK(changedEvent);
+    RIN_CHECK(rgb848Arrived);
+    RIN_CHECK(depth848Arrived);
 
     // --- 5b) restream 后占比断言：有界窗口取最大（容忍切档后孤立瞬态坏帧）---
     // 实测：管线重开后个别深度帧有效率瞬时塌陷（如 1.6%），1-2 帧内恢复；
@@ -605,9 +605,9 @@ int runSmokeTest(ICameraService& service) {
                 return false;
             }
             ++framesSeen;
-            RSV_CHECK(frame.valid());
-            RSV_CHECK_EQ(frame.width, 848u);
-            RSV_CHECK_EQ(frame.height, 480u);
+            RIN_CHECK(frame.valid());
+            RIN_CHECK_EQ(frame.width, 848u);
+            RIN_CHECK_EQ(frame.height, 480u);
             if (const double ratio = contentNonZeroRatio(frame); ratio > maxRatio) {
                 maxRatio = ratio;
             }
@@ -619,41 +619,41 @@ int runSmokeTest(ICameraService& service) {
     };
 
     if (rgb848Arrived) {
-        RSV_CHECK(rgb848.valid());
-        RSV_CHECK_EQ(rgb848.width, 848u);
-        RSV_CHECK_EQ(rgb848.height, 480u);
-        RSV_CHECK(rgb848.sequence > rgbSeqBeforeChange);  // 跨 restream 序号前移
+        RIN_CHECK(rgb848.valid());
+        RIN_CHECK_EQ(rgb848.width, 848u);
+        RIN_CHECK_EQ(rgb848.height, 480u);
+        RIN_CHECK(rgb848.sequence > rgbSeqBeforeChange);  // 跨 restream 序号前移
         const double ratio = sampleMaxRatioAfterRestream(FrameKind::Rgb, rgbSequence, "rgb");
-        RSV_CHECK(ratio >= kRgbMinNonZeroRatio);
+        RIN_CHECK(ratio >= kRgbMinNonZeroRatio);
     }
     if (depth848Arrived) {
-        RSV_CHECK(depth848.valid());
-        RSV_CHECK_EQ(depth848.width, 848u);
-        RSV_CHECK_EQ(depth848.height, 480u);
-        RSV_CHECK(depth848.sequence > depthSeqBeforeChange);
+        RIN_CHECK(depth848.valid());
+        RIN_CHECK_EQ(depth848.width, 848u);
+        RIN_CHECK_EQ(depth848.height, 480u);
+        RIN_CHECK(depth848.sequence > depthSeqBeforeChange);
         const double ratio = sampleMaxRatioAfterRestream(FrameKind::Depth, depthSequence, "depth");
-        RSV_CHECK(ratio >= kDepthMinNonZeroRatio);
+        RIN_CHECK(ratio >= kDepthMinNonZeroRatio);
     }
     std::printf("hardware: ResolutionChanged after %.0f ms, 848x480 rgb=%s depth=%s\n", changedMs,
                 rgb848Arrived ? "ok" : "missing", depth848Arrived ? "ok" : "missing");
 
     // --- 6) stop() 收敛 Idle；二次 stop() 幂等不崩溃 ---
     service.stop();
-    RSV_CHECK(service.state() == CameraServiceState::Idle);
+    RIN_CHECK(service.state() == CameraServiceState::Idle);
     service.stop();
-    RSV_CHECK(service.state() == CameraServiceState::Idle);
+    RIN_CHECK(service.state() == CameraServiceState::Idle);
     ServiceEvent finalEvent;
     if (service.tryLoadEvent(finalEvent)) {
-        RSV_CHECK(finalEvent.kind == ServiceEventKind::Stopped);
+        RIN_CHECK(finalEvent.kind == ServiceEventKind::Stopped);
     }
 
     // --- 6b) 终态守卫：stop 后回到 Idle，配色请求再次被拒绝（DEC-007 状态门禁）---
     {
         std::string stoppedSchemeError = "<untouched>";
-        RSV_CHECK(!service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale,
+        RIN_CHECK(!service.requestDepthColorScheme(rin::DepthColorScheme::Grayscale,
                                                    &stoppedSchemeError));
-        RSV_CHECK(!stoppedSchemeError.empty());
-        RSV_CHECK(stoppedSchemeError.find("Idle") != std::string::npos);
+        RIN_CHECK(!stoppedSchemeError.empty());
+        RIN_CHECK(stoppedSchemeError.find("Idle") != std::string::npos);
     }
     std::printf("hardware: stopped cleanly at %.0f ms\n", elapsedMs());
     return 0;
@@ -671,19 +671,19 @@ int main() {
     int status = 1;
     {
         // service 持有 executor 引用：先于 executor 收尾析构（工厂契约）。
-        std::shared_ptr<ICameraService> service = rsv::createRealSenseCameraService(executor);
+        std::shared_ptr<ICameraService> service = rin::createRealSenseCameraService(executor);
         if (!service) {
             std::printf("FAIL: createRealSenseCameraService returned null\n");
             return 1;
         }
         status = runSmokeTest(*service);
         service->stop();  // 所有早退路径的兜底收尾（幂等）。
-        RSV_CHECK(service->state() == CameraServiceState::Idle);
+        RIN_CHECK(service->state() == CameraServiceState::Idle);
         service.reset();
     }
     executor.shutdown();
 
-    const int failures = rsv_test::exitStatus();
+    const int failures = rin_test::exitStatus();
     if (failures > 0) {
         return 1;
     }

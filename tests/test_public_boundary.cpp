@@ -1,36 +1,36 @@
-// 公开契约边界：仅包含 rs_vision 公开头（目标未链接第三方 include 路径），
+// 公开契约边界：仅包含 rin 公开头（目标未链接第三方 include 路径），
 // 并实例化契约类型/接口，确保公开头零第三方类型（RULE-01）。
 #include "test_util.hpp"
 
 #include <memory>
 
-#include <rs_vision/camera_service.hpp>
+#include <rin/camera_service.hpp>
 
 namespace {
 
-class NullService final : public rsv::ICameraService {
+class NullService final : public rin::ICameraService {
 public:
-    rsv::StartOutcome start(const rsv::StreamRequest&) override { return {}; }
-    bool requestResolution(const rsv::StreamRequest&, std::string*) override { return false; }
+    rin::StartOutcome start(const rin::StreamRequest&) override { return {}; }
+    bool requestResolution(const rin::StreamRequest&, std::string*) override { return false; }
     bool requestDevice(const std::string&, std::string*) override { return false; }
-    bool requestDepthColorScheme(rsv::DepthColorScheme, std::string*) override
+    bool requestDepthColorScheme(rin::DepthColorScheme, std::string*) override
     {
         return false;
     }
     void stop() override {}
-    rsv::CameraServiceState state() const override { return rsv::CameraServiceState::Idle; }
+    rin::CameraServiceState state() const override { return rin::CameraServiceState::Idle; }
     std::string lastError() const override { return {}; }
-    bool tryLoadFrame(rsv::FrameKind, std::uint64_t&, rsv::Frame&) override { return false; }
-    bool tryLoadIntrinsics(std::uint64_t&, rsv::IntrinsicsSnapshot&) override { return false; }
-    bool tryLoadCatalog(std::uint64_t&, rsv::DeviceCatalog&) override { return false; }
-    bool tryLoadEvent(rsv::ServiceEvent&) override { return false; }
+    bool tryLoadFrame(rin::FrameKind, std::uint64_t&, rin::Frame&) override { return false; }
+    bool tryLoadIntrinsics(std::uint64_t&, rin::IntrinsicsSnapshot&) override { return false; }
+    bool tryLoadCatalog(std::uint64_t&, rin::DeviceCatalog&) override { return false; }
+    bool tryLoadEvent(rin::ServiceEvent&) override { return false; }
 };
 
 }  // namespace
 
 int main() {
-    std::shared_ptr<rsv::ICameraService> service = std::make_shared<NullService>();
-    RSV_CHECK(service != nullptr);
-    RSV_CHECK(!service->start({}).admitted);
-    return rsv_test::exitStatus();
+    std::shared_ptr<rin::ICameraService> service = std::make_shared<NullService>();
+    RIN_CHECK(service != nullptr);
+    RIN_CHECK(!service->start({}).admitted);
+    return rin_test::exitStatus();
 }

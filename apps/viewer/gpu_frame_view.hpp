@@ -9,7 +9,7 @@
 
 #include <eui_neo.h>
 
-#include <rs_vision/camera_types.hpp>
+#include <rin/camera_types.hpp>
 
 #include <cstdio>
 #include <memory>
@@ -20,7 +20,7 @@ class GpuFrameView {
 public:
     /// 上传一帧并按需（重新）导入。必须且只能在 UI/渲染线程（compose/onFrame 回调）
     /// 调用：GL 上下文仅在该线程 current。
-    void update(const rsv::Frame& frame) {
+    void update(const rin::Frame& frame) {
         if (!frame.valid()) {
             return;
         }

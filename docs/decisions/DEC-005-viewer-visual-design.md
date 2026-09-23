@@ -8,7 +8,7 @@
 
 ## 背景与问题
 
-realsense-vision 的前端（EUI-NEO）需要统一视觉语言。团队以 ZCode Design System
+Rin 的前端（EUI-NEO）需要统一视觉语言。团队以 ZCode Design System
 （语义色令牌 + `text-ui-*` 字阶 + 容器圆角层级 + 4px 间距节奏 + 克制阴影）为设计
 基准，但该体系以 Tailwind/CSS 令牌表达，需翻译到 EUI-NEO 的即时 DSL。
 

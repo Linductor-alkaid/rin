@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Rin
+GenericName=RealSense Viewer
+Comment=Real-time RGB and depth preview for Intel RealSense depth cameras
+Exec=rin
+Icon=rin
+Terminal=false
+Categories=Utility;
+Keywords=realsense;depth;camera;viewer;rgb;

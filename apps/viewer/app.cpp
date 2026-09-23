@@ -1,4 +1,4 @@
-// rsv_viewer：EUI-NEO 前端。Executor 生命周期 owner 为 viewer::Context（DEC-002）：
+// rin：EUI-NEO 前端。Executor 生命周期 owner 为 viewer::Context（DEC-002）：
 // dslAppConfig() 首调点惰性启动，DslAppConfig::onShutdown（主线程、GPU 销毁前）关闭。
 // 视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局代码不出现一次性
 // 颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机连接，运行中经设备
@@ -13,7 +13,7 @@
 
 #include <realsense_camera_service.hpp>
 
-#include <rs_vision/camera_service.hpp>
+#include <rin/camera_service.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -28,8 +28,8 @@ namespace viewer {
 namespace {
 
 using namespace viewer::theme;
-using rsv::FrameKind;
-using rsv::StreamRequest;
+using rin::FrameKind;
+using rin::StreamRequest;
 
 /// 默认流请求（DEC-004 暂定默认值）；设备选择独立于流请求（DEC-006）。
 constexpr StreamRequest kDefaultRequest{};
@@ -46,7 +46,7 @@ struct DeviceUiOption {
 
 struct ViewerContext {
     executor::Executor executor;
-    std::shared_ptr<rsv::ICameraService> service;
+    std::shared_ptr<rin::ICameraService> service;
     GpuFrameView rgbView;
     GpuFrameView depthView;
 
@@ -55,9 +55,9 @@ struct ViewerContext {
     std::uint64_t lastIntrinsicsSequence = 0;
     std::uint64_t lastCatalogSequence = 0;
 
-    rsv::DeviceCatalog catalog;
+    rin::DeviceCatalog catalog;
     bool hasCatalog = false;
-    rsv::IntrinsicsSnapshot intrinsics;
+    rin::IntrinsicsSnapshot intrinsics;
     bool hasIntrinsics = false;
 
     std::vector<DeviceUiOption> deviceOptions;
@@ -72,7 +72,7 @@ struct ViewerContext {
     eui::Signal<int> paletteIndex{0};
     eui::Signal<bool> paletteOpen{false};
 
-    rsv::CameraServiceState statusState = rsv::CameraServiceState::Idle;
+    rin::CameraServiceState statusState = rin::CameraServiceState::Idle;
     std::string statusMessage;
     std::string startError;
     std::string rgbMeta;
@@ -103,9 +103,9 @@ void ensureStarted() {
             ctx.statusMessage = "executor init failed";
             return false;
         }
-        ctx.service = rsv::createRealSenseCameraService(ctx.executor);
+        ctx.service = rin::createRealSenseCameraService(ctx.executor);
         // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
-        const rsv::StartOutcome outcome = ctx.service->start(kDefaultRequest);
+        const rin::StartOutcome outcome = ctx.service->start(kDefaultRequest);
         if (!outcome.admitted) {
             ctx.startError = outcome.error;
             ctx.statusMessage = "start failed";
@@ -118,11 +118,11 @@ void ensureStarted() {
     (void)once;
 }
 
-const rsv::DeviceInfo* activeDevice(const ViewerContext& ctx) {
+const rin::DeviceInfo* activeDevice(const ViewerContext& ctx) {
     if (!ctx.hasCatalog) {
         return nullptr;
     }
-    for (const rsv::DeviceInfo& device : ctx.catalog.devices) {
+    for (const rin::DeviceInfo& device : ctx.catalog.devices) {
         if (device.serial == ctx.catalog.activeSerial) {
             return &device;
         }
@@ -134,28 +134,28 @@ std::string shortSerial(const std::string& serial) {
     return serial.size() <= 5 ? serial : serial.substr(serial.size() - 5);
 }
 
-const char* distortionName(rsv::DistortionModel model) {
+const char* distortionName(rin::DistortionModel model) {
     switch (model) {
-        case rsv::DistortionModel::None:
+        case rin::DistortionModel::None:
             return "None";
-        case rsv::DistortionModel::ModifiedBrownConrady:
+        case rin::DistortionModel::ModifiedBrownConrady:
             return "ModBrownConrady";
-        case rsv::DistortionModel::InverseBrownConrady:
+        case rin::DistortionModel::InverseBrownConrady:
             return "InvBrownConrady";
-        case rsv::DistortionModel::BrownConrady:
+        case rin::DistortionModel::BrownConrady:
             return "BrownConrady";
-        case rsv::DistortionModel::FTheta:
+        case rin::DistortionModel::FTheta:
             return "FTheta";
-        case rsv::DistortionModel::KannalaBrandt4:
+        case rin::DistortionModel::KannalaBrandt4:
             return "KannalaBrandt4";
-        case rsv::DistortionModel::Unknown:
+        case rin::DistortionModel::Unknown:
             return "Unknown";
     }
     return "Unknown";
 }
 
 /// 单流内参数值（统一小数位对齐；无打包等宽字体，见 DEC-005 限制）。
-std::string formatIntrinsicsValues(const rsv::StreamIntrinsics& intrinsics) {
+std::string formatIntrinsicsValues(const rin::StreamIntrinsics& intrinsics) {
     if (!intrinsics.valid()) {
         return "n/a";
     }
@@ -171,7 +171,7 @@ std::string formatIntrinsicsValues(const rsv::StreamIntrinsics& intrinsics) {
 void ViewerContext::rebuildDeviceOptions() {
     std::vector<DeviceUiOption> options;
     options.reserve(catalog.devices.size());
-    for (const rsv::DeviceInfo& device : catalog.devices) {
+    for (const rin::DeviceInfo& device : catalog.devices) {
         DeviceUiOption option;
         option.serial = device.serial;
         option.label = device.name + " · " + shortSerial(device.serial);
@@ -182,17 +182,17 @@ void ViewerContext::rebuildDeviceOptions() {
 
 void ViewerContext::rebuildResolutionOptions() {
     resolutionOptions.clear();
-    const rsv::DeviceInfo* device = activeDevice(*this);
+    const rin::DeviceInfo* device = activeDevice(*this);
     if (device == nullptr) {
         resolutionOptionsForSerial.clear();
         return;  // 未选定设备（等待接入/用户选择）时不提供分辨率档位。
     }
     resolutionOptionsForSerial = device->serial;
-    const auto byWidthHeight = [](const rsv::ResolutionOption& option) {
+    const auto byWidthHeight = [](const rin::ResolutionOption& option) {
         return std::pair<std::uint32_t, std::uint32_t>{option.width, option.height};
     };
     std::set<std::pair<std::uint32_t, std::uint32_t>> seen;
-    for (const rsv::ResolutionOption& color : device->colorOptions) {
+    for (const rin::ResolutionOption& color : device->colorOptions) {
         if (color.fps != kDefaultRequest.colorFps) {
             continue;  // M1：固定 30fps 档位
         }
@@ -200,7 +200,7 @@ void ViewerContext::rebuildResolutionOptions() {
             continue;
         }
         bool depthMatch = false;
-        for (const rsv::ResolutionOption& depth : device->depthOptions) {
+        for (const rin::ResolutionOption& depth : device->depthOptions) {
             if (depth.width == color.width && depth.height == color.height &&
                 depth.fps == kDefaultRequest.depthFps) {
                 depthMatch = true;
@@ -250,7 +250,7 @@ void ViewerContext::applyPaletteChoice(int index) {
         return;
     }
     const auto scheme =
-        index == 1 ? rsv::DepthColorScheme::Grayscale : rsv::DepthColorScheme::Jet;
+        index == 1 ? rin::DepthColorScheme::Grayscale : rin::DepthColorScheme::Jet;
     std::string error;
     if (!service->requestDepthColorScheme(scheme, &error)) {
         statusMessage = "palette rejected: " + error;
@@ -263,7 +263,7 @@ void ViewerContext::pump() {
     }
 
     bool frameUpdated = false;
-    rsv::Frame frame;
+    rin::Frame frame;
     if (service->tryLoadFrame(FrameKind::Rgb, lastRgbSequence, frame)) {
         rgbView.update(frame);  // UI/渲染线程上传（EUI-20260923-003 绕行）
         rgbMeta = std::to_string(frame.width) + " x " + std::to_string(frame.height);
@@ -278,13 +278,13 @@ void ViewerContext::pump() {
         app::requestUpdate();  // 外部纹理非动画元素，需显式请求重绘
     }
 
-    rsv::IntrinsicsSnapshot snapshot;
+    rin::IntrinsicsSnapshot snapshot;
     if (service->tryLoadIntrinsics(lastIntrinsicsSequence, snapshot)) {
         intrinsics = std::move(snapshot);
         hasIntrinsics = true;
     }
 
-    rsv::DeviceCatalog newCatalog;
+    rin::DeviceCatalog newCatalog;
     if (service->tryLoadCatalog(lastCatalogSequence, newCatalog)) {
         catalog = std::move(newCatalog);
         hasCatalog = true;
@@ -305,7 +305,7 @@ void ViewerContext::pump() {
         }
     }
 
-    rsv::ServiceEvent event;
+    rin::ServiceEvent event;
     if (service->tryLoadEvent(event)) {
         statusState = event.state;
         statusMessage = event.message;
@@ -336,7 +336,7 @@ void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float width) {
         .gap(kSpace2)
         .content([&] {
             ui.text("header.title")
-                .text("RealSense Vision")
+                .text("Rin")
                 .fontSize(kFontBase)
                 .fontWeight(kWeightSemibold)
                 .color(dark().fg)
@@ -347,7 +347,7 @@ void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float width) {
                 .color(stateColor(ctx.statusState))
                 .build();
             ui.text("header.state")
-                .text(rsv::toString(ctx.statusState))
+                .text(rin::toString(ctx.statusState))
                 .fontSize(kFontSm)
                 .fontWeight(kWeightMedium)
                 .color(stateColor(ctx.statusState))
@@ -591,9 +591,9 @@ void composeIntrinsicsCard(eui::Ui& ui, const ViewerContext& ctx, float width, f
                 .color(dark().fgSubtle)
                 .build();
 
-            const rsv::StreamIntrinsics streams[] = {
-                ctx.hasIntrinsics ? ctx.intrinsics.color : rsv::StreamIntrinsics{},
-                ctx.hasIntrinsics ? ctx.intrinsics.depth : rsv::StreamIntrinsics{},
+            const rin::StreamIntrinsics streams[] = {
+                ctx.hasIntrinsics ? ctx.intrinsics.color : rin::StreamIntrinsics{},
+                ctx.hasIntrinsics ? ctx.intrinsics.depth : rin::StreamIntrinsics{},
             };
             const char* names[] = {"Color", "Depth"};
             const char* ids[] = {"color", "depth"};
@@ -727,8 +727,8 @@ const DslAppConfig& dslAppConfig() {
     viewer::ensureStarted();
     static const DslAppConfig config =
         DslAppConfig{}
-            .title("RealSense Vision")
-            .pageId("realsense_vision")
+            .title("Rin")
+            .pageId("Rin")
             .clearColor(viewer::theme::dark().background)
             .windowSize(1280, 860)
             .fps(60.0)
