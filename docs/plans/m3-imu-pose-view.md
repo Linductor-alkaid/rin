@@ -45,10 +45,11 @@
 
 ## 工作项
 
-- [ ] `M3-01` 调研并冻结 IMU 姿态融合方案（`DEC-010`）：对比互补滤波 / Mahony /
+- [x] `M3-01` 调研并冻结 IMU 姿态融合方案（`DEC-010`）：对比互补滤波 / Mahony /
       Madgwick / 简化 EKF 在六轴（无磁力计）场景的漂移特性、计算量、参数敏感性与
       可测试性，给出选型理由、备选与数值验收方案。完成判据：`DEC-010` 状态
       `Accepted`，含依据、备选与可执行的验收方法。
+      （[DEC-010](../decisions/DEC-010-imu-attitude-fusion.md)）
 - [ ] `M3-02` 调研并冻结 3D 位姿视图渲染路径（`DEC-011`）：在 EUI-NEO 可用原语
       中选定实现，产出最小原型证据（渲染相机视锥 + 坐标轴，姿态驱动旋转）。
       完成判据：`DEC-011` `Accepted` + 原型记录（文件、命令、证据）。
@@ -96,4 +97,29 @@
 
 ## 验证记录
 
-（按日期追加）
+2026-09-24：`M3-01` 调研并冻结 IMU 姿态融合方案（[DEC-010](../decisions/DEC-010-imu-attitude-fusion.md) Accepted）
+
+- 范围：六轴姿态融合算法选型调研与决策冻结，不含实现（由 `M3-05` 承接）。
+- 依据：
+  - pinned librealsense（`third_party/dependencies.lock`，commit `7c3ee3fb`）：
+    陀螺 ODR 200/400 Hz、加速计 63/250 Hz（`_deps/realsense2-src/src/ds/ds-motion-common.h:18-36`）；
+    motion intrinsics 噪声/零偏参数（`include/librealsense2/h/rs_types.h:70-84`、
+    `rs_sensor.h:468`）；官方示例即 Euler 互补滤波 `alpha=0.98`、无零偏估计
+    （`examples/motion/rs-motion.cpp:112-191`）。
+  - 文献：Mahony et al. 2008（IEEE TAC 53(5)，显式互补滤波、在线零偏估计、近全局
+    稳定）；Madgwick 2010 报告（IMU 模式 109 次标量运算/更新、单参数 β、无零偏
+    状态）；Caruso et al. 2021（Sensors 21(7):2543，十算法基准：最优调参下无统计
+    显著差异、误差 3.8°–7.1°、参数选择起决定作用）；Sabatini 2011
+    （Sensors 11(10):9182，可观测性分析——六轴仅重力参考时 yaw 不可观）。
+- 验证：一次性原型（`/tmp` 下自研，g++ 13.3.0 `-O2` `-std=c++20`，双精度，固定
+  种子合成数据 dt=1/400s、σ_g=0.002 rad/s、σ_a=0.02 m/s²、零偏注入
+  [0.3, −0.2, 0.5]°/s；脚本为调研证据不入库）实测：静态 35.9° 初始误差 2.58s
+  收敛至 <0.5°；60s 旋转序列 roll/pitch RMS 0.118°（峰值 0.364°）；yaw 60s 末
+  23.2°（Ki 关闭 28.3°；Madgwick 28.1°）；零偏估计 b_x/b_y 60s 残差 0.061/0.111°/s
+  （b_z 不可观）；±2 m/s² 扰动 + 1g 门限 RMS 0.118°；49.3 ns/样本（Madgwick
+  64.6 ns）。以上实测支撑 DEC-010 冻结的验收阈值。
+- 限制：简化 EKF 未做原型实测，未采用依据为文献（Caruso 2021 调参后无显著精度差）
+  与结构分析（4×4 协方差传播、参数最多），证据等级低于本机实测项；数值阈值为
+  合成数据结果，真机噪声/零偏适配由 `M3-08` D435if 冒烟复核。
+- 同步：新建 `docs/decisions/DEC-010-imu-attitude-fusion.md`（Accepted）；总计划
+  `DEC-010` 行改为（已记录）；本文件勾选 `M3-01`。
