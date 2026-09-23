@@ -59,7 +59,7 @@
       `ICameraService::tryLoadMotion()/tryLoadPose()`、`StreamRequest` IMU 使能位、
       `DeviceCatalog` IMU 能力与速率上报；`NullService` 与 `public_boundary` 测试
       同步扩展。完成判据：契约测试通过，RULE-01 边界编译测试保持通过。
-- [ ] `M3-04` 适配器 IMU 流支持：混合 pipeline 配置（video + ACCEL/GYRO）、motion
+- [x] `M3-04` 适配器 IMU 流支持：混合 pipeline 配置（video + ACCEL/GYRO）、motion
       intrinsics 读取、gyro→color 外参链、采集循环内 motion 帧轻量分支处理、
       `ImuFuser` 接入与姿态发布、restream/设备切换重建含 IMU。完成判据：离线
       （假实现/纯逻辑）测试覆盖分支与命令语义；真机冒烟按规范记录。
@@ -208,3 +208,61 @@
   `f4cc8a8` 更新；退出条件各小项均不因本单项完成而满足（ctest 全绿含 tsan
   预设、融合数值、投影数学、关闭回归、真机验收与文档收尾分属 `M3-04`…`M3-08`），
   维持未勾。
+
+2026-09-24：`M3-04` 适配器 IMU 流支持
+
+- 范围：混合 pipeline（`enableMotion` 时 video + ACCEL/GYRO）、motion
+  intrinsics 与 gyro→color 外参读取、采集循环 motion 帧轻量分支
+  （`MotionIngest` rs2-free 接缝：有界校验 + EMA 源频率 + 邮箱最新态投递 +
+  融合器推进）、`ImuFuser` 接缝与工厂（`IdentityImuFuser` 假实现，
+  `M3-05` 切换 Mahony 不破坏接缝）、姿态发布与 `tryLoadMotion()/tryLoadPose()`
+  真实接线、restream/设备切换的融合器复位与序号连续语义；含独立验证发现的
+  `Extrinsics`/`MotionIntrinsics::valid()` 契约偏差修复（`bd4d652`）与
+  三套新增离线单元测试、真机冒烟用例扩展。
+- 依据：
+  - `c4526fd` feat(adapter)：新增
+    `src/adapters/realsense/imu_motion_ingest.{hpp,cpp}` 与
+    `src/core/imu_fuser.{hpp,cpp}`（522 insertions），`realsense_camera_service.cpp`
+    采集/控制路径接线（`tryLoadMotion`/`tryLoadPose` 桩换为通道真实读取，
+    `src/adapters/realsense/realsense_camera_service.cpp:177,184`），
+    `camera_service_design.md` IMU 通路同步（40 行）。
+  - `524327a` test(tests)：新增 `tests/test_motion_intrinsics.cpp`、
+    `tests/test_imu_fuser.cpp`、`tests/test_motion_ingest.cpp` 并扩展
+    `tests/test_realsense_hardware.cpp`（全程 `enableMotion` 混合 pipeline
+    冒烟），全部注册 LABELS unit。
+  - `bd4d652` fix(core)：全零 rotation/scale 为"未填充/读取失败"哨兵判
+    `valid()==false`（`src/core/camera_types.cpp:41-73`），平移/bias/方差允许
+    全零（同址安装、出厂零偏/方差可为 0），非有限拒绝保持，公开头注释同步
+    （`include/rin/camera_types.hpp:104-106,123-125`）。
+  - `EXEC-06`：motion 分支在采集 worker 循环内、经 `LatestMailbox` 发布，不新增线程。
+- 验证（独立验证复验 `bd4d652` 后；debug/asan/ubsan 门禁通过）：
+  - `cmake --build build/debug` → ninja no work to do，exit=0（二进制为
+    `bd4d652` 后最新）。
+  - `ctest --test-dir build/debug -L unit --output-on-failure` →
+    7/7 通过（"100% tests passed, 0 tests failed out of 7"）；直跑
+    `./build/debug/tests/test_motion_intrinsics` → `OK: 47 checks,
+    0 failures`（首轮 47 checks 8 failures 全部修复）。
+  - 无回归：camera_state_machine / pixel_format / motion_contracts /
+    imu_fuser（53 checks）/ motion_ingest / public_boundary 全部 Passed。
+  - tsan 跨上下文复跑（`rin_core` 变更后重建）：`cmake --build build/tsan
+    --target test_motion_ingest` 重编成功；`setarch -R ctest
+    --test-dir build/tsan -R motion_ingest --output-on-failure` → 1/1 Passed
+    （Executor 生产者 + 消费者跨上下文发布/读取序号不回退、shutdown 收敛）。
+  - 真机路径：`ctest --test-dir build/debug -R realsense_hardware` →
+    SKIP(77)（iio scan_element udev 授权前置未处置；补跑条件：安装
+    librealsense udev 规则后复跑）。`bd4d652` 使该用例在内容级非全零防线
+    之外另获契约级（`valid()==false`）拦截。
+  - 完成判据对照：离线（假实现/纯逻辑）测试覆盖分支与命令语义
+    （motion_ingest 无效采样有界丢弃、会话序号单调、EMA 频率、
+    resetStreamState 的 restream 语义、融合器接缝推进与姿态门控）；真机
+    冒烟按规范记录（显式 SKIP + 补跑条件登记，未冒充完成）。
+- 限制：
+  - 完整 debug/asan/ubsan 三套门禁按交接约定由脚本复跑，本轮未重复全量；
+    tsan 预设本轮仅复跑 `motion_ingest` 单项，非全量。
+  - 真机 motion 冒烟因 udev 权限前置阻塞未执行（SKIP 77，原因、负责人与
+    补跑条件已在 SKIP 输出与首轮记录登记）。
+- 同步：本文件勾选 `M3-04`；`camera_service_design.md` IMU 通路小节已随
+  `c4526fd` 更新；`ImuFuser` 数值验收（静态重力对齐收敛、已知旋转序列、
+  复位幂等）属 `M3-05`，本项仅交付接缝与假实现契约（imu_fuser 53 checks）；
+  退出条件各小项均不因本单项完成而满足（投影数学与关闭回归测试未建、
+  ctest 全绿含 tsan 全量未达成、真机矩阵属 `M3-08`），维持未勾。
