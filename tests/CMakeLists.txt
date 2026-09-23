@@ -93,6 +93,45 @@ target_compile_definitions(test_pose_view_state PRIVATE
 add_test(NAME pose_view_state COMMAND test_pose_view_state)
 set_tests_properties(pose_view_state PROPERTIES LABELS "unit")
 
+# M3-07 IMU 状态面板纯函数（apps/viewer/imu_panel.hpp）：四元数→ZYX 欧拉角读数
+# （独立 double 四元数直分解参考：恒等/单轴/DEC-011 golden 30-20-40/角度网格往返/
+# yaw ∈ (−180°,180°] 折叠/万向锁 ±90° 有限/退化输入消毒/非单位输入归一）、三行
+# 文本组装精确串（源频率、姿态、四元数）、面板空态门控输入（available && valid()，
+# 含 clear 排空后 stale 快照不放行）。compose 卡片路径需活动 EUI 运行时，headless
+# 不可测（真机视觉验收归 M3-08，见文件头说明）；纯函数单线程值语义（DOD-02 矩阵
+# 不适用，跨上下文/关闭排空由 shutdown_drain 覆盖）。
+add_executable(test_imu_panel test_imu_panel.cpp)
+target_link_libraries(test_imu_panel PRIVATE rin::core)
+target_include_directories(test_imu_panel PRIVATE ${CMAKE_SOURCE_DIR}/apps/viewer)
+target_include_directories(test_imu_panel SYSTEM PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INCLUDE_DIRECTORIES>"
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_INCLUDE_DIRECTORIES>")
+target_compile_definitions(test_imu_panel PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_COMPILE_DEFINITIONS>")
+add_test(NAME imu_panel COMMAND test_imu_panel)
+set_tests_properties(imu_panel PROPERTIES LABELS "unit")
+
+# M3-07 关闭路径回归（里程碑判据"关闭路径测试 + tsan 通过（跨上下文姿态数据）"，
+# tsan 预设复跑目标）：Executor 生产者独占 MotionIngest（采集 worker 模型）+
+# LatestMailbox 姿态通道 + 消费侧 PoseViewState 按 app.cpp:326-336 门控语义泵送。
+# 覆盖：正常完成（序号推进/统计一致/单位姿态）、停止后无新发布（stop() 契约发布
+# 半边）、排空语义（clear 后 stale 快照不复活视图、序号不回退、幂等）、任务异常
+# （future 传播 + 失败路径排空/shutdown 收敛）、shutdown(true) Completed、排空后
+# 新会话仅随新快照复活（resetStreamState 序号连续）。app.cpp ViewerContext 属
+# 匿名命名空间且绑定 EUI 运行时，消费门控以同构模型锁定（文件头说明）。
+add_executable(test_shutdown_drain test_shutdown_drain.cpp)
+target_link_libraries(test_shutdown_drain PRIVATE rin::realsense_adapter)
+target_include_directories(test_shutdown_drain PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/apps/viewer)
+target_include_directories(test_shutdown_drain SYSTEM PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INCLUDE_DIRECTORIES>"
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_INCLUDE_DIRECTORIES>")
+target_compile_definitions(test_shutdown_drain PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_COMPILE_DEFINITIONS>")
+add_test(NAME shutdown_drain COMMAND test_shutdown_drain)
+set_tests_properties(shutdown_drain PROPERTIES LABELS "unit")
+
 # 公开头第三方类型边界（RULE-01）：本目标只拿到 include/，不链接任何第三方；
 # 若公开头引入 rs2/eui 类型将因找不到头文件而编译失败。
 add_executable(test_public_boundary test_public_boundary.cpp)
