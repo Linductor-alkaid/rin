@@ -50,12 +50,13 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
       desktop/图标/udev 规则/postinst；deb 内容与 RUNPATH 本地验证。
 - [x] `M2-04` 台账与决策同步：DEC-001 部分替代标注、DEC-008/009 立档、
       librealsense 台账 -001 关闭/-002 登记、EUI-NEO 台账 -004 登记。
-- [ ] `M2-05` GitHub Actions 工作流：push/PR 构建测试并上传 deb 工件；`v*` tag
-      上传 Release。（工作流已提交，CI 运行通过后勾选）
+- [x] `M2-05` GitHub Actions 工作流：push/PR 构建测试并上传 deb 工件；`v*` tag
+      上传 Release。（run 35888435555 全绿，见验证记录 2026-09-23 第三条）
 - [x] `M2-06` 独立验证：干净环境 configure/build/ctest、deb 安装面检查、更名残留
       检查（Independent-Verification-Agent 回报证据，见验证记录 2026-09-23 第二条）。
-- [ ] `M2-07` 真机冒烟：deb 安装到本机，D435if 出流验证（依赖设备在位与 sudo 权限；
-      当前源码树真机硬件用例已通过，见同上）。
+- [ ] `M2-07` 真机冒烟：deb 安装到本机，D435if 出流验证（本机无免密 sudo，agent
+      不可代行；待维护者执行 `sudo apt install ./rin_0.2.0_amd64.deb` 后复验；
+      当前源码树真机硬件用例已通过，见验证记录 2026-09-23 第二条）。
 
 ## 风险与阻塞
 
@@ -116,3 +117,24 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
 - 限制：V3（asan/ubsan 预设本地复跑）未在独立验证中执行，由 CI 矩阵
   （debug/asan/ubsan）在 push 时覆盖；M2-07 deb 安装真机冒烟待执行。
 - 同步：本文件勾选 M2-06。
+
+### 2026-09-23：M2-05 CI 运行通过（GitHub Actions run 35888435555）
+
+- 范围：ubuntu-24.04 上 debug/asan/ubsan 三预设构建 + ctest 全量；release 构建 +
+  cpack 产出 deb + 包内验证 + artifact 上传。
+- 结果：全绿（
+  [run 35888435555](https://github.com/Linductor-alkaid/rin/actions/runs/35888435555)）：
+  - `build & test (debug|asan|ubsan) => success`：ctest 全部通过（runner 无设备，
+    hardware 用例按设计 SKIP）；DOD-03 的 asan/ubsan 门禁自此由 CI 承载。
+  - `deb package => success`：`rin_0.2.0_amd64.deb` 产出并上传 artifact
+    （`rin-deb`，7,933,079 字节）；包内验证（Depends 无 librealsense2、五类内容、
+    RUNPATH `$ORIGIN/../lib/rin`、ldd 全解析且 librealsense2 从 `/usr/lib/rin`
+    加载）在 runner 上通过。
+- 迭代记录（CI 环境差异修复，均以 `ci:` 前缀提交）：
+  1. runner 缺 `wayland-scanner`（EUI-NEO 捆绑 GLFW 3.4 默认启用 Wayland）→ 补装
+     `libwayland-dev wayland-protocols libxkbcommon-dev libegl-dev`。
+  2. EUI-NEO `find_package(CURL)` 必需 → 补装 `libcurl4-openssl-dev`。
+  3. 验证脚本 `test -x` 的 glob 展开错误 → 改 `find` 断言 + ldd 私有目录解析断言。
+- 限制：tag 触发的 Release 上传路径尚未实测（需打 `v*` tag，留待 v0.2.0 发布时
+  验证）；M2-07 真机 deb 冒烟待维护者执行（无免密 sudo）。
+- 同步：本文件勾选 M2-05。
