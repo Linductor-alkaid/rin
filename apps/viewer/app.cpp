@@ -406,10 +406,10 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, float width) {
         .fontWeight(kWeightMedium)
         .color(dark().fgSubtle)
         .build();
-    // 分辨率控件右对齐（响应式：随窗口宽度变化不溢出）。
-    const float resolutionX = width - 200.0f;
+    // 分辨率控件右对齐（响应式：随窗口宽度变化不溢出）；
+    // 标签贴在其选择器左侧，与 Device 选择器（76..286）保持间距不重叠。
     ui.text("controls.resolution.label")
-        .position(resolutionX - 86.0f, 65.0f)
+        .position(width - 180.0f - 98.0f, 65.0f)
         .text("Resolution")
         .fontSize(kFontSm)
         .fontWeight(kWeightMedium)
@@ -637,7 +637,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 deviceLabels.push_back(option.label);
             }
             if (!deviceLabels.empty()) {
-                composeSelect(ui, "controls.device", kSpace4 + 90.0f, 52.0f, 240.0f,
+                composeSelect(ui, "controls.device", 76.0f, 52.0f, 210.0f,
                               "select device", deviceLabels, ctx.deviceIndex.get(),
                               ctx.deviceOpen.get(), [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
                               [&ctx](int index) {
@@ -652,7 +652,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 for (const ResolutionUiOption& option : ctx.resolutionOptions) {
                     resolutionLabels.push_back(option.label);
                 }
-                composeSelect(ui, "controls.resolution", contentWidth - 200.0f, 52.0f, 180.0f,
+                composeSelect(ui, "controls.resolution", contentWidth - 180.0f, 52.0f, 180.0f,
                               "select", resolutionLabels, ctx.resolutionIndex.get(),
                               ctx.resolutionOpen.get(),
                               [&] { ctx.resolutionOpen.set(!ctx.resolutionOpen.get()); },
