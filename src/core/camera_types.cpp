@@ -38,9 +38,16 @@ bool operator!=(const StreamRequest& lhs, const StreamRequest& rhs) noexcept {
 }
 
 bool Extrinsics::valid() const noexcept {
+    // 全零旋转矩阵是"未填充/读取失败"的可观察哨兵（真实标定的旋转不可能全零），
+    // 判无效——消费方据此区分"没有外参"与"外参可用"；非有限值同样拒绝。
+    // 平移允许全零（共面/同址安装的平移可为 0，旋转不可为全零）。
+    bool rotationPopulated = false;
     for (const float value : rotation) {
         if (!std::isfinite(value)) {
             return false;
+        }
+        if (value != 0.0f) {
+            rotationPopulated = true;
         }
     }
     for (const float value : translation) {
@@ -48,13 +55,20 @@ bool Extrinsics::valid() const noexcept {
             return false;
         }
     }
-    return true;
+    return rotationPopulated;
 }
 
 bool MotionIntrinsics::valid() const noexcept {
+    // 全零刻度矩阵是"未填充/读取失败"的可观察哨兵（真实出厂刻度对角元 ~1，
+    // 不可能全零），判无效；bias/方差允许全零（出厂标定零偏与方差可为 0）。
+    // 任意字段非有限值拒绝。
+    bool scalePopulated = false;
     for (const float value : scale) {
         if (!std::isfinite(value)) {
             return false;
+        }
+        if (value != 0.0f) {
+            scalePopulated = true;
         }
     }
     for (const float value : bias) {
@@ -72,7 +86,7 @@ bool MotionIntrinsics::valid() const noexcept {
             return false;
         }
     }
-    return true;
+    return scalePopulated;
 }
 
 bool MotionSample::valid() const noexcept {

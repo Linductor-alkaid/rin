@@ -101,6 +101,9 @@ struct Extrinsics {
     /// 平移（米，目标坐标系下）。
     std::array<float, 3> translation{};
 
+    /// 有效性：rotation/translation 全部有限，且 rotation 非全零——全零旋转是
+    /// "未填充/读取失败"的可观察哨兵（真实标定旋转不可能全零）；平移允许全零
+    /// （同址/共面安装）。
     [[nodiscard]] bool valid() const noexcept;
 };
 
@@ -117,6 +120,8 @@ struct MotionIntrinsics {
     /// 三轴零偏方差。
     std::array<float, 3> biasVariances{};
 
+    /// 有效性：全部字段有限，且 scale 非全零——全零刻度是"未填充/读取失败"的
+    /// 可观察哨兵（真实出厂刻度对角元 ~1）；bias/方差允许全零（标定值可为 0）。
     [[nodiscard]] bool valid() const noexcept;
 };
 
