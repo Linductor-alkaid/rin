@@ -20,9 +20,7 @@ compile_commands.json.local
 # Logs / artifacts
 *.log
 *.trace
-# 验收证据截图（小体积、无敏感内容）随仓库留档
-screenshots/*.png
-!screenshots/.gitkeep
+# screenshots/ 下的验收证据截图（小体积、无敏感内容）随仓库留档，不忽略
 
 # OS
 .DS_Store
