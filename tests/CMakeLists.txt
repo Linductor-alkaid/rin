@@ -61,6 +61,38 @@ target_include_directories(test_motion_ingest PRIVATE ${CMAKE_SOURCE_DIR}/src/co
 add_test(NAME motion_ingest COMMAND test_motion_ingest)
 set_tests_properties(motion_ingest PROPERTIES LABELS "unit")
 
+# M3-06 3D 位姿视图投影数学（Core 纯逻辑，DEC-011 冻结验证方式 1）：四元数规范化/
+# 共轭/Hamilton 乘积（复合方向契约）、四元数→矩阵（正交性、det=+1、与 Hamilton
+# 旋转参考逐点一致、pitch≈±90° 无表示奇异）、矩阵转置/乘法/列主序外参布局、
+# orbit look-at 语义（原点深度=distance、世界上方=视图上方、±89° 仰角截断、
+# 非有限/distance<=0 消毒）、透视投影 y 向下屏幕约定与 <=nearZ 剔除边界、
+# 线段→等宽四边形（法向半宽/点序/退化剔除）、失败路径不写出参；golden 端到端
+# （已知位姿 + 固定观察相机 → 期望屏幕点集，double 参考独立推导，0.05 px 容差）
+# 与"世界系固定/姿态驱动旋转"不变量。单线程纯逻辑：无跨上下文状态/关闭路径
+# （DOD-02 矩阵不适用，见文件头说明）。
+add_executable(test_pose_math test_pose_math.cpp)
+target_link_libraries(test_pose_math PRIVATE rin::core)
+target_include_directories(test_pose_math PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME pose_math COMMAND test_pose_math)
+set_tests_properties(pose_math PROPERTIES LABELS "unit")
+
+# M3-06 viewer 位姿视图状态语义（DEC-011 风险 3 重锚定契约）：PoseViewState
+# 空态初值、update 保存快照且不动 baseline、Reset 以当前姿态重锚定显示参考
+# （conj(baseline)⊗current，幂等）、空态 Reset no-op、clear 复位恒等与会话重
+# 锚定；显示公式与 double 参考逐数值一致。包含 apps/viewer/pose_view.hpp 需
+# EUI-NEO 公开头包含路径（经 eui_neo 目标用法属性注入，不链接其库）；compose
+# 绘制路径需活动 EUI 运行时，headless 不可测（真机验收归 M3-08，见文件头说明）。
+add_executable(test_pose_view_state test_pose_view_state.cpp)
+target_link_libraries(test_pose_view_state PRIVATE rin::core)
+target_include_directories(test_pose_view_state PRIVATE ${CMAKE_SOURCE_DIR}/apps/viewer)
+target_include_directories(test_pose_view_state SYSTEM PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INCLUDE_DIRECTORIES>"
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_INCLUDE_DIRECTORIES>")
+target_compile_definitions(test_pose_view_state PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_COMPILE_DEFINITIONS>")
+add_test(NAME pose_view_state COMMAND test_pose_view_state)
+set_tests_properties(pose_view_state PROPERTIES LABELS "unit")
+
 # 公开头第三方类型边界（RULE-01）：本目标只拿到 include/，不链接任何第三方；
 # 若公开头引入 rs2/eui 类型将因找不到头文件而编译失败。
 add_executable(test_public_boundary test_public_boundary.cpp)
