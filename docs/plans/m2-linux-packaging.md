@@ -1,6 +1,6 @@
 # M2：Rin 更名与 Linux 自包含分发
 
-> 状态：In Progress
+> 状态：Completed
 > 负责人：Linductor-alkaid
 > 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：M1
@@ -54,9 +54,8 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
       上传 Release。（run 35888435555 全绿，见验证记录 2026-09-23 第三条）
 - [x] `M2-06` 独立验证：干净环境 configure/build/ctest、deb 安装面检查、更名残留
       检查（Independent-Verification-Agent 回报证据，见验证记录 2026-09-23 第二条）。
-- [ ] `M2-07` 真机冒烟：deb 安装到本机，D435if 出流验证（本机无免密 sudo，agent
-      不可代行；待维护者执行 `sudo apt install ./rin_0.2.0_amd64.deb` 后复验；
-      当前源码树真机硬件用例已通过，见验证记录 2026-09-23 第二条）。
+- [x] `M2-07` 真机冒烟：维护者于 2026-09-24 安装 Release deb 并真机验证通过
+      （维护者人工确认，见验证记录 2026-09-24 第二条）。
 
 ## 风险与阻塞
 
@@ -76,7 +75,7 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
 - [ ] debug/asan/ubsan 预设 ctest 通过（独立验证代理执行）。
 - [x] CI 在 GitHub 上运行通过并产出 deb 工件（run 35888435555 与 tag run
       35890171762）。
-- [ ] 真机（D435if）经 deb 安装后出流验证。
+- [x] 真机（D435if）经 deb 安装后出流验证（维护者 2026-09-24 确认）。
 
 ## 验证记录
 
@@ -154,3 +153,12 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
 - 限制：M2-07 真机 deb 冒烟仍待维护者执行；tag 打在 feat 分支 HEAD，合入
   master 的 MR 由维护者安排。
 - 同步：CHANGELOG 定版、本文件退出条件勾选。
+
+### 2026-09-24：M2-07 真机 deb 安装冒烟（维护者人工验收）
+
+- 范围：Release 资产 `rin_0.2.0_amd64.deb` 在开发机（D435if 在位）安装后的
+  实际使用验证。
+- 验证：维护者自行执行安装与真机出流，确认"安装测试没问题"（安装成功、
+  应用可用、设备出流正常）；agent 无免密 sudo，未代行安装。
+- 结论：M2 全部工作项与退出条件通过，里程碑关闭（Completed）。
+- 同步：本文件状态与 M2-07 勾选、总计划 SCOPE-06 与整体状态。

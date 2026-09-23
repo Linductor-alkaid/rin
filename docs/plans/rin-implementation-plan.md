@@ -1,15 +1,14 @@
 # Rin 实施总计划
 
 > 状态：In Progress
-> 最后更新：2026-09-23
+> 最后更新：2026-09-24
 > 负责人：Linductor-alkaid
 
 ## 当前整体状态
 
-M1（viewer 基础能力）已完成并通过真机验收（见
-[m1-viewer-foundation.md](m1-viewer-foundation.md) 验证记录）。M2（更名与 Linux
-自包含分发）进行中：本地实施与打包验证已通过（见
-[m2-linux-packaging.md](m2-linux-packaging.md) 验证记录），CI 运行与独立验证进行中。
+M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完成并通过验收
+（v0.1.0、v0.2.0 已发布；见 [m2-linux-packaging.md](m2-linux-packaging.md) 验证
+记录）；后续里程碑未立项。
 
 ## 交付边界（SCOPE）
 
@@ -26,10 +25,9 @@ M1（viewer 基础能力）已完成并通过真机验收（见
       `DslAppConfig::onShutdown` 闭合关闭顺序。
 - [x] `SCOPE-05` 测试与验证：状态机/转换/边界单测（假设备），转换函数单测，ASAN/UBSAN
       预设，真机（D435if）人工验收记录。
-- [ ] `SCOPE-06` 项目标识统一更名 Rin，Linux 自包含 deb 分发（捆绑 librealsense2 +
+- [x] `SCOPE-06` 项目标识统一更名 Rin，Linux 自包含 deb 分发（捆绑 librealsense2 +
       udev 规则）与 CI 工件导出（[DEC-008](../decisions/DEC-008-project-rename-to-rin.md)、
-      [DEC-009](../decisions/DEC-009-self-contained-deb-distribution.md)）；CI 运行、
-      独立验证与真机冒烟完成前保持未勾选。
+      [DEC-009](../decisions/DEC-009-self-contained-deb-distribution.md)）。
 
 ## 不可破坏的架构约束（RULE）
 
