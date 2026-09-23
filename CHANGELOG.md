@@ -6,6 +6,10 @@
 
 ### 新增
 
+- 深度图配色运行时可选（DEC-007）：viewer 控制行新增 Palette 下拉，可在 jet 伪彩
+  与灰度黑白（近白远黑）间即时切换；切换仅影响后续帧转换、不重流；`Waiting` 态
+  可预设，接入后按所选配色出流。公共契约新增 `DepthColorScheme` 与
+  `ICameraService::requestDepthColorScheme`（等待/出流状态有效、粘性，终态拒绝）。
 - 相机热插拔与多设备选择（DEC-006）：启动不依赖相机连接（`Waiting` 设计稳态）；
   运行中经 `rs2::context` 设备变化回调自动感知插拔并刷新在线设备目录；唯一设备
   自动选中，多设备时由用户在 Device 下拉中选择（`requestDevice`，选择意图粘性

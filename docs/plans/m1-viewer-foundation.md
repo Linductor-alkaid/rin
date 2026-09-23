@@ -64,6 +64,44 @@
 
 ## 验证记录
 
+### 2026-09-23：深度图配色运行时可选（DEC-007）
+
+- 范围：公共契约新增 `DepthColorScheme { Jet, Grayscale }` 与
+  `ICameraService::requestDepthColorScheme`（Waiting/Opening/Streaming/Restreaming
+  有效、粘性；Idle/Failed/Stopping 拒绝）；Core 统一入口 `convertDepth16ToRgba8`
+  + 灰度 ramp（近白远黑，raw==0 不透明黑，jet 包装不变）；adapter 经控制命令邮箱
+  在 Waiting/流循环检查点消费，仅切换后续帧转换、不重流，Info 事件
+  `depth palette: jet|grayscale` 可见；viewer 控制行新增 "Palette" 下拉（右对齐组，
+  Waiting 态可预设）。
+- 验证（Independent-Verification-Agent 独立执行，真机 D435if 在位）：
+  - pixel_format 单测 274 → 700 checks：灰度端点/线性/超界 clamp/R=G=B、统一入口
+    参数校验、depthScale 换算（200→255、3350→128、6500→0）、区间外截断、单调性、
+    stride 填充、Jet 包装逐字节回归；
+  - hardware 测试 144 → 176 checks：Idle 拒绝、流中切换全程状态保持 Streaming
+    （不进 Restreaming，100ms 采样）、Info 消息精确匹配、切换后全帧 R==G==B 且
+    含非黑像素、切回 Jet 后存在彩色像素、同值幂等、stop 后拒绝；
+  - debug/asan/ubsan 三预设 build+ctest 4/4 全绿（700/176 计数一致），真机链路
+    实际执行非 SKIP，连续多次运行稳定。
+- 限制：真机在位无法程序化触发无设备 SKIP（77）分支与 Waiting 预设配色场景，
+  后者由 GUI 验收人工补验（无设备时 Palette 可选，接入后按所选配色出流）。
+- GUI 真机验收（主循环执行，D435if，窗口逻辑宽 640（200% 缩放屏）与 1534 双态）：
+  - 窄窗口（默认 1280x860 物理 = 640 逻辑）暴露右锚定组与 Device 选择器贴叠：
+    布局改为响应式收敛（paletteX/resolutionX 依次贴靠 Device 右缘 + 12 间距，
+    逻辑宽 < 640 时标签与长提示让位隐藏），三选择器同行无交互重叠；
+  - 全链路 XTest 点击：默认启动即 Jet（无自动切换事件）→ 菜单展开（弹层浮于
+    卡片之上）→ 选 Grayscale 即时生效（`depth palette: grayscale`，近白远黑，
+    内参/分辨率不变、无 Restreaming）→ 切回 Jet 生效（`depth palette: jet`）；
+  - WM 关窗进程干净退出（运行日志 0 字节）；
+  - 证据截图（screenshots/，md5）：`viewer_palette_default_jet.png`
+    `bee7defa7efe9243024f6fc2d899e845`、`viewer_palette_menu_open.png`
+    `d11efdd68aaf1713e4b2d9b713200579`、`viewer_palette_grayscale_applied.png`
+    `b8e6a5a68b2252a0fd2733cf901ea886`、`viewer_palette_jet_restored.png`
+    `6f9e5c5f2506ccdf93d3d83420a1815e`、`viewer_palette_wide_grayscale.png`
+    `0f63b7f360951e32a748ddb1a2a56ca1`（宽窗口 1534 逻辑，标签齐全，验收中
+    一次真人点击 Grayscale 的实拍，佐证真实交互链路）。
+- 同步：DEC-007、camera_service_design.md、总计划决策索引（含补登 DEC-006）、
+  CHANGELOG。
+
 ### 2026-09-23：修复"画面仅左缘更新"渲染缺陷（EUI-20260923-003 绕行）
 
 - 缺陷：真机 viewer 两个画面仅左缘数像素彩条更新、其余全黑；此前 hardware 测试只断言

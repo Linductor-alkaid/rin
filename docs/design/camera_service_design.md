@@ -3,7 +3,10 @@
 > 状态：Active
 > 更新日期：2026-09-23
 > 关联：[DEC-001](../decisions/DEC-001-dependency-pinning.md)、
-> [DEC-002](../decisions/DEC-002-runtime-ui-integration.md)、[DEC-003](../decisions/DEC-003-depth-colormap.md)
+> [DEC-002](../decisions/DEC-002-runtime-ui-integration.md)、
+> [DEC-003](../decisions/DEC-003-depth-colormap.md)、
+> [DEC-006](../decisions/DEC-006-hotplug-device-selection.md)、
+> [DEC-007](../decisions/DEC-007-depth-palette.md)
 
 ## 分层
 
@@ -26,6 +29,8 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
 - `CameraServiceState`：`Idle / Opening / Streaming / Restreaming / Waiting / Stopping /
   Failed`（`Waiting` 为热插拔稳态，见 DEC-006）。
 - `StreamRequest`：彩色+深度的 width/height/fps（成对请求，M1 不支持单流）。
+- `DepthColorScheme`：深度图输出配色 `Jet / Grayscale`（DEC-007；灰度近白远黑，
+  无效深度 0 输出不透明黑）。
 - `Frame`：`kind(Rgb|Depth)`、`width/height/stride`、`sequence`、`deviceTimestampMs`、
   像素缓冲（`std::shared_ptr<const std::vector<std::uint8_t>>`，RGBA8 打包）。
 - `IntrinsicsSnapshot`：彩色/深度各自的 `width/height/fx/fy/cx/cy` 与畸变系数/模型。
@@ -34,7 +39,8 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
 - `ServiceEvent`：`kind`（Started/ResolutionChanged/Info/Stopped/Failed）、`state`、人读
   消息、时间戳。
 - `ICameraService`：`start(StreamRequest)`、`requestResolution(StreamRequest)`、
-  `stop()`、`state()`、`lastError()`，以及四条"上次已见序号"语义的非阻塞读取通道
+  `requestDevice(serial)`、`requestDepthColorScheme(DepthColorScheme)`、`stop()`、
+  `state()`、`lastError()`，以及四条"上次已见序号"语义的非阻塞读取通道
   `tryLoadFrame / tryLoadIntrinsics / tryLoadCapabilities / tryLoadEvent`。
   接口只使用 std 类型（RULE-01）；`executor::comm::LatestMailbox` 由实现内部持有。
 - `createRealSenseCameraService(executor::Executor&)`：工厂（声明在 adapter 头
@@ -63,7 +69,7 @@ Failed --stop()--> Stopping --> Idle
 | 工作载荷 | Executor 能力 | 句柄所有者 | 取消路径 |
 | --- | --- | --- | --- |
 | librealsense 阻塞采集循环 | `start_worker(BlockingWorkerSpec)` | `RealSenseCamera`（`WorkerHandle`） | `request_stop()` → 循环边界退出 → `stop()` 回收 |
-| UI→采集命令（分辨率切换） | `LatestMailbox<ControlCommand>` + `worker.wakeup()` | `RealSenseCamera` | 关闭时 mailbox 停止投递 |
+| UI→采集命令（分辨率切换 / 设备选择 / 深度配色） | `LatestMailbox<ControlCommand>` + `worker.wakeup()` | `RealSenseCamera` | 关闭时 mailbox 停止投递 |
 | 采集→UI 帧 | `LatestMailbox<Frame>` ×2（RGB/深度） | `RealSenseCamera` 提供、viewer 消费 | 关闭后不再发布 |
 | 采集→UI 事件/内参 | `LatestMailbox<ServiceEvent>` / `LatestMailbox<IntrinsicsSnapshot>` | 同上 | 同上 |
 
@@ -75,8 +81,9 @@ run(StopToken):
   loop:
     若 stop_token.stop_requested(): 跳出
     若命令邮箱有新 StreamRequest: state=Restreaming；stop/restart pipeline；更新内参
+    若命令邮箱有新深度配色（DEC-007）: 仅切换后续帧转换 ramp，不重流
     pipeline.wait_for_frames(timeout)
-      成功: RGB8→RGBA8、Z16→jet RGBA8（纯函数，见 DEC-003），发布帧邮箱
+      成功: RGB8→RGBA8、Z16→按所选配色 RGBA8（纯函数，见 DEC-003/DEC-007），发布帧邮箱
       失败: 发布 ServiceEvent(Failed) 并跳出 → state=Failed
   退出: release 资源；state = (失败? Failed : Idle)
 ```
