@@ -37,8 +37,8 @@
 - 期望语义：`DslAppConfig` 增加 `onReady`/`onStart` 一次性回调。
 - 建议最小能力：上游 config 增加 `onStart(std::function<void()>)`，在窗口创建后、
   首帧 compose 前调用一次。
-- 状态：Open（向上游反馈前保持观察；不影响当前集成正确性，幂等设计已覆盖）
-- 跟进：2026-09-23 登记。
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#73；不影响当前集成正确性，幂等设计已覆盖）
+- 跟进：2026-09-23 登记；2026-09-23 提交上游 issue #73。
 
 ### EUI-20260923-002：`components::dropdown` 弹层展开必须经 `bindOpen`/`onOpenChange` 外接状态
 
@@ -49,9 +49,10 @@
 - 影响：应用必须为每个下拉保留 `eui::Signal<bool>` 开合状态并在选中后自行关闭弹层。
 - 期望语义：未外接开合状态时框架内部保留默认开合行为。
 - 建议最小能力：`build()` 在未注册 `onOpenChange_` 时使用内部 retained 开合状态。
-- 状态：Open（已在 viewer 中按现语义接线：`resolutionOpen` 信号，行为正确）
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#72；viewer 已按现语义接线：
+  `resolutionOpen` 信号，行为正确）
 - 跟进：2026-09-23 登记；同日真机 UI 点击验证分辨率切换链路（848x480→640x360，
-  内参同步更新）。
+  内参同步更新）并提交上游 issue #72。
 
 ### EUI-20260923-003：动态纹理（`eui::ImageStream`）在当前 GL 栈渲染异常
 
@@ -60,9 +61,12 @@
   - 环境：Ubuntu 24.04，Mesa 25.2.8，`GL_RENDERER = Mesa Intel(R) Graphics (ARL)`，
     GL 4.6 Compatibility；`GALLIUM_DRIVER=softpipe` 下同样复现（排除 Intel 驱动专属）。
   - **上游官方示例复现**：`examples/dynamic_texture.cpp`（NV12/I420/P010 轮播）渲染为
-    竖向色带而非移动渐变（留档 `/tmp/dyn_shot.png`、`/tmp/dyn_soft.png`）。
+    竖向色带而非移动渐变（截图存档
+    `screenshots/upstream-repro/official_dynamic_texture_intel_mesa_bands.png` 与
+    `..._softpipe_bands.png`；issue 内嵌线上副本见 #71）。
   - 本仓库 viewer（RGBA8 提交，30fps）：画面仅左缘数像素列更新、其余全黑。
-  - 合成渐变最小探针（RGBA8，~10fps 提交）：画面全黑，`submit()` 无失败返回。
+  - 合成渐变最小探针（RGBA8，~10fps 提交）：画面全黑（
+    `screenshots/upstream-repro/minimal_rgba8_probe_black.png`），`submit()` 无失败返回。
   - 采集侧排除：librealsense 原始帧落盘 100% 像素有效（848x480 RGB8 stride 2544），
     深度 57% 非零；GPU/环境整体排除：见绕行方案效果。
 - 影响：凡经 `ImageStream` 提交的实时画面在本环境不可用；`importGpuImage` 外部
@@ -85,6 +89,6 @@
 
 | 编号 | 状态 | 优先级 | 跟进 |
 | --- | --- | --- | --- |
-| EUI-20260923-001 | Open | P3 | 2026-09-23 登记；设计已按幂等 owner 规避 |
-| EUI-20260923-002 | Open | P3 | 2026-09-23 登记；viewer 已按现语义接线并完成真机点击验收 |
-| EUI-20260923-003 | Open | P1 | 2026-09-23 登记；viewer 已绕行（GpuFrameView），上游修复后回归 |
+| EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
+| EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
+| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 已绕行（GpuFrameView），上游修复后回归 |
