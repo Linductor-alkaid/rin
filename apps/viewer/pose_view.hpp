@@ -8,8 +8,9 @@
 //
 // 边界（RULE-01/05/07）：本单元只做有界投影与点集提交（≤37 个多边形、≤150 顶点，
 // DEC-011 原型实测 ~40µs/帧），不做融合、不做阻塞等待；姿态快照由 app.cpp 的
-// pump() 经 tryLoadPose() 消费后写入 PoseViewState。投影数学全部位于 Core，此处
-// 仅在 UI 边界把 rin::PoseVec2 转换为 eui::Vec2（DEC-011 决策 1/2）。
+// pump() 经 tryLoadPose() 消费后写入 PoseViewState（IMU 状态面板 M3-07 起消费
+// 同一份快照，见 imu_panel.hpp）。投影数学全部位于 Core，此处仅在 UI 边界把
+// rin::PoseVec2 转换为 eui::Vec2（DEC-011 决策 1/2）。
 //
 // [DEC-011]: ../../docs/decisions/DEC-011-pose-view-rendering.md
 
@@ -21,7 +22,6 @@
 #include <rin/pose_math.hpp>
 
 #include <array>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -264,19 +264,8 @@ inline void composePoseViewCard(eui::Ui& ui, PoseViewState& state,
                 }
                 composePoseScene(ui, camToWorld, pad, areaY, areaWidth, areaHeight);
 
-                // 源频率元数据（叠加场景之上；姿态数值面板属 M3-07，此处仅频率）。
-                char meta[64];
-                std::snprintf(meta, sizeof(meta), "gyro %.0fHz · accel %.0fHz",
-                              static_cast<double>(state.snapshot.sources.gyroHz),
-                              static_cast<double>(state.snapshot.sources.accelHz));
-                ui.text("view.pose.sources")
-                    .position(pad, areaY + areaHeight - kFontXs - kSpace1)
-                    .size(areaWidth, kFontXs + kSpace1)
-                    .text(meta)
-                    .fontSize(kFontXs)
-                    .color(tokens.fgSubtlest)
-                    .horizontalAlign(eui::HorizontalAlign::Right)
-                    .build();
+                // 源频率与姿态数值读数自 M3-07 起由 IMU 状态面板（imu_panel.hpp）
+                // 统一呈现，本卡不再重复叠加元数据。
             }
 
             ui.text("view.pose.label")

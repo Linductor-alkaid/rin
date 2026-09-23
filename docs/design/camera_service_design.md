@@ -142,12 +142,19 @@ run(StopToken):
   - 初始化点：`dslAppConfig()` 首次调用（主线程，窗口创建前）——惰性构造
     `executor::Executor` + `initialize_ex({})` + 创建服务并 `start(默认请求)`。
   - 关闭点：`DslAppConfig::onShutdown`（主线程，GPU 设备销毁前）：`service.stop()`
-    （内部 request_stop + worker stop 回收）→ `executor.shutdown(true)`；幂等，容忍
-    初始化失败路径上资源未创建。
+    （内部 request_stop + worker stop 回收；返回后全部通道不再有新发布，M3-07
+    排空语义）→ UI 侧跨上下文姿态状态排空（`PoseViewState::clear()` 回空态，
+    陈旧姿态不跨 shutdown 存活）→ 释放 GPU 导入引用 → `executor.shutdown(true)`；
+    幂等，容忍初始化失败路径上资源未创建。
 - `compose()`（UI/渲染线程）只做：`try_load_newer_than` 取最新帧 → 上传 `GpuFrameView`
   （自有 GL 纹理 + `importGpuImage` 导入，EUI-20260923-003 绕行；ImageStream 路径在
   当前 GL 栈渲染异常且官方示例可复现）→ 组装控件。不阻塞等待，不在 UI 线程调用
   librealsense。外部纹理非动画元素：有新帧时调用 `app::requestUpdate()` 驱动重绘。
+- 姿态消费（M3-06/07）：`pump()` 仅在 Streaming/Restreaming 消费 `tryLoadPose()`
+  最新快照写入 `PoseViewState`（其余状态回空态并复位显示参考——restream 重建窗口
+  不滞留陈旧姿态）；3D 位姿视图（DEC-011 CPU 投影 + polygon）与 IMU 状态面板
+  （源频率 EMA Hz + 会话样本、ZYX 欧拉角与四元数读数）消费同一份快照，不新增
+  通道；原始运动通道 `tryLoadMotion()` 仅作诊断，不进面板。
 - 设备目录与热插拔（DEC-006）：适配器构造时长驻 `rs2::context` 并注册
   `set_devices_changed_callback`；回调（librealsense 线程）仅向 `LatestMailbox` 投递
   信号（规则 11），worker 以 ≤300ms 有界轮询消费并重新枚举发布 `DeviceCatalog`

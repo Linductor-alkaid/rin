@@ -32,6 +32,11 @@ public:
                                          std::string* error = nullptr) = 0;
 
     /// 任意状态 -> Stopping -> Idle；幂等。阻塞至 worker 回收完成。
+    ///
+    /// 排空语义（M3-07 关闭回归）：返回后采集 worker 已回收，全部数据通道不再有
+    /// 新发布；通道内保留的最新值对既有消费方保持 stale 语义（序号不回退），调用方
+    /// 不得据此恢复活动状态——消费侧派生状态（如 viewer 姿态面板/3D 视图）应在
+    /// 关闭路径显式排空（回空态），不得跨 shutdown 存活。
     virtual void stop() = 0;
 
     [[nodiscard]] virtual CameraServiceState state() const = 0;
