@@ -68,6 +68,9 @@ struct ViewerContext {
     std::string resolutionOptionsForSerial;
     eui::Signal<int> resolutionIndex{0};
     eui::Signal<bool> resolutionOpen{false};
+    /// 深度配色（DEC-007）：0 = Jet，1 = Grayscale；不依赖设备目录，Waiting 可预设。
+    eui::Signal<int> paletteIndex{0};
+    eui::Signal<bool> paletteOpen{false};
 
     rsv::CameraServiceState statusState = rsv::CameraServiceState::Idle;
     std::string statusMessage;
@@ -80,6 +83,7 @@ struct ViewerContext {
 
     void applyResolutionChoice(int index);
     void applyDeviceChoice(int index);
+    void applyPaletteChoice(int index);
     void rebuildDeviceOptions();
     void rebuildResolutionOptions();
     void pump();
@@ -238,6 +242,18 @@ void ViewerContext::applyDeviceChoice(int index) {
     if (!service->requestDevice(deviceOptions[static_cast<std::size_t>(index)].serial,
                                 &error)) {
         statusMessage = "device select rejected: " + error;
+    }
+}
+
+void ViewerContext::applyPaletteChoice(int index) {
+    if (service == nullptr || index < 0 || index > 1) {
+        return;
+    }
+    const auto scheme =
+        index == 1 ? rsv::DepthColorScheme::Grayscale : rsv::DepthColorScheme::Jet;
+    std::string error;
+    if (!service->requestDepthColorScheme(scheme, &error)) {
+        statusMessage = "palette rejected: " + error;
     }
 }
 
@@ -406,7 +422,10 @@ void composeViewCard(eui::Ui& ui, const char* id, float width, float height, con
 }
 
 /// 控制行标签与提示（下拉触发器本体由 overlay 层最后合成，保证弹层浮顶）。
-void composeControls(eui::Ui& ui, const ViewerContext& ctx, float width) {
+/// narrow（逻辑宽 < 640）时右锚定组会贴靠 Device 选择器，标签/长提示让位隐藏，
+/// 选择器取值文本自描述；paletteX/resolutionX 由 compose() 统一计算传入。
+void composeControls(eui::Ui& ui, const ViewerContext& ctx, bool narrow,
+                     float paletteX, float resolutionX) {
     ui.text("controls.device.label")
         .position(kSpace4, 65.0f)
         .text("Device")
@@ -414,11 +433,21 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, float width) {
         .fontWeight(kWeightMedium)
         .color(dark().fgSubtle)
         .build();
-    // 分辨率控件右对齐（响应式：随窗口宽度变化不溢出）；
-    // 标签贴在其选择器左侧，与 Device 选择器（76..286）保持间距不重叠。
+    if (narrow) {
+        return;  // 右锚定组已贴靠，标签/提示与选择器重叠，让位。
+    }
+    // 分辨率与深度配色两组控件右对齐（响应式：随窗口宽度变化不溢出）；
+    // 标签贴在各自选择器左侧，与 Device 选择器（76..286）保持间距不重叠。
     ui.text("controls.resolution.label")
-        .position(width - 180.0f - 98.0f, 65.0f)
+        .position(resolutionX - 98.0f, 65.0f)
         .text("Resolution")
+        .fontSize(kFontSm)
+        .fontWeight(kWeightMedium)
+        .color(dark().fgSubtle)
+        .build();
+    ui.text("controls.palette.label")
+        .position(paletteX - 98.0f, 65.0f)
+        .text("Palette")
         .fontSize(kFontSm)
         .fontWeight(kWeightMedium)
         .color(dark().fgSubtle)
@@ -426,7 +455,7 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, float width) {
     if (ctx.hasCatalog && ctx.catalog.activeSerial.empty() &&
         ctx.catalog.devices.size() > 1) {
         ui.text("controls.hint")
-            .position(kSpace4 + 340.0f + 105.0f + 210.0f, 65.0f)
+            .position(298.0f, 65.0f)
             .text("multiple devices, select one")
             .fontSize(kFontXs)
             .color(dark().warning)
@@ -434,7 +463,7 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, float width) {
     } else if (ctx.hasCatalog && !ctx.catalog.activeSerial.empty() &&
                ctx.catalog.activeIsAuto && ctx.catalog.devices.size() > 1) {
         ui.text("controls.hint")
-            .position(kSpace4 + 340.0f + 105.0f + 210.0f, 65.0f)
+            .position(298.0f, 65.0f)
             .text("auto-selected, click Device to change")
             .fontSize(kFontXs)
             .color(dark().fgSubtlest)
@@ -615,6 +644,11 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     const float viewsHeight = std::max(160.0f, screen.height - viewsTop - kSpace3 -
                                                    intrinsicsHeight - pad);
     const float viewWidth = (contentWidth - kSpace3) * 0.5f;
+    // 右锚定控件组（响应式收敛）：Palette/Resolution 期望右对齐，空间不足时依次
+    // 贴靠 Device 选择器（右缘 286 + 12 间距），逻辑宽 < 640 为 narrow（标签让位）。
+    const float paletteX = std::max(298.0f, contentWidth - 342.0f);
+    const float resolutionX = std::max(paletteX + 162.0f, contentWidth - 180.0f);
+    const bool narrowControls = contentWidth < 640.0f;
 
     // 根用 stack 绝对布局：下拉触发器必须晚于视图/内参卡合成（绘制顺序即层叠顺序，
     // EUI 的 zIndex 不跨父容器），否则弹层被后绘制的兄弟卡片覆盖。
@@ -623,7 +657,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
         .onFrame([](float) { context().pump(); })
         .content([&] {
             composeHeader(ui, ctx, contentWidth);
-            composeControls(ui, ctx, contentWidth);
+            composeControls(ui, ctx, narrowControls, paletteX, resolutionX);
             ui.row("views")
                 .position(pad, viewsTop)
                 .size(contentWidth, viewsHeight)
@@ -638,7 +672,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             composeIntrinsicsCard(ui, ctx, contentWidth, intrinsicsHeight, pad,
                                   screen.height - pad - intrinsicsHeight);
 
-            // overlay 层（最后合成 = 浮于卡片之上）：设备选择 + 分辨率。
+            // overlay 层（最后合成 = 浮于卡片之上）：设备选择 + 深度配色 + 分辨率。
             std::vector<std::string> deviceLabels;
             deviceLabels.reserve(ctx.deviceOptions.size());
             for (const DeviceUiOption& option : ctx.deviceOptions) {
@@ -654,13 +688,23 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                                   ctx.applyDeviceChoice(index);
                               });
             }
+            // 深度配色（DEC-007）：不依赖设备目录，Waiting 态可预设。
+            composeSelect(ui, "controls.palette", paletteX, 52.0f, 150.0f,
+                          "select", {"Jet", "Grayscale"}, ctx.paletteIndex.get(),
+                          ctx.paletteOpen.get(),
+                          [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
+                          [&ctx](int index) {
+                              ctx.paletteOpen.set(false);
+                              ctx.paletteIndex.set(index);
+                              ctx.applyPaletteChoice(index);
+                          });
             if (!ctx.resolutionOptions.empty()) {
                 std::vector<std::string> resolutionLabels;
                 resolutionLabels.reserve(ctx.resolutionOptions.size());
                 for (const ResolutionUiOption& option : ctx.resolutionOptions) {
                     resolutionLabels.push_back(option.label);
                 }
-                composeSelect(ui, "controls.resolution", contentWidth - 180.0f, 52.0f, 180.0f,
+                composeSelect(ui, "controls.resolution", resolutionX, 52.0f, 180.0f,
                               "select", resolutionLabels, ctx.resolutionIndex.get(),
                               ctx.resolutionOpen.get(),
                               [&] { ctx.resolutionOpen.set(!ctx.resolutionOpen.get()); },
