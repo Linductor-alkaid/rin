@@ -68,10 +68,11 @@ M1（viewer 基础能力）已完成并通过真机验收（见
   2.58.3（system 类），executor/eui-neo 源码引入（external 类）。
 - `DEC-002`（已记录）UI 运行时集成：使用 EUI-NEO `eui_neo_configure_app` 提供的 main，
   `AppRuntime` 在 `dslAppConfig()` 首调点惰性初始化并在 `onShutdown` 关闭。
-- `DEC-003`（暂定默认值，负责人 Linductor-alkaid，最迟冻结里程碑 M2）：深度伪彩使用
-  自研 jet 映射而非 `rs2::colorizer`，保证 Core 边界纯净与可测试性。
-- `DEC-004`（暂定默认值，负责人 Linductor-alkaid，最迟冻结里程碑 M2）：默认流配置
-  848×480@30fps RGB+Z16；分辨率档位由设备实际支持的档位集合驱动。
+- `DEC-003`（已记录）深度伪彩使用自研 jet 映射而非 `rs2::colorizer`，保证 Core 边界
+  纯净与可测试性。
+- `DEC-004`（已记录）默认流配置 848x480@30 RGB+Z16。
+- `DEC-005`（已记录）viewer 视觉层采用 ZCode Design System 的令牌翻译
+  （`apps/viewer/viewer_theme.hpp` 为唯一令牌层）。
 
 ## 通用完成定义（DOD）
 

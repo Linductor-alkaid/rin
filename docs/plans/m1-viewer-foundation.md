@@ -64,6 +64,23 @@
 
 ## 验证记录
 
+### 2026-09-23：视觉层按 ZCode Design System 重构（DEC-005）并复验
+
+- 范围：新增 `apps/viewer/viewer_theme.hpp` 令牌层（语义色/字阶/圆角层级/间距节奏），
+  `compose()` 全部改引令牌；画面卡化（card 底+1px 描边+圆角层级）、状态语义色
+  （Streaming=success 等）、下拉令牌化样式、控制行上移为工具栏位、数字键 1-9 直选
+  分辨率（keyboard-first）。
+- 验证（真机，主循环执行）：
+  - 鼠标路径：EWMH 激活 + XTest 点击，弹层展开（`onOpenChange` 信号确认），选中项
+    应用于 640x360，`resolution applied`、内参/角标同步更新（截图
+    `viewer_menu_tokens.png`、`viewer_keyboard_switch.png`）。
+  - 键盘路径：XTest 按键 '2' → `keyboard select: 2` → 848x480→640x360 全链路生效。
+  - 调试打印移除后重建：`ctest` 4/4 通过；WM 关窗干净退出（日志 0 字节）；最终态
+    截图 `viewer_final_design_tokens.png`（md5 `2a830d965f9cb4f51d0b27cbd73e2ed1`）。
+- 过程中发现并修复：EUI dropdown 弹层受兄弟绘制顺序压制（zIndex 不跨父容器），
+  改为根 stack 绝对布局 + 下拉最后合成（已记入 DEC-005）。
+- 同步：DEC-004/005、总计划决策索引、CHANGELOG。
+
 ### 2026-09-23：M1-01..M1-08 全部完成，M1 退出条件通过
 
 - 范围：M1 全部工作项（骨架、契约、状态机、适配器、viewer、测试、真机验收）。
