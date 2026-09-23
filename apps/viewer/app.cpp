@@ -2,9 +2,12 @@
 // dslAppConfig() 首调点惰性启动，DslAppConfig::onShutdown（主线程、GPU 销毁前）关闭。
 // 视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局代码不出现一次性
 // 颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机连接，运行中经设备
-// 目录自动识别，多设备时用户选择、唯一设备自动选择。
+// 目录自动识别，多设备时用户选择、唯一设备自动选择。3D 位姿视图（M3-06，DEC-011）
+// 由 pose_view.hpp 承载：Core 投影纯逻辑 + polygon 有界组装，姿态经 tryLoadPose()
+// 最新态消费。
 
 #include "gpu_frame_view.hpp"
+#include "pose_view.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -31,8 +34,10 @@ using namespace viewer::theme;
 using rin::FrameKind;
 using rin::StreamRequest;
 
-/// 默认流请求（DEC-004 暂定默认值）；设备选择独立于流请求（DEC-006）。
-constexpr StreamRequest kDefaultRequest{};
+/// 默认流请求（DEC-004 暂定默认值）；设备选择独立于流请求（DEC-006）。M3-06 起
+/// 默认使能运动流（SCOPE-07）：IMU 设备上附加 ACCEL/GYRO 供 3D 位姿视图与 IMU
+/// 面板消费；无 IMU 设备按契约退化为纯视频流（运动通道保持空，不视为错误）。
+constexpr StreamRequest kDefaultRequest{.enableMotion = true};
 
 struct ResolutionUiOption {
     StreamRequest request;
@@ -54,11 +59,14 @@ struct ViewerContext {
     std::uint64_t lastDepthSequence = 0;
     std::uint64_t lastIntrinsicsSequence = 0;
     std::uint64_t lastCatalogSequence = 0;
+    std::uint64_t lastPoseSequence = 0;
 
     rin::DeviceCatalog catalog;
     bool hasCatalog = false;
     rin::IntrinsicsSnapshot intrinsics;
     bool hasIntrinsics = false;
+    /// 3D 位姿视图状态（M3-06）：pump() 消费最新姿态快照，Reset 重新锚定显示参考。
+    PoseViewState poseView;
 
     std::vector<DeviceUiOption> deviceOptions;
     eui::Signal<int> deviceIndex{0};
@@ -274,9 +282,6 @@ void ViewerContext::pump() {
         depthMeta = std::to_string(frame.width) + " x " + std::to_string(frame.height);
         frameUpdated = true;
     }
-    if (frameUpdated) {
-        app::requestUpdate();  // 外部纹理非动画元素，需显式请求重绘
-    }
 
     rin::IntrinsicsSnapshot snapshot;
     if (service->tryLoadIntrinsics(lastIntrinsicsSequence, snapshot)) {
@@ -309,6 +314,26 @@ void ViewerContext::pump() {
     if (service->tryLoadEvent(event)) {
         statusState = event.state;
         statusMessage = event.message;
+    }
+
+    // 姿态通道（M3-06，EXEC-06 最新态语义）：Streaming/Restreaming 中消费最新
+    // 快照；其余状态（含 restream 重建窗口——融合器已复位、快照暂停发布）回空态
+    // 并复位视图参考，避免陈旧姿态滞留显示。无新快照（false）不触碰现有状态。
+    bool poseUpdated = false;
+    if (statusState == rin::CameraServiceState::Streaming ||
+        statusState == rin::CameraServiceState::Restreaming) {
+        rin::ImuSnapshot pose;
+        if (service->tryLoadPose(lastPoseSequence, pose)) {
+            poseView.update(pose);
+            poseUpdated = true;
+        }
+    } else if (poseView.available) {
+        poseView.clear();
+        poseUpdated = true;
+    }
+
+    if (frameUpdated || poseUpdated) {
+        app::requestUpdate();  // 外部纹理/最新态快照非动画元素，需显式请求重绘
     }
 }
 
@@ -643,7 +668,8 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     const float viewsTop = pad + headerHeight + kSpace3 + controlsHeight + kSpace3;
     const float viewsHeight = std::max(160.0f, screen.height - viewsTop - kSpace3 -
                                                    intrinsicsHeight - pad);
-    const float viewWidth = (contentWidth - kSpace3) * 0.5f;
+    // 三卡并列：RGB / Depth / Pose 3D（M3-06 集成位；最终卡位与 IMU 面板属 M3-07）。
+    const float viewWidth = (contentWidth - kSpace3 * 2.0f) / 3.0f;
     // 右锚定控件组（响应式收敛）：Palette/Resolution 期望右对齐，空间不足时依次
     // 贴靠 Device 选择器（右缘 286 + 12 间距），逻辑宽 < 640 为 narrow（标签让位）。
     const float paletteX = std::max(298.0f, contentWidth - 342.0f);
@@ -667,6 +693,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                                     ctx.rgbView);
                     composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth",
                                     ctx.depthMeta, ctx.depthView);
+                    composePoseViewCard(ui, ctx.poseView,
+                                        ctx.hasIntrinsics ? &ctx.intrinsics : nullptr,
+                                        viewWidth, viewsHeight);
                 })
                 .build();
             composeIntrinsicsCard(ui, ctx, contentWidth, intrinsicsHeight, pad,

@@ -106,4 +106,33 @@ inline eui::Color stateColor(const rin::CameraServiceState state) {
     return tokens.fgSubtle;
 }
 
+/// 3D 位姿视图场景令牌（M3-06，DEC-011）：固定世界系参考几何与相机指示的语义色。
+/// 数值取自 DEC-011 最小原型（暗底可读性已实测）；X/Y/Z 遵循 RGB 轴惯例。
+struct PoseSceneTokens {
+    eui::Color grid;         // 地面网格线（世界 z=0 平面）
+    eui::Color axisX;        // 世界坐标轴 X
+    eui::Color axisY;        // 世界坐标轴 Y
+    eui::Color axisZ;        // 世界坐标轴 Z
+    eui::Color frustumFace;  // 相机视锥半透明侧面/像平面
+    eui::Color frustumEdge;  // 相机视锥线框
+    eui::Color camAxisX;     // 相机局部轴 X（随姿态旋转）
+    eui::Color camAxisY;     // 相机局部轴 Y
+    eui::Color camAxisZ;     // 相机局部轴 Z
+};
+
+inline const PoseSceneTokens& poseScene() {
+    static const PoseSceneTokens tokens{
+        .grid = {0.42f, 0.47f, 0.56f, 0.28f},
+        .axisX = {0.94f, 0.30f, 0.32f, 0.95f},
+        .axisY = {0.36f, 0.85f, 0.44f, 0.95f},
+        .axisZ = {0.36f, 0.55f, 0.98f, 0.95f},
+        .frustumFace = {0.36f, 0.62f, 0.98f, 0.13f},
+        .frustumEdge = {0.55f, 0.76f, 1.00f, 0.92f},
+        .camAxisX = {1.00f, 0.42f, 0.30f, 0.98f},
+        .camAxisY = {0.55f, 0.92f, 0.55f, 0.98f},
+        .camAxisZ = {0.45f, 0.72f, 1.00f, 0.98f},
+    };
+    return tokens;
+}
+
 }  // namespace viewer::theme

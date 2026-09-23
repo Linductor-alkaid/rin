@@ -4,6 +4,7 @@ add_library(rin_core STATIC
     core/camera_types.cpp
     core/camera_state_machine.cpp
     core/imu_fuser.cpp
+    core/pose_math.cpp
     core/pixel_format.cpp
 )
 add_library(rin::core ALIAS rin_core)
