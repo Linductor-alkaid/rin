@@ -25,9 +25,10 @@ udev 规则（安装后免 root 访问设备），无需预装 Intel RealSense S
 
 ## 从源码构建
 
-依赖：CMake ≥ 3.25、Ninja、GCC/Clang（C++20）、libusb-1.0 与 libudev 开发包、
-OpenGL/X11 开发包。librealsense2、Executor、EUI-NEO 均按 pinned commit 由 CMake
-拉取源码构建，无需预装。
+依赖：CMake ≥ 3.25、Ninja、GCC/Clang（C++20）、libusb-1.0、libudev、libcurl、
+OpenGL/X11（含 Wayland）开发包。librealsense2、Executor、EUI-NEO 均按 pinned commit
+由 CMake 拉取源码构建，无需预装。CI 中的完整清单见
+[ci.yml](.github/workflows/ci.yml)。
 
 ```bash
 cmake --preset debug          # 或 release / asan / ubsan / tsan
