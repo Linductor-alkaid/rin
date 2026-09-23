@@ -38,6 +38,18 @@ target_include_directories(test_imu_fuser PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
 add_test(NAME imu_fuser COMMAND test_imu_fuser)
 set_tests_properties(imu_fuser PROPERTIES LABELS "unit")
 
+# M3-05 MahonyImuFuser 数值与语义（Core 纯逻辑，DEC-010 冻结验证方式 1-8）：
+# 静态重力对齐收敛、60s 已知旋转序列跟踪误差上界、yaw 漂移披露、零偏估计残差、
+# 门限突发精度、复位幂等（memcmp 逐位重放）与确定性；GYRO 单调守卫/非有限时间戳/
+# 零偏补偿/精确指数映射、ACCEL 一次性对齐/1g 门限/PI 修正单步解析、Params 注入
+# 消毒、工厂 Mahony 真身，及 EXEC-06 热路径无堆分配（全局 operator new 计数）。
+# 单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 矩阵不适用，见文件头说明）。
+add_executable(test_imu_fuser_mahony test_imu_fuser_mahony.cpp)
+target_link_libraries(test_imu_fuser_mahony PRIVATE rin::core)
+target_include_directories(test_imu_fuser_mahony PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
+add_test(NAME imu_fuser_mahony COMMAND test_imu_fuser_mahony)
+set_tests_properties(imu_fuser_mahony PROPERTIES LABELS "unit")
+
 # M3-04 MotionIngest（rs2-free 离线行为，EXEC-06 采集分支语义）：有效/无效采样
 # 分支、会话序号单调与最新态邮箱语义、EMA 源频率（已知 dt/收敛/异常时间戳/长间隙）、
 # resetStreamState（restream 语义：融合器复位 + 序号/累计样本连续）、ImuFuser 接缝
