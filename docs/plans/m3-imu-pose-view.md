@@ -54,7 +54,7 @@
       中选定实现，产出最小原型证据（渲染相机视锥 + 坐标轴，姿态驱动旋转）。
       完成判据：`DEC-011` `Accepted` + 原型记录（文件、命令、证据）。
       （[DEC-011](../decisions/DEC-011-pose-view-rendering.md)）
-- [ ] `M3-03` Core IMU 数据契约与通道：`MotionSample`（三轴比力/角速度、设备时间
+- [x] `M3-03` Core IMU 数据契约与通道：`MotionSample`（三轴比力/角速度、设备时间
       戳、序列）、`ImuSnapshot`（姿态四元数、源频率统计、序列）、
       `ICameraService::tryLoadMotion()/tryLoadPose()`、`StreamRequest` IMU 使能位、
       `DeviceCatalog` IMU 能力与速率上报；`NullService` 与 `public_boundary` 测试
@@ -157,3 +157,54 @@
   pinned 源码/文档结构分析与本决策记录（可测性、奇异点、工具链成本）。
 - 同步：新建 `docs/decisions/DEC-011-pose-view-rendering.md`（Accepted）；总计划
   `DEC-011` 行改为（已记录）；本文件勾选 `M3-02`；EUI-NEO 台账无新增缺口。
+
+2026-09-24：`M3-03` Core IMU 数据契约与通道
+
+- 范围：`MotionSample` / `MotionSourceStats` / `ImuSnapshot` 契约类型、
+  `StreamRequest` IMU 使能位、`DeviceInfo`/`DeviceCatalog` IMU 能力与速率档位
+  上报、`ICameraService::tryLoadMotion()/tryLoadPose()` 通道声明，及其契约
+  测试与 `public_boundary` 边界测试扩展；不含适配器发布接线（`M3-04`，通道
+  当前为无生产者桩）与 `ImuFuser` 实现（`M3-05`）。
+- 依据：
+  - `f4cc8a8` feat(core)：契约类型与服务通道（含 `camera_service_design.md`
+    IMU 通路同步）；`9db678f` test(core)：新增 `tests/test_motion_contracts.cpp`
+    （ctest `motion_contracts`，LABELS unit，80 checks）并扩展
+    `tests/test_public_boundary.cpp`（11 checks），共 316 行、全部位于 tests/。
+  - DEC-010 锁定姿态约定：标量在前四元数、默认恒等严格 `{1,0,0,0}`、
+    norm² 容差 1e-3、源频率须有限且非负。
+  - `LatestMailbox::try_load_newer_than` 的 stale 读取不更新序号语义
+    （pinned executor `include/executor/comm/mailbox.hpp:127-147`）。
+- 验证（独立验证执行；debug/asan/ubsan 三套门禁通过）：
+  - 配置：`cmake --preset debug -DRIN_EXECUTOR_SOURCE_DIR=…/_deps/executor-src
+    -DRIN_EUI_NEO_SOURCE_DIR=…/_deps/eui-neo-src -DRIN_REALSENSE2_SOURCE_DIR=…/_deps/realsense2-src`
+    → Configuring/Generating done（`BUILD_SHARED_LIBS=OFF` 与 M2 打包一致）。
+  - 构建：`cmake --build build/debug --target test_motion_contracts
+    test_public_boundary` → exit=0。
+  - `ctest --test-dir build/debug -R "motion_contracts|public_boundary"` →
+    2/2 通过（0 failed）；直接运行 `test_motion_contracts` → `OK: 80 checks,
+    0 failures`，`test_public_boundary` → `OK: 11 checks, 0 failures`。
+  - 回归：`ctest --test-dir build/debug -L unit` → 4/4（camera_state_machine、
+    pixel_format、motion_contracts、public_boundary），既有单元测试未破坏。
+  - 完成判据对照：契约测试通过——覆盖 kind 决定轴单位（比力 m/s² 含重力 /
+    角速度 rad/s）、逐轴 NaN/±Inf 与非法枚举的 `valid()` 边界、DEC-010 四元数
+    约定（恒等、单位四元数、norm² 超差/容差内）、`StreamRequest.enableMotion`
+    相等语义即 restream 去重依赖点 `src/adapters/realsense/realsense_camera_service.cpp:548`
+    的 `command.request == request_`、目录 IMU 能力与速率档位携带；
+    RULE-01 边界编译测试保持通过（public_boundary 仅含 include/ 路径、零
+    第三方链接，新契约类型经公开接口多态实例化编译运行通过）。
+- 限制：
+  - tsan 预设未跑且按判据不触发：本项未新增跨上下文状态，亦无新 Executor
+    任务/线程/队列/关闭顺序变更（通道为无生产者桩，
+    `realsense_camera_service.cpp:167-173`，发布接线由 `M3-04` 承接），测试为
+    单线程纯值语义检查，故 DOD-02 并发矩阵（异常/提交拒绝/执行中取消/超时/
+    shutdown）不适用；可适用的通道空闲行为（无新数据返回 false 且
+    lastSeenSequence/out 出参不动，与 mailbox stale 读语义一致）已覆盖。
+  - `enumerateDevice` 的 IMU 速率档位枚举/去重/排序
+    （`realsense_camera_service.cpp:305-318`，匿名命名空间 + 需 rs2 profile）
+    无法在无真机单元层测试，按 hardware 标签用例纪律由真机验收（`M3-08`）
+    单独执行；D435if 已 `lsusb` 确认在位。
+  - 独立验证的 test(core) 提交（`9db678f`）尚未 push。
+- 同步：本文件勾选 `M3-03`；`camera_service_design.md` IMU 通路小节已随
+  `f4cc8a8` 更新；退出条件各小项均不因本单项完成而满足（ctest 全绿含 tsan
+  预设、融合数值、投影数学、关闭回归、真机验收与文档收尾分属 `M3-04`…`M3-08`），
+  维持未勾。
