@@ -74,7 +74,8 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
       从私有目录加载。
 - [x] `cmake --install --component rin` 暂存树不含依赖文件（组件隔离）。
 - [ ] debug/asan/ubsan 预设 ctest 通过（独立验证代理执行）。
-- [ ] CI 在 GitHub 上运行通过并产出 deb 工件。
+- [x] CI 在 GitHub 上运行通过并产出 deb 工件（run 35888435555 与 tag run
+      35890171762）。
 - [ ] 真机（D435if）经 deb 安装后出流验证。
 
 ## 验证记录
@@ -135,6 +136,21 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
      `libwayland-dev wayland-protocols libxkbcommon-dev libegl-dev`。
   2. EUI-NEO `find_package(CURL)` 必需 → 补装 `libcurl4-openssl-dev`。
   3. 验证脚本 `test -x` 的 glob 展开错误 → 改 `find` 断言 + ldd 私有目录解析断言。
-- 限制：tag 触发的 Release 上传路径尚未实测（需打 `v*` tag，留待 v0.2.0 发布时
-  验证）；M2-07 真机 deb 冒烟待维护者执行（无免密 sudo）。
+- 限制：M2-07 真机 deb 冒烟待维护者执行（无免密 sudo）。
 - 同步：本文件勾选 M2-05。
+
+### 2026-09-24：v0.2.0 发布（tag run 35890171762）
+
+- 范围：应用图标替换为 rin_v2 同尺寸新作（1254x1254 RGBA，`docs/rin.png` 内容
+  替换，打包路径不变）；CHANGELOG 定版 0.2.0；打 `v0.2.0` tag 触发发布流程。
+- 结果：tag run 全绿（
+  [run 35890171762](https://github.com/Linductor-alkaid/rin/actions/runs/35890171762)），
+  Release 自动创建并附着 `rin_0.2.0_amd64.deb`（7,002,010 字节，
+  https://github.com/Linductor-alkaid/rin/releases/tag/v0.2.0 ）。tag 触发的
+  Release 上传路径自此实测通过。
+- 本地同步复验：`build/iva-release/dist/rin_0.2.0_amd64.deb` 重建后包内
+  `usr/share/icons/hicolor/512x512/apps/rin.png` 与 `docs/rin.png` MD5 一致
+  （2e92a6392f24b6cf8da7a9e162b71d59）。
+- 限制：M2-07 真机 deb 冒烟仍待维护者执行；tag 打在 feat 分支 HEAD，合入
+  master 的 MR 由维护者安排。
+- 同步：CHANGELOG 定版、本文件退出条件勾选。
