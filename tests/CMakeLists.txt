@@ -12,6 +12,15 @@ target_include_directories(test_pixel_format PRIVATE ${CMAKE_SOURCE_DIR}/src/cor
 add_test(NAME pixel_format COMMAND test_pixel_format)
 set_tests_properties(pixel_format PROPERTIES LABELS "unit")
 
+# M3-03 IMU 运动数据契约（仅公开头）：MotionSample/ImuSnapshot/MotionSourceStats
+# 的 valid() 与字段语义、StreamRequest.enableMotion 相等语义（restream 去重）、
+# DeviceInfo/DeviceCatalog IMU 能力字段。
+add_executable(test_motion_contracts test_motion_contracts.cpp)
+target_link_libraries(test_motion_contracts PRIVATE rin::core)
+target_include_directories(test_motion_contracts PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME motion_contracts COMMAND test_motion_contracts)
+set_tests_properties(motion_contracts PROPERTIES LABELS "unit")
+
 # 公开头第三方类型边界（RULE-01）：本目标只拿到 include/，不链接任何第三方；
 # 若公开头引入 rs2/eui 类型将因找不到头文件而编译失败。
 add_executable(test_public_boundary test_public_boundary.cpp)
