@@ -96,10 +96,11 @@ jobs:
           rm -rf /tmp/rin-deb-check
           dpkg-deb -x build/release/dist/*.deb /tmp/rin-deb-check
           readelf -d /tmp/rin-deb-check/usr/bin/rin | grep -F 'Library runpath: [$ORIGIN/../lib/rin]'
-          test -x /tmp/rin-deb-check/usr/lib/rin/librealsense2.so.*.*
+          find /tmp/rin-deb-check/usr/lib/rin -name 'librealsense2.so.*' | grep -q .
           test -f /tmp/rin-deb-check/usr/lib/udev/rules.d/99-realsense-libusb.rules
           test -f /tmp/rin-deb-check/usr/share/applications/rin.desktop
           test -f /tmp/rin-deb-check/usr/share/icons/hicolor/512x512/apps/rin.png
+          ldd /tmp/rin-deb-check/usr/bin/rin | grep -F 'lib/rin/librealsense2'
           if ldd /tmp/rin-deb-check/usr/bin/rin 2>/dev/null | grep -q "not found"; then
             ldd /tmp/rin-deb-check/usr/bin/rin
             exit 1
