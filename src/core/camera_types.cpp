@@ -37,6 +37,44 @@ bool operator!=(const StreamRequest& lhs, const StreamRequest& rhs) noexcept {
     return !(lhs == rhs);
 }
 
+bool Extrinsics::valid() const noexcept {
+    for (const float value : rotation) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    for (const float value : translation) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MotionIntrinsics::valid() const noexcept {
+    for (const float value : scale) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    for (const float value : bias) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    for (const float value : noiseVariances) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    for (const float value : biasVariances) {
+        if (!std::isfinite(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool MotionSample::valid() const noexcept {
     if (kind != MotionStreamKind::Accel && kind != MotionStreamKind::Gyro) {
         return false;

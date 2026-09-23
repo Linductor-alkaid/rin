@@ -94,10 +94,43 @@ struct StreamIntrinsics {
     }
 };
 
-/// 当前流配置下的彩色+深度内参快照。
+/// 两个流坐标系之间的刚体外参（M3-04，SDK rs2_extrinsics 语义）。
+struct Extrinsics {
+    /// 3x3 旋转，列主序（v_target = rotation * v_source + translation）。
+    std::array<float, 9> rotation{};
+    /// 平移（米，目标坐标系下）。
+    std::array<float, 3> translation{};
+
+    [[nodiscard]] bool valid() const noexcept;
+};
+
+/// 单个运动传感器（ACCEL/GYRO）的出厂运动内参（M3-04，SDK motion intrinsics；
+/// scale/bias 为 SDK 出厂标定单位，与运动流采样的 m/s²、rad/s 输出单位不同源）。
+struct MotionIntrinsics {
+    /// 三轴刻度/轴间耦合矩阵（行主序 3x3：对角为刻度，非对角为轴间耦合；
+    /// SDK data[3][4] 前 3 列）。
+    std::array<float, 9> scale{};
+    /// 三轴零偏（SDK data[3][4] 第 4 列）。
+    std::array<float, 3> bias{};
+    /// 三轴噪声方差。
+    std::array<float, 3> noiseVariances{};
+    /// 三轴零偏方差。
+    std::array<float, 3> biasVariances{};
+
+    [[nodiscard]] bool valid() const noexcept;
+};
+
+/// 当前流配置下的彩色+深度内参与 IMU 运动内参/外参快照。
 struct IntrinsicsSnapshot {
     StreamIntrinsics color;
     StreamIntrinsics depth;
+    /// gyro → color 外参（M3-04）：把 IMU 传感器系融合姿态换算到彩色相机系所需；
+    /// 运动流未使能、设备无 IMU 或读取失败时保持全零无效值（valid() == false）。
+    Extrinsics gyroToColor;
+    /// ACCEL 出厂运动内参（M3-04）；无效条件同 gyroToColor。
+    MotionIntrinsics accelIntrinsics;
+    /// GYRO 出厂运动内参（M3-04）；无效条件同 gyroToColor。
+    MotionIntrinsics gyroIntrinsics;
     std::uint64_t sequence = 0;
 };
 

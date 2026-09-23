@@ -3,6 +3,7 @@
 add_library(rin_core STATIC
     core/camera_types.cpp
     core/camera_state_machine.cpp
+    core/imu_fuser.cpp
     core/pixel_format.cpp
 )
 add_library(rin::core ALIAS rin_core)
@@ -17,6 +18,7 @@ target_compile_features(rin_core PUBLIC cxx_std_20)
 
 add_library(rin_realsense_adapter STATIC
     adapters/realsense/realsense_camera_service.cpp
+    adapters/realsense/imu_motion_ingest.cpp
 )
 add_library(rin::realsense_adapter ALIAS rin_realsense_adapter)
 
