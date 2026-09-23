@@ -63,7 +63,7 @@
       intrinsics 读取、gyro→color 外参链、采集循环内 motion 帧轻量分支处理、
       `ImuFuser` 接入与姿态发布、restream/设备切换重建含 IMU。完成判据：离线
       （假实现/纯逻辑）测试覆盖分支与命令语义；真机冒烟按规范记录。
-- [ ] `M3-05` Core `ImuFuser` 实现（按 `DEC-010`）：纯逻辑、可注入初值与参数、
+- [x] `M3-05` Core `ImuFuser` 实现（按 `DEC-010`）：纯逻辑、可注入初值与参数、
       时间戳单调、复位语义幂等。完成判据：数值测试（静态重力对齐收敛、已知旋转
       序列跟踪误差上界、复位幂等）通过。
 - [ ] `M3-06` 3D 位姿视图控件（按 `DEC-011`）：固定世界坐标系（坐标轴 + 地面
@@ -90,7 +90,7 @@
 
 - [ ] `ctest`（debug/asan/ubsan/tsan 预设）全绿，新增：IMU 契约、融合数值、
       投影数学、关闭回归测试。
-- [ ] `ImuFuser` 数值验收（`M3-05` 判据）通过并留验证记录。
+- [x] `ImuFuser` 数值验收（`M3-05` 判据）通过并留验证记录。
 - [ ] 3D 投影数学测试通过（`M3-06`）。
 - [ ] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
 - [ ] 真机验收记录或规范化未执行记录（`M3-08`）。
@@ -266,3 +266,73 @@
   复位幂等）属 `M3-05`，本项仅交付接缝与假实现契约（imu_fuser 53 checks）；
   退出条件各小项均不因本单项完成而满足（投影数学与关闭回归测试未建、
   ctest 全绿含 tsan 全量未达成、真机矩阵属 `M3-08`），维持未勾。
+
+2026-09-24：`M3-05` Core `ImuFuser` 实现（Mahony 六轴）
+
+- 范围：按 DEC-010 冻结算法实现 `MahonyImuFuser`（`src/core/imu_fuser.{hpp,cpp}`：
+  纯逻辑、可注入初值与参数、时间戳单调守卫、复位幂等、GYRO 传播 + ACCEL 门限
+  修正的六轴融合）与工厂切换真身；DEC-010 数值验收测试与语义/边界锁定测试。
+  不含 viewer/UI（`M3-06`+）。
+- 依据：
+  - `2f2c08e` feat(core)：Mahony 实现（310 insertions，仅 `imu_fuser` 两文件，
+    默认 Kp=1.0/Ki=0.1 即 DEC-010 冻结组合）。
+  - `3e3c726` test(tests)：新增 `tests/test_imu_fuser_mahony.cpp`（897 行，
+    ctest `imu_fuser_mahony`，LABELS unit，95 checks，注册于
+    `tests/CMakeLists.txt:41-52`）；测试侧自建独立四元数库（Hamilton/旋转/
+    指数映射/ZYX 欧拉），固定种子合成数据按 DEC-010 冻结生成器参数
+    （dt_gyro=1/400s、dt_accel=1/250s、σ_g=0.002 rad/s、σ_a=0.02 m/s²、
+    注入零偏 [0.3, −0.2, 0.5]°/s），阈值全取 DEC-010 冻结值。
+  - `15f57d3` test(tests)：`test_realsense_hardware.cpp` 姿态快照单位范数
+    断言（Mahony 真机契约）。
+  - DEC-010（Accepted）：算法、参数与验证方式 1-8；`EXEC-06` 热路径约束。
+- 验证（独立验证执行；debug/asan/ubsan 门禁通过）：
+  - 配置/构建：`cmake --preset debug …`（同依赖源参数）→ Generating done；
+    `cmake --build build/debug --target test_imu_fuser_mahony` 编译链接成功。
+  - 直跑 `./build/debug/tests/test_imu_fuser_mahony` → `OK: 95 checks,
+    0 failures`。DEC-010 判据实测：静态 30°/20° 对齐初始误差 35.53° →
+    对齐后 0.078° → 4s 末 0.230°（阈值 <0.5°）；60s 旋转序列 roll/pitch
+    RMS 0.098°（≤0.5）/峰值 0.299°（≤2），全程单位范数偏差 8.7e-8；yaw
+    60s 末 Ki 开 18.77° < Ki 关 27.05° ≤ |b_z|·60s=30°；静态 60s 零偏
+    残差 x/y 0.070/0.098°/s（≤0.2；b_z=0.172 不可观仅记录，与 DEC-010
+    原型 0.061/0.111 同量级）；±2 m/s² 竖直突发门限窗口 RMS 0.352°（≤0.5）/
+    峰值 0.768°（≤2）；复位幂等：60s 流 reset/重放与全新实例 memcmp 逐位
+    一致、连续双 reset 一致、同进程确定性逐位一致；EXEC-06 热路径 10 万次
+    advance 全局 operator new 计数=0。
+  - 语义锁定：GYRO 首样本参考/乱序参考保持/非有限时间戳忽略（hasPose 接缝
+    仍置位）/零偏补偿传播/单步 10s 大 dt 精确指数映射保持单位范数；ACCEL
+    1g 门限一次性对齐（+1gZ 精确恒等、+1gX 最小旋转、门限外与零范数首样本
+    不对齐）、PI 修正单步解析对照（e=â×ĝ、b̂−=2Ki·e·dt、2Kp·e 修正、门限与
+    乱序下 dt 参考点按样本推进，与 `src/core/imu_fuser.hpp:74-75` 契约一致）、
+    Params 消毒与负增益不钳制、工厂返回 `MahonyImuFuser` 真身。
+  - 回归（工厂切 Mahony 受影响面）：`ctest --test-dir build/debug -L unit`
+    → 8/8 通过（含 imu_fuser 53 checks、motion_ingest 148 checks、
+    public_boundary 等）；`./build/debug/tests/test_realsense_hardware` →
+    exit=77 SKIP（udev 前置，与 `M3-04` 记录一致）。
+  - tsan：`cmake --preset tsan`（同依赖源参数）+ `setarch -R ctest
+    --test-dir build/tsan -R motion_ingest` → 1/1 Passed（Executor 生产者/
+    消费者跨上下文接缝以 Mahony 工厂真身复验）；`imu_fuser_mahony` tsan
+    1/1 Passed；另以单目标方式加跑 asan/ubsan 两预设的
+    `imu_fuser_mahony` → 均 1/1 Passed。
+  - 完成判据对照：数值测试（静态重力对齐收敛、已知旋转序列跟踪误差上界、
+    复位幂等）全部通过；roll/pitch 误差按 DEC-010 原型方法论取重力参考
+    口径 angle(R_estᵀẑ, R_trueᵀẑ)（对 yaw 规范自由度不敏感）。
+- 限制（以下均为观察项，非判据失败，已留档于测试文件头注释与提交说明）：
+  - 一次性对齐取最小旋转（旋转轴水平、不含绕重力轴分量），30°/20° 倾斜
+    开机的 ZYX 欧拉 yaw 初值实测 +5.41°：与 DEC-010"yaw 置 0"/`M3-03`
+    "yaw 初值为 0"的字面欧拉读数存在解释分歧（重力参考 roll/pitch 不受
+    影响且 e=â×ĝ 在该状态为 0 不再修正）；是否调整对齐构造或文档措辞交由
+    owner 裁定。
+  - ACCEL 乱序样本的 dt 参考点按样本推进（与 GYRO 的参考点保持不对称），
+    与头文件契约一致，测试按实现语义锁定。
+  - 实现者自述静态零偏残差 0.0007°/s 与本轮实测 0.070/0.098°/s 不符，均
+    远低于 0.2°/s 判据；实测值与 DEC-010 原型记录吻合。
+  - tsan 构建唯一告警为 `realsense_camera_service.cpp:945` 既有 sleepPoll
+    nodiscard，与本项无关。
+  - 完整 debug/asan/ubsan/tsan 全量门禁按交接约定由脚本复跑；真机冒烟因
+    udev 前置阻塞未执行（SKIP 77 已登记，补跑条件：安装 librealsense
+    udev 规则后复跑）。
+- 同步：本文件勾选 `M3-05`，并勾选退出条件"ImuFuser 数值验收（`M3-05`
+  判据）通过并留验证记录"（判据三项实测通过，记录即本条）；DEC-010 数值
+  验收闭环，无新增依赖缺口；退出条件其余小项（ctest 全绿含投影数学/关闭
+  回归测试、投影数学、关闭回归 + tsan、真机矩阵、文档收尾）分属
+  `M3-06`…`M3-08`，维持未勾。
