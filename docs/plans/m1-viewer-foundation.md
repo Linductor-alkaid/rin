@@ -64,6 +64,32 @@
 
 ## 验证记录
 
+### 2026-09-23：修复"画面仅左缘更新"渲染缺陷（EUI-20260923-003 绕行）
+
+- 缺陷：真机 viewer 两个画面仅左缘数像素彩条更新、其余全黑；此前 hardware 测试只断言
+  帧元数据（valid/宽高），全黑帧误判通过——暴露内容级断言盲区。
+- 排查（主循环执行，双探针归因）：
+  1. librealsense 原始帧落盘：color 100% 像素有效（848x480 RGB8 stride 2544）、
+     depth 57% 非零 → 采集侧正常；
+  2. 合成渐变最小探针（RGBA8 → ImageStream）：全黑、`submit()` 无失败 → EUI 渲染
+     链路嫌疑；
+  3. **上游官方 `examples/dynamic_texture.cpp` 复现**（竖向色带；
+     `GALLIUM_DRIVER=softpipe` 同样复现）→ 判定 EUI-NEO ImageStream 上传路径缺陷，
+     登记 EUI-20260923-003（P1）。
+- 修复（单一边界内绕行）：新增 `apps/viewer/gpu_frame_view.hpp`，UI/渲染线程以自有
+  GL 纹理上传 RGBA8 后经 `eui::image::importGpuImage` 导入绘制（官方支持路径），
+  revision + `app::requestUpdate()` 驱动重绘；分辨率切换重建纹理；`onShutdown`
+  释放引用。
+- 复验（真机，主循环 + Independent-Verification-Agent）：
+  - viewer 完整画面输出正常（RGB 笔记本场景 + 深度伪彩，截图
+    `viewer_gpuimage_switch640.png`：键盘切 640x360 后内参同步 fx 452.474/319.993）；
+    双截图哈希变化确认实时性；WM 关窗干净退出（日志 0 字节）。
+  - hardware 测试补内容级断言（非零占比阈值 + 采样重试 + 帧间校验和变化 + 序号
+    单调），41→67 checks；debug/asan/ubsan 三预设 4/4 通过（RGB 实测 100%、Depth
+    16.6–23.2%，阈值 30%/5%）。复验期间一次 Depth 占比塌陷经双探针归因为场景被
+    物理挪动的环境瞬态，恰好验证内容断言有效。
+- 同步：EUI 台账、设计文档 compose 流程、CHANGELOG。
+
 ### 2026-09-23：视觉层按 ZCode Design System 重构（DEC-005）并复验
 
 - 范围：新增 `apps/viewer/viewer_theme.hpp` 令牌层（语义色/字阶/圆角层级/间距节奏），

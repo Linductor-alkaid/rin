@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修复
+
+- viewer 视频画面仅左缘更新、其余全黑（EUI-20260923-003）：绕行 EUI-NEO ImageStream
+  动态纹理上传缺陷（官方 dynamic_texture 示例同环境可复现），改经外部 GPU 图像接口
+  （`GpuFrameView`：UI 线程自有 GL 纹理上传 + `importGpuImage` 导入）。真机复验
+  完整画面输出正常。
+
 ### 变更
 
 - viewer 视觉层按 ZCode Design System 令牌翻译重构（DEC-005）：语义色/字阶/圆角

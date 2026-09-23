@@ -92,9 +92,10 @@ run(StopToken):
   - 关闭点：`DslAppConfig::onShutdown`（主线程，GPU 设备销毁前）：`service.stop()`
     （内部 request_stop + worker stop 回收）→ `executor.shutdown(true)`；幂等，容忍
     初始化失败路径上资源未创建。
-- `compose()`（UI/渲染线程）只做：`try_load_newer_than` 取最新帧 → 提交
-  `eui::ImageStream`（EUI-NEO 渲染侧有界最新帧邮箱，容量 2）→ 组装控件。不阻塞等待，
-  不在 UI 线程调用 librealsense。
+- `compose()`（UI/渲染线程）只做：`try_load_newer_than` 取最新帧 → 上传 `GpuFrameView`
+  （自有 GL 纹理 + `importGpuImage` 导入，EUI-20260923-003 绕行；ImageStream 路径在
+  当前 GL 栈渲染异常且官方示例可复现）→ 组装控件。不阻塞等待，不在 UI 线程调用
+  librealsense。外部纹理非动画元素：有新帧时调用 `app::requestUpdate()` 驱动重绘。
 - 分辨率档位：`start()` 准入阶段在调用线程枚举设备能力并发布到能力通道；viewer 首次
   pump 后构建下拉档位（RGB8/Z16 同尺寸且 30fps 的交集，按面积排序）。
 - 内参面板：compose 消费 `IntrinsicsSnapshot` 邮箱，渲染文本。

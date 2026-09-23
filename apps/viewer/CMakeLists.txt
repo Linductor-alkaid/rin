@@ -2,6 +2,6 @@
 
 add_executable(rsv_viewer app.cpp)
 
-target_link_libraries(rsv_viewer PRIVATE rsv::realsense_adapter)
+target_link_libraries(rsv_viewer PRIVATE rsv::realsense_adapter OpenGL::GL)
 
 eui_neo_configure_app(rsv_viewer)

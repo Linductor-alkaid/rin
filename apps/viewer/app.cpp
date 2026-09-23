@@ -3,6 +3,7 @@
 // 视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局代码不出现一次性
 // 颜色/字号/圆角，层级靠文本层级与背景对比表达，阴影仅用于浮层。
 
+#include "gpu_frame_view.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -26,7 +27,6 @@
 namespace viewer {
 namespace {
 
-using eui::ImageStream;
 using namespace viewer::theme;
 using rsv::FrameKind;
 using rsv::StreamRequest;
@@ -42,8 +42,8 @@ struct ResolutionUiOption {
 struct ViewerContext {
     executor::Executor executor;
     std::shared_ptr<rsv::ICameraService> service;
-    std::shared_ptr<ImageStream> rgbStream = std::make_shared<ImageStream>(2);
-    std::shared_ptr<ImageStream> depthStream = std::make_shared<ImageStream>(2);
+    GpuFrameView rgbView;
+    GpuFrameView depthView;
 
     std::uint64_t lastRgbSequence = 0;
     std::uint64_t lastDepthSequence = 0;
@@ -100,15 +100,6 @@ void ensureStarted() {
         return true;
     }();
     (void)once;
-}
-
-void submitToStream(const std::shared_ptr<ImageStream>& stream, const rsv::Frame& frame) {
-    if (!frame.valid()) {
-        return;
-    }
-    const eui::ImageFrame image{frame.pixels, frame.width, frame.height, frame.stride,
-                                eui::ImagePixelFormat::RGBA8, frame.sequence};
-    (void)stream->submit(image);
 }
 
 const char* distortionName(rsv::DistortionModel model) {
@@ -217,14 +208,20 @@ void ViewerContext::pump() {
         return;
     }
 
+    bool frameUpdated = false;
     rsv::Frame frame;
     if (service->tryLoadFrame(FrameKind::Rgb, lastRgbSequence, frame)) {
-        submitToStream(rgbStream, frame);
+        rgbView.update(frame);  // UI/渲染线程上传（EUI-20260923-003 绕行）
         rgbMeta = std::to_string(frame.width) + " x " + std::to_string(frame.height);
+        frameUpdated = true;
     }
     if (service->tryLoadFrame(FrameKind::Depth, lastDepthSequence, frame)) {
-        submitToStream(depthStream, frame);
+        depthView.update(frame);
         depthMeta = std::to_string(frame.width) + " x " + std::to_string(frame.height);
+        frameUpdated = true;
+    }
+    if (frameUpdated) {
+        app::requestUpdate();  // 外部纹理非动画元素，需显式请求重绘
     }
 
     rsv::IntrinsicsSnapshot snapshot;
@@ -266,6 +263,8 @@ void ViewerContext::shutdown() {
         service->stop();
         service.reset();
     }
+    rgbView.release();    // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
+    depthView.release();
     if (started) {
         (void)executor.shutdown(true);
     }
@@ -316,7 +315,7 @@ void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float width) {
 /// 画面卡：card 底 + cardBorder 1px + 圆角 xl；内嵌 surface 画面区圆角 md；
 /// 角标为 caption 次级标签与 xs 元数据（文字层级表达密度，不加多余描边）。
 void composeViewCard(eui::Ui& ui, const char* id, float width, float height, const char* label,
-                     const std::string& meta, const std::shared_ptr<ImageStream>& stream) {
+                     const std::string& meta, GpuFrameView& view) {
     const float pad = kSpace3;
     const float labelHeight = kFontCaption + kSpace1;
     const float areaY = pad + labelHeight + kSpace1;
@@ -356,8 +355,8 @@ void composeViewCard(eui::Ui& ui, const char* id, float width, float height, con
             ui.image(std::string(id) + ".img")
                 .position(pad, areaY)
                 .size(width - pad * 2.0f, areaHeight)
-                .stream(stream)
-                .fit(eui::ImageFit::Contain)
+                .texture(view.image(), view.revision())
+                .contain()
                 .radius(kRadiusMd)
                 .build();
         })
@@ -540,9 +539,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 .gap(kSpace3)
                 .content([&] {
                     composeViewCard(ui, "view.rgb", viewWidth, viewsHeight, "RGB", ctx.rgbMeta,
-                                    ctx.rgbStream);
+                                    ctx.rgbView);
                     composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth",
-                                    ctx.depthMeta, ctx.depthStream);
+                                    ctx.depthMeta, ctx.depthView);
                 })
                 .build();
             composeIntrinsicsCard(ui, ctx, contentWidth, intrinsicsHeight, pad,

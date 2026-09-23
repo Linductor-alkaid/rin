@@ -44,6 +44,51 @@ bool pollUntil(std::chrono::steady_clock::duration budget, Pred&& pred) {
     }
 }
 
+// --- 内容级断言参数（真机 D435IF 暗室实测，2026-09-23）---
+// 缺陷背景：渲染侧 eui::ImageStream 输出"全黑帧"（仅左缘彩条），帧元数据 valid()
+// 全部通过，暴露内容级盲区；下列断言对采集帧的像素内容把关。
+// 实测依据：librealsense 原始帧落盘 RGB 100% 像素非零、Z16 57% 非零；
+// 阈值取实测量 ~1/3 保守值。
+constexpr double kRgbMinNonZeroRatio = 0.30;    // 实测 100% -> 保守 30%
+constexpr double kDepthMinNonZeroRatio = 0.05;  // 实测 57%  -> 保守 5%
+// 偶发过暗帧重试窗口：最多连续采样 N 帧，取窗口内最大占比判定。
+constexpr int kContentSampleFrames = 10;
+
+/// 非零像素占比：R/G/B 任一内容通道非零的像素比例。
+/// 统计口径排除 alpha——转换器将 A 恒置 255，计入 A 会把全黑帧也判为非零
+/// （正是本次缺陷形态），故只看内容通道。
+double contentNonZeroRatio(const Frame& frame) {
+    if (!frame.pixels || frame.width == 0 || frame.height == 0) {
+        return 0.0;
+    }
+    const std::uint8_t* data = frame.pixels->data();
+    std::uint64_t nonZero = 0;
+    for (std::uint32_t row = 0; row < frame.height; ++row) {
+        const std::uint8_t* rowPtr = data + static_cast<std::size_t>(row) * frame.stride;
+        for (std::uint32_t col = 0; col < frame.width; ++col) {
+            const std::uint8_t* px = rowPtr + static_cast<std::size_t>(col) * 4;
+            if (px[0] != 0 || px[1] != 0 || px[2] != 0) {
+                ++nonZero;
+            }
+        }
+    }
+    return static_cast<double>(nonZero) /
+           (static_cast<std::uint64_t>(frame.width) * frame.height);
+}
+
+/// 全帧像素字节 FNV-1a 64 校验和（帧间变化检测）。
+std::uint64_t frameChecksum(const Frame& frame) {
+    if (!frame.pixels) {
+        return 0;
+    }
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const std::uint8_t byte : *frame.pixels) {
+        hash ^= byte;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
 /// 冒烟主体。返回 0 = 通过（RSV_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
 int runSmokeTest(ICameraService& service) {
     const rsv::StreamRequest baseRequest{640, 480, 30, 640, 480, 30};  // D435if RGB8/Z16 均支持
@@ -129,6 +174,7 @@ int runSmokeTest(ICameraService& service) {
         RSV_CHECK(rgbFrame.kind == FrameKind::Rgb);
         RSV_CHECK(rgbFrame.width > 0);
         RSV_CHECK(rgbFrame.height > 0);
+        RSV_CHECK(rgbFrame.sequence > 0);
         RSV_CHECK_EQ(rgbFrame.width, 640u);
         RSV_CHECK_EQ(rgbFrame.height, 480u);
     }
@@ -137,11 +183,70 @@ int runSmokeTest(ICameraService& service) {
         RSV_CHECK(depthFrame.kind == FrameKind::Depth);
         RSV_CHECK(depthFrame.width > 0);
         RSV_CHECK(depthFrame.height > 0);
+        RSV_CHECK(depthFrame.sequence > 0);
         RSV_CHECK_EQ(depthFrame.width, 640u);
         RSV_CHECK_EQ(depthFrame.height, 480u);
     }
     std::printf("hardware: first rgb frame %.0f ms, first depth frame %.0f ms\n", firstRgbMs,
                 firstDepthMs);
+
+    // --- 2b) 内容级断言：非零像素占比阈值 + 帧间校验和变化（防"静止纹理"假阳性）---
+    // 最多连续采样 kContentSampleFrames 帧，占比取窗口最大（容忍偶发过暗帧）；
+    // 变化检测要求窗口内存在至少一对相邻帧校验和不同（逐帧全字节 FNV-1a）。
+    const auto sampleContent = [&](FrameKind kind, std::uint64_t& mailboxSequence,
+                                   double threshold, const char* label) {
+        int framesSeen = 0;
+        double maxRatio = 0.0;
+        double ratios[kContentSampleFrames] = {};
+        bool checksumVariation = false;
+        bool havePreviousChecksum = false;
+        bool haveSequence = false;
+        std::uint64_t previousChecksum = 0;
+        std::uint64_t previousSequence = 0;
+        Frame frame;
+        pollUntil(5s, [&] {
+            if (framesSeen >= kContentSampleFrames) {
+                return true;
+            }
+            if (!service.tryLoadFrame(kind, mailboxSequence, frame)) {
+                return false;  // 尚无新帧，轮询重试
+            }
+            ++framesSeen;
+            RSV_CHECK(frame.valid());
+            RSV_CHECK_EQ(frame.width, 640u);   // 采样期档位未变，尺寸断言逐帧维持
+            RSV_CHECK_EQ(frame.height, 480u);
+            if (haveSequence) {
+                RSV_CHECK(frame.sequence > previousSequence);  // 邮箱序号严格单调
+            }
+            previousSequence = frame.sequence;
+            haveSequence = true;
+
+            ratios[framesSeen - 1] = contentNonZeroRatio(frame);
+            if (ratios[framesSeen - 1] > maxRatio) {
+                maxRatio = ratios[framesSeen - 1];
+            }
+            const std::uint64_t checksum = frameChecksum(frame);
+            if (havePreviousChecksum && checksum != previousChecksum) {
+                checksumVariation = true;  // 任一相邻帧对内容不同即通过
+            }
+            previousChecksum = checksum;
+            havePreviousChecksum = true;
+            return maxRatio >= threshold && checksumVariation;  // 双条件满足可提前结束
+        });
+        std::printf("hardware: %s content over %d frames: max non-zero ratio %.1f%% "
+                    "(threshold >= %.0f%%), checksum variation=%s, ratios:",
+                    label, framesSeen, maxRatio * 100.0, threshold * 100.0,
+                    checksumVariation ? "yes" : "no");
+        for (int i = 0; i < framesSeen; ++i) {
+            std::printf(" %.1f%%", ratios[i] * 100.0);
+        }
+        std::printf("\n");
+        RSV_CHECK(framesSeen >= 2);  // 变化检测至少需要两帧
+        RSV_CHECK(checksumVariation);
+        RSV_CHECK(maxRatio >= threshold);
+    };
+    sampleContent(FrameKind::Rgb, rgbSequence, kRgbMinNonZeroRatio, "rgb");
+    sampleContent(FrameKind::Depth, depthSequence, kDepthMinNonZeroRatio, "depth");
 
     // --- 3) 内参快照 color/depth valid()，且与当前档位一致 ---
     rsv::IntrinsicsSnapshot intrinsics;
@@ -183,6 +288,8 @@ int runSmokeTest(ICameraService& service) {
 
     // --- 5) requestResolution 848x480：统一 6s 期限等 ResolutionChanged + 新帧 ---
     std::string requestError = "<untouched>";
+    const std::uint64_t rgbSeqBeforeChange = rgbSequence;
+    const std::uint64_t depthSeqBeforeChange = depthSequence;
     RSV_CHECK(service.requestResolution(altRequest, &requestError));
     bool changedEvent = false;
     bool rgb848Arrived = false;
@@ -218,11 +325,19 @@ int runSmokeTest(ICameraService& service) {
         RSV_CHECK(rgb848.valid());
         RSV_CHECK_EQ(rgb848.width, 848u);
         RSV_CHECK_EQ(rgb848.height, 480u);
+        RSV_CHECK(rgb848.sequence > rgbSeqBeforeChange);  // 跨 restream 序号前移
+        const double ratio = contentNonZeroRatio(rgb848);
+        std::printf("hardware: 848x480 rgb non-zero ratio %.1f%%\n", ratio * 100.0);
+        RSV_CHECK(ratio >= kRgbMinNonZeroRatio);
     }
     if (depth848Arrived) {
         RSV_CHECK(depth848.valid());
         RSV_CHECK_EQ(depth848.width, 848u);
         RSV_CHECK_EQ(depth848.height, 480u);
+        RSV_CHECK(depth848.sequence > depthSeqBeforeChange);
+        const double ratio = contentNonZeroRatio(depth848);
+        std::printf("hardware: 848x480 depth non-zero ratio %.1f%%\n", ratio * 100.0);
+        RSV_CHECK(ratio >= kDepthMinNonZeroRatio);
     }
     std::printf("hardware: ResolutionChanged after %.0f ms, 848x480 rgb=%s depth=%s\n", changedMs,
                 rgb848Arrived ? "ok" : "missing", depth848Arrived ? "ok" : "missing");
