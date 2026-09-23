@@ -8,7 +8,9 @@
 
 M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完成并通过验收
 （v0.1.0、v0.2.0 已发布；见 [m2-linux-packaging.md](m2-linux-packaging.md) 验证
-记录）；后续里程碑未立项。
+记录）。2026-09-24 立项 M3-M5（IMU 位姿视图、图像处理节点工作流、工作台 UI），
+由自治开发工作流按工程规范逐项推进；关键实现策略先经调研决策（DEC-010..015）
+冻结后实施。
 
 ## 交付边界（SCOPE）
 
@@ -28,6 +30,17 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
 - [x] `SCOPE-06` 项目标识统一更名 Rin，Linux 自包含 deb 分发（捆绑 librealsense2 +
       udev 规则）与 CI 工件导出（[DEC-008](../decisions/DEC-008-project-rename-to-rin.md)、
       [DEC-009](../decisions/DEC-009-self-contained-deb-distribution.md)）。
+- [ ] `SCOPE-07` IMU 姿态通路与 3D 位姿视图：ACCEL/GYRO 混合流采集、六轴姿态
+      融合（Core 纯逻辑）、固定世界坐标系下相机位姿 3D 实时视图（视锥 + 坐标轴）
+      与 IMU 状态面板（M3，[DEC-010](../decisions/)、[DEC-011](../decisions/)）。
+- [ ] `SCOPE-08` 图像处理节点库与工作流引擎：裁切、降分辨率、自定义卷积核、
+      高斯模糊、直方图均衡、FFT 高通/低通/带通节点，DAG 工作流引擎（拓扑执行、
+      逐节点中间产物、每节点耗时与端到端 FPS 统计，执行经 Executor）（M4，
+      [DEC-012](../decisions/)、[DEC-013](../decisions/)）。
+- [ ] `SCOPE-09` 工作台 UI：页面导航（预览 / 位姿 / 图像工作流 / 设置）、拖拽式
+      节点编辑器（调色板、连线、参数面板、中间结果查看）、性能面板与运行控制，
+      界面信息架构与操作逻辑拓扑树设计文档（M5，
+      [DEC-014](../decisions/)、[DEC-015](../decisions/)）。
 
 ## 不可破坏的架构约束（RULE）
 
@@ -43,6 +56,9 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
   采集与处理不在该线程运行。
 - `RULE-06` 所有依赖分别维护独立反馈台账（executor：`docs/executor_feedback/ledger.md`；
   其他：`docs/dependency_feedback/<dep>/ledger.md`），缺口必须登记后才能实施绕行。
+- `RULE-07` CPU 密集处理（IMU 融合、图像工作流节点执行）不得在 EUI 渲染线程运行；
+  其并发承载必须经 Executor 公开能力并可观察（`EXEC-06`/`EXEC-07`），统计展示只
+  消费 Executor/comm 设施，不建平行监控。
 
 ## Executor 并发边界（EXEC）
 
@@ -59,6 +75,15 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
   worker stop 回收 → `Executor::shutdown(true)`，全部在主线程 `onShutdown` 回调完成。
 - `EXEC-05` 无独立周期任务需求（当前）；若后续引入统计/心跳，使用 `submit_periodic`
   并登记条目。
+- `EXEC-06` IMU 采样处理：ACCEL/GYRO 帧在采集 blocking worker 循环内分支处理
+  （有界校验 + 融合推进 + `LatestMailbox` 最新态投递，无堆分配热路径）；
+  `ImuFuser` 为 Core 纯逻辑，在采集 worker 内按样本推进；不新增线程。若
+  `DEC-010` 要求独立融合节拍，改用 Executor timer/realtime 能力并更新本条；
+  句柄归属与取消路径沿用 `EXEC-01` 模式。
+- `EXEC-07` CV 工作流执行：帧驱动执行以 Executor 有限任务承载（`submit_auto` +
+  有界在飞 + 显式丢弃策略与统计暴露）；节点为同步 CPU 工作单元；结果经
+  `LatestMailbox`/`DoubleBuffer` 回 UI；不新增线程设施；健康度经 comm 统计与
+  Executor 监控设施观察。
 
 ## 里程碑索引
 
@@ -66,6 +91,9 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
 | --- | --- | --- | --- |
 | M1 viewer 基础能力 | [m1-viewer-foundation.md](m1-viewer-foundation.md) | 无 | v0.1.0 |
 | M2 更名与 Linux 自包含分发 | [m2-linux-packaging.md](m2-linux-packaging.md) | M1 | v0.2.0 |
+| M3 IMU 位姿通路与 3D 视图 | [m3-imu-pose-view.md](m3-imu-pose-view.md) | M1 | v0.3.0 |
+| M4 图像处理节点与工作流引擎 | [m4-cv-node-workflow.md](m4-cv-node-workflow.md) | 无（建议 M3 后） | v0.4.0 |
+| M5 工作台 UI（导航 / 节点编辑器 / 性能面板） | [m5-ui-workbench.md](m5-ui-workbench.md) | M3、M4 | v0.5.0 |
 
 ## 暂定决策（未冻结）
 
@@ -87,6 +115,20 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
 - `DEC-009`（已记录）自包含 deb 分发：librealsense2 改 external 源码构建并随包
   捆绑（私有库目录 + rpath + udev 规则 + 桌面入口），依赖声明由 shlibdeps 生成；
   CI 导出 deb 工件。
+- `DEC-010`（暂定，M3 经 M3-01 调研冻结）IMU 姿态融合算法：暂定 Mahony 类互补
+  滤波（六轴、零偏粗估），以调研对比与数值验收冻结。
+- `DEC-011`（暂定，M3 经 M3-02 原型冻结）3D 位姿视图渲染路径：暂定 CPU 投影 +
+  EUI-NEO `polygon`/`rect` 原语（备选 shadertoy GLSL），以最小原型证据冻结。
+- `DEC-012`（暂定，M4 经 M4-01 基准冻结）图像算子实现策略：暂定自研算子 +
+  小型 FFT 第三方库（备选引入 OpenCV external pin），以构建/许可证/性能基准冻结；
+  新依赖按 `RULE-04` 登记。
+- `DEC-013`（暂定，M4 经 M4-07 实现冻结）工作流执行模型：暂定"最新帧驱动 +
+  有界在飞 + 显式丢弃 + comm 统计暴露"。
+- `DEC-014`（暂定，M5 经 M5-01 调研冻结）工作台信息架构：暂定"单窗口 + 页面
+  导航（预览 / 位姿 / 图像工作流 / 设置）"，以现代工具调研与设计文档冻结。
+- `DEC-015`（暂定，M5 经 M5-01 调研冻结）节点编辑器实现路径：暂定 EUI-NEO
+  原语自研画布（`rect`+`mousearea`+`polygon`+`ui.state`），交互几何下沉为平台
+  无关纯逻辑。
 
 ## 通用完成定义（DOD）
 
@@ -101,6 +143,10 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
 - `POST-01` 点云/对齐/录制能力：出现需要深度对齐彩色或离线回放的需求时立项。
 - `POST-02` 多设备支持：出现多相机接入需求时立项。
 - `POST-03` Windows/Android 平台矩阵：出现对应部署需求时立项。
+- `POST-04` 工作流图持久化（保存/加载 JSON）与节点库扩展（边缘检测、形态学、
+  色彩空间、阈值、中值滤波等）：M5 验收后按用户需求立项。
+- `POST-05` T26x / `RS2_STREAM_POSE` 位姿源与 VIO/SLAM：出现对应硬件或算法需求
+  时立项；M3 的 `ImuFuser` 边界应不阻碍替换为外部位姿源。
 
 ## 建议拆分顺序
 
