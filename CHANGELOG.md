@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- （暂无）
+
+## [0.2.0] - 2026-09-24（M2：Rin 更名与 Linux 自包含分发）
+
 ### 新增
 
 - Linux 自包含 deb 分发（DEC-009）：`cpack -G DEB` 产出 `rin_<版本>_amd64.deb`，
