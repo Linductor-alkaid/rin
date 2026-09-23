@@ -34,6 +34,7 @@ set(EUI_ENABLE_TRAY OFF)
 include(Dependencies)
 
 find_package(Threads REQUIRED)
+find_package(OpenGL REQUIRED)  # viewer 外部 GPU 图像绕行（EUI-20260923-003）需要 GL 上传
 
 # Sanitizer 预设（工程规范 11：asan/ubsan 常规，tsan 按需）。
 # 仅作用于本仓库目标（声明位于依赖引入之后），第三方静态库不被插桩。
