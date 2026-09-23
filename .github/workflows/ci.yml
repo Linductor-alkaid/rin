@@ -1,0 +1,124 @@
+name: ci
+
+# push 到任意分支触发构建/测试；release 预设额外产出 deb 工件；
+# v* tag 触发将 deb 附着到 GitHub Release。
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build & test (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # tsan 预设需 setarch -R 旁路本机 ASLR 限制，不进 CI 矩阵（见 CHANGELOG 已知限制）。
+        preset: [debug, asan, ubsan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache pkg-config \
+            libusb-1.0-0-dev libudev-dev \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.preset }}-
+
+      - name: Configure
+        run: >-
+          cmake --preset ${{ matrix.preset }}
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure
+
+  package:
+    name: deb package
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache pkg-config \
+            libusb-1.0-0-dev libudev-dev \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-release-${{ github.sha }}
+          restore-keys: |
+            ccache-release-
+            ccache-debug-
+
+      - name: Configure (release, no tests)
+        run: >-
+          cmake --preset release
+          -DRIN_BUILD_TESTS=OFF
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build/release
+
+      - name: Package (deb)
+        run: cmake --build build/release --target package
+
+      - name: Verify package
+        run: |
+          dpkg-deb -I build/release/dist/*.deb
+          dpkg-deb -c build/release/dist/*.deb
+          rm -rf /tmp/rin-deb-check
+          dpkg-deb -x build/release/dist/*.deb /tmp/rin-deb-check
+          readelf -d /tmp/rin-deb-check/usr/bin/rin | grep -F 'Library runpath: [$ORIGIN/../lib/rin]'
+          test -x /tmp/rin-deb-check/usr/lib/rin/librealsense2.so.*.*
+          test -f /tmp/rin-deb-check/usr/lib/udev/rules.d/99-realsense-libusb.rules
+          test -f /tmp/rin-deb-check/usr/share/applications/rin.desktop
+          test -f /tmp/rin-deb-check/usr/share/icons/hicolor/512x512/apps/rin.png
+          if ldd /tmp/rin-deb-check/usr/bin/rin 2>/dev/null | grep -q "not found"; then
+            ldd /tmp/rin-deb-check/usr/bin/rin
+            exit 1
+          fi
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rin-deb
+          path: build/release/dist/*.deb
+          if-no-files-found: error
+
+      - name: Attach deb to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            build/release/dist/*.deb ||
+          gh release upload "$GITHUB_REF_NAME" --clobber build/release/dist/*.deb
