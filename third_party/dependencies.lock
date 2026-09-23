@@ -1,0 +1,8 @@
+# realsense-vision 第三方依赖锁定清单
+# 格式（工程规范 9.1）：name|url|pinned_commit|expected_commit|submodule|class
+# class 取值：external（CMake 源码引入）、system（使用系统安装，find_package 校验版本）
+# 配置阶段由 cmake/Dependencies.cmake 校验：本地源目录（RSV_<NAME>_SOURCE_DIR）HEAD 必须等于
+# pinned_commit；否则按 URL 拉取 pinned_commit。class=system 依赖按 expected 版本 find_package 校验。
+executor|https://github.com/Linductor-alkaid/executor.git|4731b16493ae996311a9e85f55bd137aee69418a|4731b16493ae996311a9e85f55bd137aee69418a|OFF|external
+eui-neo|https://github.com/sudoevolve/EUI-NEO.git|782c56993dc1890e0589e2100cfa74322bb0e0bf|782c56993dc1890e0589e2100cfa74322bb0e0bf|OFF|external
+realsense2|https://github.com/realsenseai/librealsense.git|7c3ee3fb7c640e9f315e663907208cb56c4febfd|2.58.3|OFF|system

@@ -1,0 +1,29 @@
+# Build trees
+build/
+build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+_deps/
+FETCHCONTENT_HOME/
+
+# IDE
+.vscode/
+.idea/
+.cache/
+compile_commands.json.local
+
+# Logs / artifacts
+*.log
+*.trace
+# 验收证据截图（小体积、无敏感内容）随仓库留档
+screenshots/*.png
+!screenshots/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
