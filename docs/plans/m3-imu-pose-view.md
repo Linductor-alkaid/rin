@@ -50,9 +50,10 @@
       可测试性，给出选型理由、备选与数值验收方案。完成判据：`DEC-010` 状态
       `Accepted`，含依据、备选与可执行的验收方法。
       （[DEC-010](../decisions/DEC-010-imu-attitude-fusion.md)）
-- [ ] `M3-02` 调研并冻结 3D 位姿视图渲染路径（`DEC-011`）：在 EUI-NEO 可用原语
+- [x] `M3-02` 调研并冻结 3D 位姿视图渲染路径（`DEC-011`）：在 EUI-NEO 可用原语
       中选定实现，产出最小原型证据（渲染相机视锥 + 坐标轴，姿态驱动旋转）。
       完成判据：`DEC-011` `Accepted` + 原型记录（文件、命令、证据）。
+      （[DEC-011](../decisions/DEC-011-pose-view-rendering.md)）
 - [ ] `M3-03` Core IMU 数据契约与通道：`MotionSample`（三轴比力/角速度、设备时间
       戳、序列）、`ImuSnapshot`（姿态四元数、源频率统计、序列）、
       `ICameraService::tryLoadMotion()/tryLoadPose()`、`StreamRequest` IMU 使能位、
@@ -79,7 +80,8 @@
 
 - 六轴陀螺零偏漂移导致姿态缓慢发散：属传感器物理限制，选型时评估零偏估计，
   文档如实披露使用边界。
-- EUI-NEO 渲染路径能力未知风险：`M3-02` 原型前置降险；若发现框架缺口按
+- EUI-NEO 渲染路径能力未知风险：已由 `M3-02` 原型降险解除（[DEC-011](../decisions/DEC-011-pose-view-rendering.md)
+  冻结 CPU 投影 + `polygon` 原语，未发现框架缺口）；控件实现期的框架问题仍按
   `docs/dependency_feedback/eui-neo/ledger.md` 流程登记。
 - IMU 帧率（约 100-400Hz）对采集循环的影响：motion 分支只做有界校验 + 邮箱
   最新态投递 + 融合推进（无堆分配热路径），视频帧处理不受影响需测试佐证。
@@ -123,3 +125,35 @@
   合成数据结果，真机噪声/零偏适配由 `M3-08` D435if 冒烟复核。
 - 同步：新建 `docs/decisions/DEC-010-imu-attitude-fusion.md`（Accepted）；总计划
   `DEC-010` 行改为（已记录）；本文件勾选 `M3-01`。
+
+2026-09-24：`M3-02` 调研并冻结 3D 位姿视图渲染路径（[DEC-011](../decisions/DEC-011-pose-view-rendering.md) Accepted）
+
+- 范围：EUI-NEO 可用原语中 3D 位姿视图渲染路径选型与决策冻结，含最小原型
+  证据；不含控件实现（由 `M3-06` 承接）。
+- 依据（pinned EUI-NEO，`third_party/dependencies.lock` commit `782c5699`）：
+  - 图元面仅有 `Row/Column/Stack/Flow/Rect/Polygon/Text/Image/Svg/Shadertoy`，
+    无 3D 视口、无逐顶点 3D 坐标：`polygon` 点集为元素平面内 2D `Vec2`
+    （`core/dsl.h:1121`）。
+  - 2.5D transform 固定按 Rz·Ry·Rx 欧拉序合成（`core/runtime/runtime_geometry.h:153-213`），
+    四元数→欧拉在 pitch ≈ ±90° 奇异，且无深度缓冲；仅适合平面卡片动效。
+  - `polygon` 独立 shader 按边段覆盖率抗锯齿；框架折线图即以 capsule polygon
+    画线（`components/linechart.h:151-155`）；逐帧点集更新有脏区支持
+    （`core/runtime/runtime_update.h:853-864`）；跨线程 UI 唤醒为公开能力
+    （`include/eui/app.h:49`、`core/platform/platform.cpp:758-761`）。
+- 验证：一次性原型（`/tmp/rin-dec011-proto`，standalone CMake 挂 pinned
+  `eui-neo-src`，g++ 13.3.0 Release，GLFW + OpenGL 后端；脚本为调研证据不入库）
+  实测：每帧 32 条线段 quad + 5 个半透明面片（网格/世界轴/视锥/相机轴），
+  CPU 投影 + 点集组装 avg 38-46 µs/帧（max ≤162 µs）；EUI 运行时标题统计
+  55-56 FPS、GPU 0.58-0.64 ms/帧、Dirty 100%/帧连续重绘；双姿态对照运行
+  （q=(0.904,0.215,0.306,-0.206) vs q=(0.974,-0.112,-0.168,0.104)）世界系
+  不变、视锥朝向可见差异（截图 md5 `9f99606e…`/`45c20ec1…`），姿态驱动旋转
+  成立。
+- 结论：冻结为 CPU 投影 + EUI-NEO `polygon` 原语；投影数学为 Core 纯逻辑
+  （`RULE-01`，支撑 `M3-06` 投影数学单测）；compose 期组装属有界工作
+  （`RULE-05`），融合仍在采集 worker（`EXEC-06` 不变）。
+- 限制：XWayland 下窗口 X 像素图不随后续 GL 呈现更新，连续动画活性以运行时
+  统计与双姿态对照证明（取证手段限制，非渲染缺陷），真机实时性由 `M3-08`
+  复核；未对 shadertoy GLSL 与 2.5D transform 路径做原型实测，否决依据为
+  pinned 源码/文档结构分析与本决策记录（可测性、奇异点、工具链成本）。
+- 同步：新建 `docs/decisions/DEC-011-pose-view-rendering.md`（Accepted）；总计划
+  `DEC-011` 行改为（已记录）；本文件勾选 `M3-02`；EUI-NEO 台账无新增缺口。
