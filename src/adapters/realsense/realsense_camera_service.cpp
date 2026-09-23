@@ -40,10 +40,15 @@ double steadyMs() {
 }
 
 struct ControlCommand {
-    enum class Kind { Restream, SelectDevice } kind = Kind::Restream;
+    enum class Kind { Restream, SelectDevice, SetDepthColorScheme } kind = Kind::Restream;
     StreamRequest request;
     std::string serial;
+    DepthColorScheme scheme = DepthColorScheme::Jet;
 };
+
+const char* depthSchemeName(DepthColorScheme scheme) {
+    return scheme == DepthColorScheme::Grayscale ? "grayscale" : "jet";
+}
 
 /// 热插拔监视桥（DEC-006）：librealsense 回调线程只做 alive 检查 + 有界投递
 /// （AGENTS.md 规则 11）；析构方在互斥下置 alive=false，杜绝析构窗口悬挂。
@@ -91,6 +96,7 @@ private:
     std::string requestedSerial_;  // 用户选择意图（粘性，跨插拔保留）
     std::string activeSerial_;     // 当前流送设备
     StreamRequest pendingResolution_;  // 最近一次待应用的分辨率请求
+    DepthColorScheme depthColorScheme_ = DepthColorScheme::Jet;  // 深度配色（DEC-007，粘性）
     std::string errorMessage_;     // worker 内最近一次失败描述
     std::uint64_t lastCommandSequence_ = 0;
     std::uint64_t lastHotPlugSequence_ = 0;
@@ -130,6 +136,7 @@ public:
     StartOutcome start(const StreamRequest& request) override;
     bool requestResolution(const StreamRequest& request, std::string* error) override;
     bool requestDevice(const std::string& serial, std::string* error) override;
+    bool requestDepthColorScheme(DepthColorScheme scheme, std::string* error) override;
     void stop() override;
 
     [[nodiscard]] CameraServiceState state() const override { return machine_.state(); }
@@ -446,6 +453,14 @@ std::string CaptureLoop::resolveTarget(rs2::context& context, executor::StopToke
                                         "device selected: " + command.serial);
                     break;  // 立即重新解析
                 }
+                if (command.kind == ControlCommand::Kind::SetDepthColorScheme &&
+                    command.scheme != depthColorScheme_) {
+                    // 等待态可预设深度配色（DEC-007）：接入后按所选配色出流。
+                    depthColorScheme_ = command.scheme;
+                    owner_.publishEvent(ServiceEventKind::Info,
+                                        std::string("depth palette: ") +
+                                            depthSchemeName(command.scheme));
+                }
             }
             int hotPlug = 0;
             std::uint64_t newHotPlug = lastHotPlugSequence_;
@@ -512,6 +527,13 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                 selectChanged = true;
                 owner_.publishEvent(ServiceEventKind::Info,
                                     "device selected: " + command.serial);
+            } else if (command.kind == ControlCommand::Kind::SetDepthColorScheme &&
+                       command.scheme != depthColorScheme_) {
+                // 仅切换后续帧的转换配色（DEC-007）：不重流，下一帧即生效。
+                depthColorScheme_ = command.scheme;
+                owner_.publishEvent(ServiceEventKind::Info,
+                                    std::string("depth palette: ") +
+                                        depthSchemeName(command.scheme));
             }
         }
         if (stopToken.stop_requested()) {
@@ -616,9 +638,10 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
         const auto depthHeight = static_cast<std::uint32_t>(depth.get_height());
         const auto depthStrideUnits =
             static_cast<std::uint32_t>(depth.get_stride_in_bytes() / sizeof(std::uint16_t));
-        if (convertDepth16ToRgba8Jet(reinterpret_cast<const std::uint16_t*>(depth.get_data()),
-                                     depthWidth, depthHeight, depthStrideUnits, depthScale,
-                                     kDepthNearMeters, kDepthFarMeters, rgba)) {
+        if (convertDepth16ToRgba8(reinterpret_cast<const std::uint16_t*>(depth.get_data()),
+                                  depthWidth, depthHeight, depthStrideUnits, depthScale,
+                                  kDepthNearMeters, kDepthFarMeters, depthColorScheme_,
+                                  rgba)) {
             publishFrame(owner_.depthMailbox(), FrameKind::Depth, depthWidth, depthHeight,
                          depthWidth * 4u, sequence, depth.get_timestamp(), std::move(rgba));
         }
@@ -668,6 +691,29 @@ bool RealSenseCamera::requestDevice(const std::string& serial, std::string* erro
     ControlCommand command;
     command.kind = ControlCommand::Kind::SelectDevice;
     command.serial = serial;
+    if (!commands_.try_publish(command)) {
+        if (error != nullptr) {
+            *error = "command mailbox rejected request";
+        }
+        return false;
+    }
+    return true;
+}
+
+/// 深度配色切换命令（Waiting/Opening/Streaming/Restreaming 有效；DEC-007，粘性）。
+bool RealSenseCamera::requestDepthColorScheme(DepthColorScheme scheme, std::string* error) {
+    const CameraServiceState current = machine_.state();
+    if (current == CameraServiceState::Idle || current == CameraServiceState::Failed ||
+        current == CameraServiceState::Stopping) {
+        if (error != nullptr) {
+            *error = "cannot change depth color scheme from state " +
+                     std::string(toString(current));
+        }
+        return false;
+    }
+    ControlCommand command;
+    command.kind = ControlCommand::Kind::SetDepthColorScheme;
+    command.scheme = scheme;
     if (!commands_.try_publish(command)) {
         if (error != nullptr) {
             *error = "command mailbox rejected request";

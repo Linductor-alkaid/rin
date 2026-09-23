@@ -1,7 +1,9 @@
 // 真机冒烟测试（hardware 标签）：D435if 在位时执行完整链路
 // start(640x480@30) -> Started 事件 -> RGB/Depth 帧 -> 内参 -> 设备目录（DEC-006）->
-// requestDevice(活动序列号) 幂等（不中断流）-> requestResolution(848x480@30) ->
-// ResolutionChanged + 新分辨率帧 -> stop() 收敛 Idle -> 二次 stop() 幂等。
+// requestDevice(活动序列号) 幂等（不中断流）-> 深度配色运行时切换（DEC-007：Grayscale
+// 生效不重流、消息精确、帧内容灰度性质；切回 Jet 伪彩性质；同值幂等）->
+// requestResolution(848x480@30) -> ResolutionChanged + 新分辨率帧 -> stop() 收敛 Idle ->
+// 二次 stop() 幂等。
 // DEC-006：start 不再因无设备拒绝（worker 进 Waiting 稳态）；无设备时测试经
 // Waiting + 空目录判定打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
 // Waiting 态的设备移除/恢复语义无法在真机上程序化模拟（无免密 sudo 拔 USB），
@@ -92,6 +94,58 @@ std::uint64_t frameChecksum(const Frame& frame) {
     return hash;
 }
 
+/// 灰度性质检查（DEC-007）：全帧所有像素 R==G==B（无效深度黑像素天然满足），
+/// 且至少存在一个非黑像素（避免"全黑帧也满足"的空判通过）。
+struct GrayscaleCheck {
+    bool allGray = false;
+    bool hasNonBlack = false;
+};
+
+GrayscaleCheck grayscaleProperty(const Frame& frame) {
+    GrayscaleCheck result;
+    if (!frame.pixels || frame.width == 0 || frame.height == 0) {
+        return result;
+    }
+    bool allGray = true;
+    std::uint64_t nonBlack = 0;
+    const std::uint8_t* data = frame.pixels->data();
+    for (std::uint32_t row = 0; row < frame.height; ++row) {
+        const std::uint8_t* rowPtr = data + static_cast<std::size_t>(row) * frame.stride;
+        for (std::uint32_t col = 0; col < frame.width; ++col) {
+            const std::uint8_t* px = rowPtr + static_cast<std::size_t>(col) * 4;
+            if (px[0] != px[1] || px[1] != px[2]) {
+                allGray = false;
+            }
+            if (px[0] != 0) {
+                ++nonBlack;
+            }
+        }
+    }
+    result.allGray = allGray;
+    result.hasNonBlack = nonBlack > 0;
+    return result;
+}
+
+/// 伪彩性质（DEC-007）：存在 R!=G 或 G!=B 的像素。
+/// jet 三角波在任何 t 都不输出 R==G==B（r/g、g/b、r/b 两两相等的 t 互不相同），
+/// 因此"存在彩色像素"是区分 jet 帧与灰度帧（含无效黑像素）的充分判据。
+bool hasChromaticPixel(const Frame& frame) {
+    if (!frame.pixels) {
+        return false;
+    }
+    const std::uint8_t* data = frame.pixels->data();
+    for (std::uint32_t row = 0; row < frame.height; ++row) {
+        const std::uint8_t* rowPtr = data + static_cast<std::size_t>(row) * frame.stride;
+        for (std::uint32_t col = 0; col < frame.width; ++col) {
+            const std::uint8_t* px = rowPtr + static_cast<std::size_t>(col) * 4;
+            if (px[0] != px[1] || px[1] != px[2]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// 冒烟主体。返回 0 = 通过（RSV_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
 int runSmokeTest(ICameraService& service) {
     const rsv::StreamRequest baseRequest{640, 480, 30, 640, 480, 30};  // D435if RGB8/Z16 均支持
@@ -109,6 +163,21 @@ int runSmokeTest(ICameraService& service) {
         std::string selectError = "<untouched>";
         RSV_CHECK(!service.requestDevice("nonexistent-serial", &selectError));
         RSV_CHECK(selectError.find("Idle") != std::string::npos);
+    }
+
+    // --- 0b) Idle 态 requestDepthColorScheme 守卫（DEC-007：Idle/Failed/Stopping 拒绝
+    //     并回填 error；start 之前不允许预设配色）---
+    {
+        std::string schemeError = "<untouched>";
+        RSV_CHECK(!service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale,
+                                                   &schemeError));
+        RSV_CHECK(!schemeError.empty());
+        RSV_CHECK(schemeError.find("Idle") != std::string::npos);
+        // Jet 同样拒绝（Idle 态不区分取值）。
+        std::string jetError = "<untouched>";
+        RSV_CHECK(!service.requestDepthColorScheme(rsv::DepthColorScheme::Jet, &jetError));
+        RSV_CHECK(!jetError.empty());
+        RSV_CHECK(jetError.find("Idle") != std::string::npos);
     }
 
     // --- start 准入（DEC-006：不再因无设备拒绝）---
@@ -354,6 +423,136 @@ int runSmokeTest(ICameraService& service) {
         RSV_CHECK(depthContinued);
     }
 
+    // --- 4c) 深度配色运行时切换（DEC-007）：Grayscale 生效不重流、事件消息精确、
+    //     帧内容满足灰度性质；切回 Jet 恢复伪彩性质；同值幂等不打断流 ---
+    {
+        RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+
+        // (a) Streaming 下切到 Grayscale：请求被接受（返回 true；error 仅在拒绝时回填，
+        //     接受路径对 error 不作约定，与 requestDevice 测试口径一致）。
+        std::string grayError = "<untouched>";
+        RSV_CHECK(service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale, &grayError));
+
+        // (b) 有界窗口（3s）等到 "depth palette: grayscale" Info 事件（消息精确匹配）；
+        //     期间状态持续采样保持 Streaming——配色切换不得进入 Restreaming 停启管线。
+        bool grayEventSeen = false;
+        bool grayStateDeviated = false;
+        pollUntil(3s, [&] {
+            if (service.state() != CameraServiceState::Streaming) {
+                grayStateDeviated = true;
+                return true;
+            }
+            if (service.tryLoadEvent(event) && event.kind == ServiceEventKind::Info &&
+                event.message == "depth palette: grayscale") {
+                grayEventSeen = true;
+                return true;
+            }
+            return false;
+        });
+        RSV_CHECK(!grayStateDeviated);
+        RSV_CHECK(grayEventSeen);
+        RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+
+        // (c) 事件后逐帧采样（切换边界前发布的最后一帧可能是残余 jet 帧）：
+        //     找到首个整帧满足灰度性质的深度帧——所有像素 R==G==B 且至少一个非黑像素。
+        bool grayFrameVerified = false;
+        {
+            Frame paletteFrame;
+            std::uint64_t paletteSeq = depthSequence;
+            const bool gotGrayFrame = pollUntil(3s, [&] {
+                if (service.state() != CameraServiceState::Streaming) {
+                    return true;  // 状态偏移交给下方断言取证
+                }
+                if (!service.tryLoadFrame(FrameKind::Depth, paletteSeq, paletteFrame)) {
+                    return false;
+                }
+                RSV_CHECK(paletteFrame.valid());
+                if (const GrayscaleCheck check = grayscaleProperty(paletteFrame);
+                    check.allGray && check.hasNonBlack) {
+                    grayFrameVerified = true;
+                    return true;
+                }
+                return false;  // 切换边界残余帧，继续等下一帧
+            });
+            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RSV_CHECK(gotGrayFrame);
+            RSV_CHECK(grayFrameVerified);
+            depthSequence = paletteSeq;
+        }
+        std::printf(
+            "hardware: depth palette grayscale applied at %.0f ms (frame content verified)\n",
+            elapsedMs());
+
+        // (d) 同值幂等：重复 Grayscale 被接受、不打断流；至少两个新帧（保证重复命令
+        //     已被 worker 在帧检查点消费）后无新 palette 事件产生。
+        {
+            std::string idempotentError = "<untouched>";
+            RSV_CHECK(service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale,
+                                                      &idempotentError));
+            Frame frame;
+            std::uint64_t idempotentSeq = depthSequence;
+            const bool framesContinued = pollUntil(3s, [&] {
+                RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+                return service.tryLoadFrame(FrameKind::Depth, idempotentSeq, frame) &&
+                       frame.sequence > depthSequence + 1;
+            });
+            RSV_CHECK(framesContinued);
+            depthSequence = idempotentSeq;
+            // 同值命令消费后不得重复发事件：最近事件仍是 (b) 的 palette Info。
+            RSV_CHECK(service.tryLoadEvent(event));
+            RSV_CHECK_EQ(event.message, std::string("depth palette: grayscale"));
+            std::printf("hardware: duplicate grayscale request idempotent at %.0f ms\n",
+                        elapsedMs());
+        }
+
+        // (e) 切回 Jet：接受、不重流；事件消息精确 "depth palette: jet"；
+        //     其后深度帧存在彩色像素（伪彩性质恢复；jet 任何像素都不满足 R==G==B）。
+        {
+            std::string jetError = "<untouched>";
+            RSV_CHECK(service.requestDepthColorScheme(rsv::DepthColorScheme::Jet, &jetError));
+            bool jetEventSeen = false;
+            pollUntil(3s, [&] {
+                if (service.state() != CameraServiceState::Streaming) {
+                    return true;  // 状态偏移交给下方断言取证
+                }
+                if (service.tryLoadEvent(event) && event.kind == ServiceEventKind::Info &&
+                    event.message == "depth palette: jet") {
+                    jetEventSeen = true;
+                    return true;
+                }
+                return false;
+            });
+            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RSV_CHECK(jetEventSeen);
+            RSV_CHECK_EQ(event.message, std::string("depth palette: jet"));
+
+            bool chromaticVerified = false;
+            Frame paletteFrame;
+            std::uint64_t jetSeq = depthSequence;
+            const bool gotChromatic = pollUntil(3s, [&] {
+                if (service.state() != CameraServiceState::Streaming) {
+                    return true;
+                }
+                if (!service.tryLoadFrame(FrameKind::Depth, jetSeq, paletteFrame)) {
+                    return false;
+                }
+                RSV_CHECK(paletteFrame.valid());
+                if (hasChromaticPixel(paletteFrame)) {
+                    chromaticVerified = true;
+                    return true;
+                }
+                return false;  // 切换边界残余灰度帧，继续等下一帧
+            });
+            RSV_CHECK_EQ(service.state(), CameraServiceState::Streaming);
+            RSV_CHECK(gotChromatic);
+            RSV_CHECK(chromaticVerified);
+            depthSequence = jetSeq;
+            std::printf(
+                "hardware: depth palette jet restored at %.0f ms (chromatic pixel verified)\n",
+                elapsedMs());
+        }
+    }
+
     // --- 5) requestResolution 848x480：统一 6s 期限等 ResolutionChanged + 新帧 ---
     std::string requestError = "<untouched>";
     const std::uint64_t rgbSeqBeforeChange = rgbSequence;
@@ -446,6 +645,15 @@ int runSmokeTest(ICameraService& service) {
     ServiceEvent finalEvent;
     if (service.tryLoadEvent(finalEvent)) {
         RSV_CHECK(finalEvent.kind == ServiceEventKind::Stopped);
+    }
+
+    // --- 6b) 终态守卫：stop 后回到 Idle，配色请求再次被拒绝（DEC-007 状态门禁）---
+    {
+        std::string stoppedSchemeError = "<untouched>";
+        RSV_CHECK(!service.requestDepthColorScheme(rsv::DepthColorScheme::Grayscale,
+                                                   &stoppedSchemeError));
+        RSV_CHECK(!stoppedSchemeError.empty());
+        RSV_CHECK(stoppedSchemeError.find("Idle") != std::string::npos);
     }
     std::printf("hardware: stopped cleanly at %.0f ms\n", elapsedMs());
     return 0;
