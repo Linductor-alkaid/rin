@@ -64,6 +64,8 @@ struct ViewerContext {
     eui::Signal<int> deviceIndex{0};
     eui::Signal<bool> deviceOpen{false};
     std::vector<ResolutionUiOption> resolutionOptions;
+    /// 档位列表对应的设备序列号；仅设备变化时才重置默认选中（否则会覆盖用户选择）。
+    std::string resolutionOptionsForSerial;
     eui::Signal<int> resolutionIndex{0};
     eui::Signal<bool> resolutionOpen{false};
 
@@ -178,8 +180,10 @@ void ViewerContext::rebuildResolutionOptions() {
     resolutionOptions.clear();
     const rsv::DeviceInfo* device = activeDevice(*this);
     if (device == nullptr) {
+        resolutionOptionsForSerial.clear();
         return;  // 未选定设备（等待接入/用户选择）时不提供分辨率档位。
     }
+    resolutionOptionsForSerial = device->serial;
     const auto byWidthHeight = [](const rsv::ResolutionOption& option) {
         return std::pair<std::uint32_t, std::uint32_t>{option.width, option.height};
     };
@@ -269,14 +273,18 @@ void ViewerContext::pump() {
         catalog = std::move(newCatalog);
         hasCatalog = true;
         rebuildDeviceOptions();
+        const std::string previousOptionsForSerial = resolutionOptionsForSerial;
         rebuildResolutionOptions();
-        // 默认选中项：分辨率档位回到 848x480（DEC-004）。
-        for (std::size_t index = 0; index < resolutionOptions.size(); ++index) {
-            const ResolutionUiOption& option = resolutionOptions[index];
-            if (option.request.colorWidth == kDefaultRequest.colorWidth &&
-                option.request.colorHeight == kDefaultRequest.colorHeight) {
-                resolutionIndex.set(static_cast<int>(index));
-                break;
+        if (resolutionOptionsForSerial != previousOptionsForSerial) {
+            // 仅设备变化（首次就绪/切换设备）时回到默认档位 848x480（DEC-004）；
+            // 同一设备的目录刷新必须保持用户已选档位。
+            for (std::size_t index = 0; index < resolutionOptions.size(); ++index) {
+                const ResolutionUiOption& option = resolutionOptions[index];
+                if (option.request.colorWidth == kDefaultRequest.colorWidth &&
+                    option.request.colorHeight == kDefaultRequest.colorHeight) {
+                    resolutionIndex.set(static_cast<int>(index));
+                    break;
+                }
             }
         }
     }
