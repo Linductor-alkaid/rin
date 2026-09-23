@@ -13,6 +13,10 @@ public:
     rsv::StartOutcome start(const rsv::StreamRequest&) override { return {}; }
     bool requestResolution(const rsv::StreamRequest&, std::string*) override { return false; }
     bool requestDevice(const std::string&, std::string*) override { return false; }
+    bool requestDepthColorScheme(rsv::DepthColorScheme, std::string*) override
+    {
+        return false;
+    }
     void stop() override {}
     rsv::CameraServiceState state() const override { return rsv::CameraServiceState::Idle; }
     std::string lastError() const override { return {}; }

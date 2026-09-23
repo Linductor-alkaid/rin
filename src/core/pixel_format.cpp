@@ -17,6 +17,16 @@ void jetColor(float t, std::uint8_t out[4]) noexcept {
     out[3] = 255;
 }
 
+void grayscaleColor(float t, std::uint8_t out[4]) noexcept {
+    t = std::clamp(t, 0.0f, 1.0f);
+    // 近白远黑：亮度随归一化深度线性衰减（DEC-007 暂定极性）。
+    const std::uint8_t level = static_cast<std::uint8_t>((1.0f - t) * 255.0f + 0.5f);
+    out[0] = level;
+    out[1] = level;
+    out[2] = level;
+    out[3] = 255;
+}
+
 namespace {
 
 std::size_t requiredBytes(std::uint32_t width, std::uint32_t height) {
@@ -50,14 +60,15 @@ bool convertRgb8ToRgba8(const std::uint8_t* src,
     return true;
 }
 
-bool convertDepth16ToRgba8Jet(const std::uint16_t* src,
-                              std::uint32_t width,
-                              std::uint32_t height,
-                              std::uint32_t srcStrideUnits,
-                              float depthScaleMeters,
-                              float nearMeters,
-                              float farMeters,
-                              std::vector<std::uint8_t>& dst) {
+bool convertDepth16ToRgba8(const std::uint16_t* src,
+                           std::uint32_t width,
+                           std::uint32_t height,
+                           std::uint32_t srcStrideUnits,
+                           float depthScaleMeters,
+                           float nearMeters,
+                           float farMeters,
+                           DepthColorScheme scheme,
+                           std::vector<std::uint8_t>& dst) {
     if (src == nullptr || width == 0 || height == 0) {
         return false;
     }
@@ -67,6 +78,8 @@ bool convertDepth16ToRgba8Jet(const std::uint16_t* src,
     if (!(depthScaleMeters > 0.0f) || !(farMeters > nearMeters)) {
         return false;
     }
+    using Ramp = void (*)(float, std::uint8_t[4]);
+    const Ramp ramp = scheme == DepthColorScheme::Grayscale ? grayscaleColor : jetColor;
     dst.resize(requiredBytes(width, height));
     const float range = farMeters - nearMeters;
     for (std::uint32_t row = 0; row < height; ++row) {
@@ -83,10 +96,22 @@ bool convertDepth16ToRgba8Jet(const std::uint16_t* src,
             }
             const float meters = static_cast<float>(raw) * depthScaleMeters;
             const float normalized = (meters - nearMeters) / range;
-            jetColor(normalized, dstRow + column * 4u);
+            ramp(normalized, dstRow + column * 4u);
         }
     }
     return true;
+}
+
+bool convertDepth16ToRgba8Jet(const std::uint16_t* src,
+                              std::uint32_t width,
+                              std::uint32_t height,
+                              std::uint32_t srcStrideUnits,
+                              float depthScaleMeters,
+                              float nearMeters,
+                              float farMeters,
+                              std::vector<std::uint8_t>& dst) {
+    return convertDepth16ToRgba8(src, width, height, srcStrideUnits, depthScaleMeters,
+                                 nearMeters, farMeters, DepthColorScheme::Jet, dst);
 }
 
 }  // namespace rsv

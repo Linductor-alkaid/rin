@@ -27,6 +27,14 @@ enum class FrameKind {
     Depth,
 };
 
+/// 深度图输出配色（DEC-007）：Z16 → RGBA8 的视觉映射风格。
+enum class DepthColorScheme {
+    /// jet 伪彩（DEC-003 默认）。
+    Jet,
+    /// 灰度黑白：近处白、远处黑；无效深度（0）与 jet 一致输出不透明黑。
+    Grayscale,
+};
+
 /// 一次流配置请求：彩色与深度成对（M1 不支持单流）。
 struct StreamRequest {
     std::uint32_t colorWidth = 848;

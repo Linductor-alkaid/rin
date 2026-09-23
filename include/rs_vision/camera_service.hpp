@@ -25,6 +25,12 @@ public:
     /// 设备当前不在线时同样入队，worker 在其到达后自动应用。
     virtual bool requestDevice(const std::string& serial, std::string* error = nullptr) = 0;
 
+    /// 请求切换深度图输出配色（DEC-007）；Waiting/Opening/Streaming/Restreaming 下
+    /// 有效且粘性（跨插拔/设备切换保留）。仅影响后续帧转换，不触发重流；worker 在
+    /// 下一帧边界应用。
+    virtual bool requestDepthColorScheme(DepthColorScheme scheme,
+                                         std::string* error = nullptr) = 0;
+
     /// 任意状态 -> Stopping -> Idle；幂等。阻塞至 worker 回收完成。
     virtual void stop() = 0;
 
