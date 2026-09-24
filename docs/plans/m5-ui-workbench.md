@@ -1,6 +1,6 @@
 # M5：工作台 UI——导航、节点编辑器与性能面板
 
-> 状态：Planned
+> 状态：In Progress
 > 负责人：Linductor-alkaid（授权 Agent 按工程规范自治执行）
 > 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：M3、`M4-09` 视图契约（骨架与假引擎先行，见
@@ -48,15 +48,17 @@
 
 ## 工作项
 
-- [ ] `M5-01` 调研并冻结工作台信息架构与节点编辑器交互（`DEC-014` + `DEC-015`）：
+- [x] `M5-01` 调研并冻结工作台信息架构与节点编辑器交互（`DEC-014` + `DEC-015`）：
       调研现代工具（Blender 合成器、TouchDesigner、Node-RED、Unreal Blueprint、
       Intel RealSense Viewer 等）的页面组织与节点交互范式，产出
-      `docs/design/ui_workspace_design.md`：页面拓扑树、导航模型、状态与空态、
-      节点编辑器交互流（创建 / 连线 / 选中 / 删除 / 参数编辑的作用域）与
-      EUI-NEO 原语映射。调研事实与可借鉴分析记录见
+      [ui_workspace_design.md](../design/ui_workspace_design.md)：页面拓扑树、
+      导航模型、状态与空态、节点编辑器交互流（创建 / 连线 / 选中 / 删除 /
+      参数编辑的作用域）与 EUI-NEO 原语映射。调研事实与可借鉴分析记录见
       [ui_workspace_research.md](../design/ui_workspace_research.md)
       （含用户指定的 RPA/影刀参考）。完成判据：设计文档完成并通过结构检查；
-      `DEC-014`/`DEC-015` `Accepted`。
+      [DEC-014](../decisions/DEC-014-workbench-information-architecture.md)/
+      [DEC-015](../decisions/DEC-015-node-editor-implementation-path.md)
+      `Accepted`。
 - [ ] `M5-02` 导航壳与页面框架：页面导航（预览 / 位姿 / 工作流 / 设置）、页面
       切换状态保持、主题令牌扩展、现有预览功能回归。完成判据：导航状态单测 +
       预览回归记录。
@@ -124,3 +126,17 @@ ComfyUI/n8n/Dify/Houdini），综合出对 DEC-014/015 的建议输入（单窗�
 独立第三方来源交叉印证，未证实项在文档内逐条标注；约 50 个来源 URL 落盘。
 `M5-01` 完成判据剩余项：`ui_workspace_design.md` 产出 + 结构检查、`DEC-014`/
 `DEC-015` 记录并 `Accepted`。
+
+2026-09-24：`M5-01` 完成关闭——用户确认调研结论（[ui_workspace_research.md](../design/ui_workspace_research.md)
+第 5 节为基线）后冻结
+[DEC-014](../decisions/DEC-014-workbench-information-architecture.md)（单窗口
+四页导航 + 工作流页五区骨架 + 参数热更新"下一帧生效"明示 + 画布布局 UI 私有）
+与 [DEC-015](../decisions/DEC-015-node-editor-implementation-path.md)（EUI-NEO
+原语自研画布、交互几何纯逻辑下沉、P0/P1/P2 交互分期以 M4-09 契约为界、
+retained layer polygon 缺陷按 EUI-20260924-001 先例规避），两记录 `Accepted`；
+产出 [ui_workspace_design.md](../design/ui_workspace_design.md)（页面拓扑树、
+导航模型、状态与空态、节点编辑器交互流、EUI-NEO 原语映射表、平台无关纯逻辑
+测试清单、分期对照）。结构检查通过：单一级标题、层级连续、相对链接逐一命中
+（含新增两决策记录与设计文档互链）、代码围栏配对、外部 URL 不作仓库内链接。
+总计划 DEC-014/015 暂定条目同步转"已记录"，当前状态段更新。范围注记：P0
+不含逐节点实时执行高亮与断点/单步（契约无对应语义，列为 P1 契约演进候选）。

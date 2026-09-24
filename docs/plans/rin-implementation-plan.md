@@ -15,6 +15,11 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 [DEC-016](../decisions/DEC-016-contract-first-workbench-order.md) 冻结 M4/M5
 交错实施策略：工作流视图契约先行（`M4-09`），M5 骨架对契约假引擎先行开发
 （`M5-08`），M4 真引擎按同一契约实现后在 `M5-06` 集成替换；M5 完成点仍在 M4 之后。
+2026-09-24 `M5-01` 完成：工作台 UI 调研落盘（[ui_workspace_research.md](../design/ui_workspace_research.md)，
+含用户指定的 RPA/影刀参考），[DEC-014](../decisions/DEC-014-workbench-information-architecture.md) 与
+[DEC-015](../decisions/DEC-015-node-editor-implementation-path.md) 冻结，
+[ui_workspace_design.md](../design/ui_workspace_design.md) 产出；M5 骨架实施启动
+（下一步 `M5-08` 契约假引擎）。
 
 ## 交付边界（SCOPE）
 
@@ -132,11 +137,14 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
   新依赖按 `RULE-04` 登记。
 - `DEC-013`（暂定，M4 经 M4-07 实现冻结）工作流执行模型：暂定"最新帧驱动 +
   有界在飞 + 显式丢弃 + comm 统计暴露"。
-- `DEC-014`（暂定，M5 经 M5-01 调研冻结）工作台信息架构：暂定"单窗口 + 页面
-  导航（预览 / 位姿 / 图像工作流 / 设置）"，以现代工具调研与设计文档冻结。
-- `DEC-015`（暂定，M5 经 M5-01 调研冻结）节点编辑器实现路径：暂定 EUI-NEO
-  原语自研画布（`rect`+`mousearea`+`polygon`+`ui.state`），交互几何下沉为平台
-  无关纯逻辑。
+- `DEC-014`（已记录）工作台信息架构：单窗口 + 左侧导航四页（预览 / 位姿 /
+  图像工作流 / 设置）；工作流页五区骨架（工具栏 / 调色板 / 画布 / 右上下文
+  面板 / 底校验与事件列表）；参数热更新"下一帧生效"明示，不引入 deploy
+  式编辑态分离；画布布局为 UI 私有状态。
+- `DEC-015`（已记录）节点编辑器实现路径：EUI-NEO 原语自研画布
+  （`rect`+`mousearea`+`polygon`+`ui.state`），交互几何下沉为平台无关纯
+  逻辑；P0/P1/P2 交互分期以 M4-09 契约为界；retained layer polygon 缺陷
+  按 EUI-20260924-001 先例规避。
 - `DEC-016`（已记录）M4/M5 交错实施策略：工作流视图契约先冻结（`M4-09`），
   M5 骨架对契约假引擎先行开发（`M5-08`），M4 真引擎按同一契约实现并在 `M5-06`
   假换真集成；假引擎必须复刻 `EXEC-07` 的 Executor/comm 语义并覆盖失败路径，
