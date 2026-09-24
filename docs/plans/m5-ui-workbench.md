@@ -53,8 +53,10 @@
       Intel RealSense Viewer 等）的页面组织与节点交互范式，产出
       `docs/design/ui_workspace_design.md`：页面拓扑树、导航模型、状态与空态、
       节点编辑器交互流（创建 / 连线 / 选中 / 删除 / 参数编辑的作用域）与
-      EUI-NEO 原语映射。完成判据：设计文档完成并通过结构检查；`DEC-014`/
-      `DEC-015` `Accepted`。
+      EUI-NEO 原语映射。调研事实与可借鉴分析记录见
+      [ui_workspace_research.md](../design/ui_workspace_research.md)
+      （含用户指定的 RPA/影刀参考）。完成判据：设计文档完成并通过结构检查；
+      `DEC-014`/`DEC-015` `Accepted`。
 - [ ] `M5-02` 导航壳与页面框架：页面导航（预览 / 位姿 / 工作流 / 设置）、页面
       切换状态保持、主题令牌扩展、现有预览功能回归。完成判据：导航状态单测 +
       预览回归记录。
@@ -110,4 +112,15 @@
 
 ## 验证记录
 
-（按日期追加）
+2026-09-24：`M5-01` 调研输入完成（工作项未关闭）——新增
+[ui_workspace_research.md](../design/ui_workspace_research.md)：三路并行外部调研
+（影刀 RPA 深度调研——用户点名参考；RPA 编辑器横向对比 UiPath Studio/StudioX、
+Power Automate Desktop、A360、来也/实在/阿里云/艺赛旗；节点式画布工具范式
+Blender/TouchDesigner/Node-RED/Unreal Blueprint/RealSense Viewer 及
+ComfyUI/n8n/Dify/Houdini），综合出对 DEC-014/015 的建议输入（单窗口页面导航 +
+工作流页五区骨架；自由节点图主范式；P0/P1/P2 交互清单）与 EUI-NEO 实现风险
+（retained layer polygon 缺陷对连线的同型影响、RealArray 卷积核矩阵编辑器需自研、
+缩略图沿用 GpuFrameView 绕行路径）。证据等级：官方文档优先，SPA 未抓到处以多个
+独立第三方来源交叉印证，未证实项在文档内逐条标注；约 50 个来源 URL 落盘。
+`M5-01` 完成判据剩余项：`ui_workspace_design.md` 产出 + 结构检查、`DEC-014`/
+`DEC-015` 记录并 `Accepted`。
