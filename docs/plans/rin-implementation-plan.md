@@ -11,7 +11,10 @@ M1（viewer 基础能力）、M2（更名与 Linux 自包含分发）与 M3（IM
 Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-packaging.md)、
 [m3-imu-pose-view.md](m3-imu-pose-view.md) 验证记录）。2026-09-24 立项 M3-M5
 （IMU 位姿视图、图像处理节点工作流、工作台 UI），由自治开发工作流按工程规范逐项
-推进；关键实现策略先经调研决策（DEC-010..015）冻结后实施。
+推进；关键实现策略先经调研决策（DEC-010..015）冻结后实施。2026-09-24 经
+[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md) 冻结 M4/M5
+交错实施策略：工作流视图契约先行（`M4-09`），M5 骨架对契约假引擎先行开发
+（`M5-08`），M4 真引擎按同一契约实现后在 `M5-06` 集成替换；M5 完成点仍在 M4 之后。
 
 ## 交付边界（SCOPE）
 
@@ -42,7 +45,9 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 - [ ] `SCOPE-09` 工作台 UI：页面导航（预览 / 位姿 / 图像工作流 / 设置）、拖拽式
       节点编辑器（调色板、连线、参数面板、中间结果查看）、性能面板与运行控制，
       界面信息架构与操作逻辑拓扑树设计文档（M5，
-      [DEC-014](../decisions/)、[DEC-015](../decisions/)）。
+      [DEC-014](../decisions/)、[DEC-015](../decisions/)、
+      [DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)；
+      按 DEC-016 骨架对契约假引擎先行，完成后与 M4 真引擎集成）。
 
 ## 不可破坏的架构约束（RULE）
 
@@ -95,7 +100,7 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 | M2 更名与 Linux 自包含分发 | [m2-linux-packaging.md](m2-linux-packaging.md) | M1 | v0.2.0 |
 | M3 IMU 位姿通路与 3D 视图 | [m3-imu-pose-view.md](m3-imu-pose-view.md) | M1 | v0.3.0 |
 | M4 图像处理节点与工作流引擎 | [m4-cv-node-workflow.md](m4-cv-node-workflow.md) | 无（建议 M3 后） | v0.4.0 |
-| M5 工作台 UI（导航 / 节点编辑器 / 性能面板） | [m5-ui-workbench.md](m5-ui-workbench.md) | M3、M4 | v0.5.0 |
+| M5 工作台 UI（导航 / 节点编辑器 / 性能面板） | [m5-ui-workbench.md](m5-ui-workbench.md) | M3、M4-09（骨架先行，DEC-016）；完成依赖 M4 | v0.5.0 |
 
 ## 暂定决策（未冻结）
 
@@ -132,6 +137,10 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 - `DEC-015`（暂定，M5 经 M5-01 调研冻结）节点编辑器实现路径：暂定 EUI-NEO
   原语自研画布（`rect`+`mousearea`+`polygon`+`ui.state`），交互几何下沉为平台
   无关纯逻辑。
+- `DEC-016`（已记录）M4/M5 交错实施策略：工作流视图契约先冻结（`M4-09`），
+  M5 骨架对契约假引擎先行开发（`M5-08`），M4 真引擎按同一契约实现并在 `M5-06`
+  假换真集成；假引擎必须复刻 `EXEC-07` 的 Executor/comm 语义并覆盖失败路径，
+  性能结论以真引擎实测为准。
 
 ## 通用完成定义（DOD）
 
@@ -155,3 +164,7 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 
 先骨架后功能、先契约后实现：Core 类型与接口 → 假设备状态机测试 → librealsense 适配器
 → viewer 应用 → 真机验收。
+
+M4/M5 按 [DEC-016](../decisions/DEC-016-contract-first-workbench-order.md) 交错推进：
+视图契约（`M4-09`）→ 契约假引擎（`M5-08`）→ M5 骨架（`M5-02`..`M5-05`，对假引擎
+调试）→ M4 算子与真引擎（`M4-03`..`M4-08`）→ 假换真集成与验收（`M5-06`..`M5-07`）。
