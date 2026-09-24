@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <rin/camera_service.hpp>
+#include <rin/workflow_engine.hpp>
 
 namespace {
 
@@ -26,6 +27,30 @@ public:
     bool tryLoadPose(std::uint64_t&, rin::ImuSnapshot&) override { return false; }
     bool tryLoadCatalog(std::uint64_t&, rin::DeviceCatalog&) override { return false; }
     bool tryLoadEvent(rin::ServiceEvent&) override { return false; }
+};
+
+class NullWorkflowEngine final : public rin::IWorkflowEngine {
+public:
+    const rin::NodeCatalog& catalog() const override { return catalog_; }
+    rin::WorkflowValidation applyGraph(const rin::WorkflowGraph&) override { return {}; }
+    bool requestParamUpdate(rin::NodeId, const std::string&, const rin::ParamValue&,
+                            std::string*) override
+    {
+        return false;
+    }
+    rin::AdmissionResult start() override { return {}; }
+    void stop() override {}
+    rin::WorkflowEngineState state() const override { return rin::WorkflowEngineState::Idle; }
+    std::string lastError() const override { return {}; }
+    bool tryLoadStats(std::uint64_t&, rin::WorkflowStats&) override { return false; }
+    bool tryLoadNodeOutput(rin::NodeId, std::uint64_t&, rin::NodeOutputSnapshot&) override
+    {
+        return false;
+    }
+    bool tryLoadEvent(rin::WorkflowEvent&) override { return false; }
+
+private:
+    rin::NodeCatalog catalog_;
 };
 
 }  // namespace
@@ -59,6 +84,34 @@ int main() {
         RIN_CHECK_EQ(poseSequence, std::uint64_t{7});
         RIN_CHECK_EQ(pose.sequence, std::uint64_t{888});
         RIN_CHECK_EQ(pose.orientation[0], 1.0f);  // 默认恒等姿态未被触碰
+    }
+
+    // M4-09 工作流视图契约（经公开接口多态调用，同时实例化契约类型）：
+    // 无生产者桩语义与相机服务一致——无新数据返回 false 且出参不动。
+    {
+        std::shared_ptr<rin::IWorkflowEngine> engine = std::make_shared<NullWorkflowEngine>();
+        RIN_CHECK(engine != nullptr);
+        RIN_CHECK(!engine->start().admitted);
+        RIN_CHECK_EQ(engine->state(), rin::WorkflowEngineState::Idle);
+
+        std::uint64_t statsSequence = 5;
+        rin::WorkflowStats stats;
+        stats.endToEndFps = 12.0;
+        RIN_CHECK(!engine->tryLoadStats(statsSequence, stats));
+        RIN_CHECK_EQ(statsSequence, std::uint64_t{5});
+        RIN_CHECK_EQ(stats.endToEndFps, 12.0);
+
+        std::uint64_t outputSequence = 3;
+        rin::NodeOutputSnapshot output;
+        output.node = 9;
+        RIN_CHECK(!engine->tryLoadNodeOutput(9, outputSequence, output));
+        RIN_CHECK_EQ(outputSequence, std::uint64_t{3});
+        RIN_CHECK_EQ(output.node, rin::NodeId{9});
+
+        rin::WorkflowEvent event;
+        event.kind = rin::WorkflowEventKind::Started;
+        RIN_CHECK(!engine->tryLoadEvent(event));
+        RIN_CHECK_EQ(event.kind, rin::WorkflowEventKind::Started);
     }
     return rin_test::exitStatus();
 }

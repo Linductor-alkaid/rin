@@ -104,4 +104,13 @@
 
 ## 验证记录
 
-（按日期追加）
+2026-09-24：`M4-09` 契约冻结（部分完成，工作项未关闭）——commit `f27020b`..`727c776`
+（分支 feat/core-workflow-view-contracts）：`include/rin/workflow_types.hpp`、
+`include/rin/workflow_engine.hpp` 与 `validateWorkflowGraph` 纯逻辑入库；契约单测
+204 项（Independent-Verification-Agent 独立编写执行）于 debug/asan/ubsan 三预设
+0 失败，debug 全量 ctest 通过（realsense_hardware 无设备跳过）。第一轮独立验证
+暴露两处实现与契约矛盾（NaN 范围端点绕过 `min>max` 校验；Rgba8 行宽
+`width*4` uint32 回绕），已修复（`2ce18d3`）并经独立复验 PASS（三预设 204 项
+0 失败、探针在位、无消毒器诊断）。环境：x86_64 Linux，GCC 13，CMake presets
+debug/asan/ubsan。`M4-09` 完成判据剩余项：`M5-08` 假引擎与 `M4-07` 真引擎引用
+该契约（随对应里程碑关闭）。

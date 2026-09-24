@@ -152,3 +152,15 @@ set_tests_properties(realsense_hardware PROPERTIES
     LABELS "hardware"
     SKIP_RETURN_CODE 77
     TIMEOUT 120)
+
+# M4-09 工作流视图契约（DEC-016，仅公开头 + Core 纯函数）：契约类型 valid()
+# 语义（ParamDescriptor 全分支 / NodeDescriptor / NodeCatalog 唯一性 /
+# NodeOutputSnapshot stride 与容量边界）、paramKindOf 与三组 toString、
+# findNodeDescriptor、validateWorkflowGraph 全部 ValidationIssueKind 反例与
+# 正例（空图/链式缺省参数/扇出/全参数种类/闭区间边界）、间接环与多问题累积。
+# 单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_workflow_contracts test_workflow_contracts.cpp)
+target_link_libraries(test_workflow_contracts PRIVATE rin::core)
+target_include_directories(test_workflow_contracts PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME workflow_contracts COMMAND test_workflow_contracts)
+set_tests_properties(workflow_contracts PROPERTIES LABELS "unit")
