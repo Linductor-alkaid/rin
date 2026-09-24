@@ -142,6 +142,8 @@ set_tests_properties(public_boundary PROPERTIES LABELS "unit")
 
 # 真机冒烟（hardware 标签）：D435if 在位时执行完整采集链路；无设备时测试自身
 # 打印 SKIP 并返回 77，ctest 经 SKIP_RETURN_CODE 记为跳过（不计失败）。
+# M3-08：IMU 出流频率验收（EMA 稳态 × 墙钟窗口交叉验证，交付频率对设备档位
+# 只记录不断言，DEC-010 真机无数值阈值）与 restream 后源频率恢复量级断言。
 # 链 rin::realsense_adapter（PUBLIC 传递 rin::core 与 executor 头/库）。
 add_executable(test_realsense_hardware test_realsense_hardware.cpp)
 target_link_libraries(test_realsense_hardware PRIVATE rin::realsense_adapter)

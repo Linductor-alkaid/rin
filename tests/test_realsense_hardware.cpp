@@ -4,8 +4,10 @@
 // 内参（含 gyro→color 外参与 ACCEL/GYRO 出厂运动内参，内容级非全零防线）-> 设备目录
 // （DEC-006 + IMU 能力字段）-> requestDevice(活动序列号) 幂等（不中断流）-> 深度配色
 // 运行时切换（DEC-007：Grayscale 生效不重流、消息精确、帧内容灰度性质；切回 Jet 伪彩
-// 性质；同值幂等）-> requestResolution(848x480@30)（M3-04：restream 重建含 IMU，运动/
-// 姿态会话序号不回退、累计样本只增）-> ResolutionChanged + 新分辨率帧 -> stop() 收敛
+// 性质；同值幂等）-> M3-08 IMU 出流频率验收（EMA 稳态 × 墙钟窗口计数交叉验证，交付
+// 频率对设备档位只记录不断言）-> requestResolution(848x480@30)（M3-04：restream 重建
+// 含 IMU，运动/姿态会话序号不回退、累计样本只增；M3-08：restream 后源频率重新收敛
+// 到 restream 前同一量级）-> ResolutionChanged + 新分辨率帧 -> stop() 收敛
 // Idle -> 二次 stop() 幂等。
 // DEC-006：start 不再因无设备拒绝（worker 进 Waiting 稳态）；无设备时测试经
 // Waiting + 空目录判定打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
@@ -39,6 +41,22 @@ using rin::ICameraService;
 using rin::ServiceEvent;
 using rin::ServiceEventKind;
 
+// --- M3-08 IMU 出流频率验收参数（真机 D435IF 实测，2026-09-24）---
+// 实测依据：librealsense syncer 把 ACCEL/GYRO 与视频帧按帧率配对交付
+//（137/137 frameset 形态 "AG"，~30 Hz/源），交付速率 ≠ 设备 ODR 档位
+//（本机目录上报 accel 100/200/400、gyro 200/400）。DEC-010 明确不对真机提出
+// 数值阈值（"M3-08 按 D435if 冒烟记录 IMU 出流频率"），故本测试对交付频率
+// 只做"测量完整性"断言并打印记录，档位对照只打印不断言。
+// EMA 稳态 gate：ingest 侧 kMotionRateEmaAlpha=0.1（时间常数 ~10 样本），
+// 30 个新样本后收敛 >95%，随后再跨 90 样本窗口计数。
+constexpr std::uint64_t kFreqSettleGyroSamples = 30;
+constexpr std::uint64_t kFreqWindowGyroSamples = 90;
+// 活流下限：窗口计数速率低于该值视为运动流未有效流动（实测 ~30 Hz/源）。
+constexpr double kMinDeliveredSourceHz = 5.0;
+// EMA（设备时间戳域相邻 dt 的滑动均值）与墙钟窗口计数速率的一致性相对容差
+// （两者统计口径不同——调和 vs 算术平均、100ms 轮询量化——35% 只拦截量级错误）。
+constexpr double kFreqConsistencyRelTol = 0.35;
+
 /// 有界轮询：每 100ms 谓词一次，budget 内为真返回 true，超时返回 false。
 template <typename Pred>
 bool pollUntil(std::chrono::steady_clock::duration budget, Pred&& pred) {
@@ -52,6 +70,79 @@ bool pollUntil(std::chrono::steady_clock::duration budget, Pred&& pred) {
         }
         std::this_thread::sleep_for(100ms);
     }
+}
+
+// --- M3-08：IMU 出流频率测量（M3-08 真机记录的可编程载体）---
+/// 单次频率测量结果：EMA（发布侧统计）+ 墙钟窗口计数均值（独立口径）。
+struct SourceRateMeasurement {
+    double gyroEmaHz = 0.0;
+    double accelEmaHz = 0.0;
+    double gyroCounterHz = 0.0;
+    double accelCounterHz = 0.0;
+    std::uint64_t gyroSamples = 0;
+    std::uint64_t accelSamples = 0;
+    std::uint64_t poseSequence = 0;
+};
+
+/// 跨样本窗口的频率测量：等待该源自 `lastGyroSamples` 起再前进
+/// kFreqSettleGyroSamples 个陀螺样本（EMA 稳态 gate），随后以墙钟窗口跨
+/// kFreqWindowGyroSamples 个陀螺样本计数，读窗口末快照的 EMA 与累计计数。
+/// 窗口未在预算内完成（流停滞）返回 false。轮询经姿态通道最新态语义，
+/// 计数器为 worker 侧累计值，不受轮询节奏影响。
+bool measureSourceRates(ICameraService& service, std::uint64_t& lastSeenPoseSeq,
+                        std::uint64_t lastGyroSamples, SourceRateMeasurement& out) {
+    rin::ImuSnapshot snapshot;
+    // 预算与活流下限自洽：kFreqSettleGyroSamples/kFreqWindowGyroSamples 个样本
+    // 在 5 Hz 下限需 6s/18s，预算留裕量（实测 ~30 Hz 时为 1s/3s）。
+    const bool settled = pollUntil(10s, [&] {
+        return service.tryLoadPose(lastSeenPoseSeq, snapshot) &&
+               snapshot.sources.gyroSamples >= lastGyroSamples + kFreqSettleGyroSamples;
+    });
+    if (!settled) {
+        return false;
+    }
+    const rin::ImuSnapshot begin = snapshot;
+    const auto tBegin = std::chrono::steady_clock::now();
+    const bool windowed = pollUntil(20s, [&] {
+        return service.tryLoadPose(lastSeenPoseSeq, snapshot) &&
+               snapshot.sources.gyroSamples >=
+                   begin.sources.gyroSamples + kFreqWindowGyroSamples;
+    });
+    if (!windowed) {
+        return false;
+    }
+    const auto tEnd = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(tEnd - tBegin).count();
+    if (seconds <= 0.0) {
+        return false;
+    }
+    out.gyroEmaHz = snapshot.sources.gyroHz;
+    out.accelEmaHz = snapshot.sources.accelHz;
+    out.gyroSamples = snapshot.sources.gyroSamples;
+    out.accelSamples = snapshot.sources.accelSamples;
+    out.poseSequence = snapshot.sequence;
+    out.gyroCounterHz =
+        static_cast<double>(snapshot.sources.gyroSamples - begin.sources.gyroSamples) / seconds;
+    out.accelCounterHz =
+        static_cast<double>(snapshot.sources.accelSamples - begin.sources.accelSamples) / seconds;
+    return true;
+}
+
+/// M3-08 频率记录断言（发布侧统计契约的完整性，不对交付频率设阈值）：
+/// EMA 与计数速率均有限、为正、达到活流下限，且两口径在容差内一致。
+void checkRateIntegrity(const SourceRateMeasurement& rates, const char* label) {
+    RIN_CHECK(std::isfinite(rates.gyroEmaHz) && rates.gyroEmaHz > 0.0);
+    RIN_CHECK(std::isfinite(rates.accelEmaHz) && rates.accelEmaHz > 0.0);
+    RIN_CHECK(rates.gyroCounterHz >= kMinDeliveredSourceHz);
+    RIN_CHECK(rates.accelCounterHz >= kMinDeliveredSourceHz);
+    RIN_CHECK(std::fabs(rates.gyroEmaHz - rates.gyroCounterHz) <=
+              kFreqConsistencyRelTol * rates.gyroCounterHz);
+    RIN_CHECK(std::fabs(rates.accelEmaHz - rates.accelCounterHz) <=
+              kFreqConsistencyRelTol * rates.accelCounterHz);
+    std::printf("hardware: M3-08 imu rates %s: gyro ema=%.1fHz counter=%.1fHz, accel "
+                "ema=%.1fHz counter=%.1fHz (pose seq %llu)\n",
+                label, rates.gyroEmaHz, rates.gyroCounterHz, rates.accelEmaHz,
+                rates.accelCounterHz, static_cast<unsigned long long>(rates.poseSequence));
 }
 
 // --- 内容级断言参数（真机 D435IF 暗室实测，2026-09-23）---
@@ -681,6 +772,35 @@ int runSmokeTest(ICameraService& service) {
         }
     }
 
+    // --- 4d) M3-08 真机记录：IMU 出流频率（EMA 稳态 × 墙钟窗口交叉验证）---
+    // DEC-010 明确不对真机提出数值阈值；交付频率与设备档位的对照只打印记录
+    // 不断言（本机实测：syncer 按视频帧率配对交付 ~30 Hz/源，≠ ODR 档位；
+    // 交付速率与 DEC-010 假设的偏差交 owner 按 DEC-010 复核裁决）。
+    SourceRateMeasurement preRestreamRates;
+    bool preRatesMeasured = false;
+    if (preGyroSamples > 0) {
+        std::uint64_t freqPoseSeq = prePoseSessionSeq;
+        preRatesMeasured =
+            measureSourceRates(service, freqPoseSeq, preGyroSamples, preRestreamRates);
+        RIN_CHECK(preRatesMeasured);
+        if (preRatesMeasured) {
+            checkRateIntegrity(preRestreamRates, "pre-restream");
+            // 档位对照记录（只记录；对照结论由验收记录承载）。
+            if (capsArrived && !caps.devices.empty()) {
+                std::printf("hardware: M3-08 device ODR gears accel:");
+                for (const std::uint32_t rate : caps.devices.front().imuAccelRatesHz) {
+                    std::printf(" %u", rate);
+                }
+                std::printf(", gyro:");
+                for (const std::uint32_t rate : caps.devices.front().imuGyroRatesHz) {
+                    std::printf(" %u", rate);
+                }
+                std::printf(" | delivered rate is syncer video-paced pairing; gear match "
+                            "is a record, not an assertion\n");
+            }
+        }
+    }
+
     // --- 5) requestResolution 848x480：统一 6s 期限等 ResolutionChanged + 新帧 ---
     std::string requestError = "<untouched>";
     const std::uint64_t rgbSeqBeforeChange = rgbSequence;
@@ -806,6 +926,29 @@ int runSmokeTest(ICameraService& service) {
                 static_cast<unsigned long long>(preGyroSamples),
                 static_cast<unsigned long long>(pose.sources.accelSamples),
                 static_cast<unsigned long long>(preAccelSamples));
+
+            // --- M3-08：restream 后源频率恢复——EMA（resetStreamState 清零重建）
+            // 重新收敛，且回到 restream 前同一量级（量级漂移 >2x 视为恢复异常；
+            // 精确值仍只记录不设阈值，DEC-010 真机无数值阈值）。
+            SourceRateMeasurement postRestreamRates;
+            const bool postRatesMeasured = measureSourceRates(
+                service, poseSeq, pose.sources.gyroSamples, postRestreamRates);
+            RIN_CHECK(postRatesMeasured);
+            if (postRatesMeasured) {
+                checkRateIntegrity(postRestreamRates, "post-restream");
+                if (preRatesMeasured) {
+                    RIN_CHECK(postRestreamRates.gyroEmaHz >= 0.5 * preRestreamRates.gyroEmaHz &&
+                              postRestreamRates.gyroEmaHz <= 2.0 * preRestreamRates.gyroEmaHz);
+                    RIN_CHECK(postRestreamRates.accelEmaHz >=
+                                  0.5 * preRestreamRates.accelEmaHz &&
+                              postRestreamRates.accelEmaHz <= 2.0 * preRestreamRates.accelEmaHz);
+                    std::printf(
+                        "hardware: M3-08 post-restream rate recovery: gyro %.1fHz vs pre "
+                        "%.1fHz, accel %.1fHz vs pre %.1fHz\n",
+                        postRestreamRates.gyroEmaHz, preRestreamRates.gyroEmaHz,
+                        postRestreamRates.accelEmaHz, preRestreamRates.accelEmaHz);
+                }
+            }
         }
     }
 
