@@ -4,7 +4,17 @@
 
 ## [Unreleased]
 
-- （暂无）
+### 新增
+
+- IMU 姿态通路（M3，DEC-010）：采集支持 ACCEL/GYRO 运动流（`StreamRequest::enableMotion`
+  契约开关，viewer 默认开启）；Core 新增 Mahony 六轴姿态融合 `ImuFuser`（四元数、
+  PI 反馈 + 陀螺零偏在线估计、1g 重力参考门限；六轴无磁力计，yaw 长期漂移为
+  传感器物理限制，界面与文档如实披露）；`ICameraService` 新增 `tryLoadMotion()` /
+  `tryLoadPose()` 最新态通道；适配器读取出厂 motion intrinsics 与 gyro→color
+  外参，restream/设备切换后融合复位并重新收敛。
+- viewer 3D 位姿视图（M3，DEC-011）：固定世界坐标系（坐标轴 + 地面网格）中实时
+  呈现相机视锥与相机轴，姿态驱动旋转；Reset 重锚定显示参考，姿态不可用时空态。
+- viewer IMU 状态面板（M3）：实时显示 IMU 源频率与姿态读数（ZYX 欧拉角、四元数）。
 
 ## [0.2.0] - 2026-09-24（M2：Rin 更名与 Linux 自包含分发）
 

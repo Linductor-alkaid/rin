@@ -463,3 +463,76 @@
   （`M3-07`）"（shutdown_drain 49 checks + tsan 两目标复跑无报告）；
   `camera_service_design.md` 已随 `eb12ec9` 同步；退出条件其余小项
   （ctest 全绿、真机矩阵、文档收尾）归 `M3-08`，维持未勾。
+
+2026-09-24：`M3-08` M3 测试矩阵与真机验收（执行前置确认与规范化未执行登记，
+`M3-08` 保持未勾）
+
+- 范围：M3-08 中可由本实现步骤完成的收尾——门禁/真机验收的执行前环境确认、
+  未执行项按工程规范第 4 节登记、退出条件"文档同步"落地；不修改任何代码与
+  测试（M3-01..07 已交付实现与测试，本项无新增并发路径）。
+- 依据：本文件 `M3-08` 条目（"无设备时按工程规范第 4 节记录原因、负责人与补跑
+  条件，不冒充完成"）；工程规范第 4 节 3-4 款与第 7 节证据等级；`DEC-010`
+  影响范围"CHANGELOG 于 M3 退出时统一补条目"；M3-03..07 验证记录在案的交接约定
+  （全量 debug/asan/ubsan/tsan 门禁由脚本/独立验证环节复跑）。
+- 环境确认（本步骤实测）：
+  - D435if 在位：`lsusb` → `Bus 004 Device 007: ID 8086:0b3a Intel Corp.
+    Intel(R) RealSense(TM) Depth Camera 435if`。
+  - M3-04/M3-05 登记的 udev/scan_element 权限前置在本机已变化：librealsense
+    udev 规则在位（`/lib/udev/rules.d/99-realsense-libusb.rules` 与
+    `/usr/lib/udev/rules.d/` 同名文件）；运动设备节点 `/dev/iio:device1`
+    （accel_3d）、`/dev/iio:device2`（gyro_3d）、`/dev/hidraw4`
+    （hid-sensor-hub，HID_NAME 含 435if）均为 `crw-rw-rw- root:plugdev`
+    （2026-09-24 08:31 起）；此前阻塞运动流使能的 scan_elements sysfs（如
+    `/sys/bus/iio/devices/iio:device1/scan_elements/in_accel_y_en`，M3-04
+    记录为 root:root 0644 不可写）现为 `-rwxrwxrwx`（08:48 起）。以上为系统
+    状态观察，非本仓库变更；本步骤未执行任何系统级操作（root 需口令，
+    `sudo -n` 不可用），权限变化来源未追溯。
+- 验证（本步骤编译自检，工作树改动仅本记录与 `CHANGELOG.md`）：
+  - `cmake --preset debug -DRIN_EXECUTOR_SOURCE_DIR=build/iva-debug/_deps/executor-src
+    -DRIN_EUI_NEO_SOURCE_DIR=build/iva-debug/_deps/eui-neo-src
+    -DRIN_REALSENSE2_SOURCE_DIR=build/iva-debug/_deps/realsense2-src` →
+    Configuring/Generating done，exit=0。
+  - `cmake --build build/debug` → `ninja: no work to do`，exit=0：代码自 M3-07
+    独立验证构建后未变化，含 `test_public_boundary` 在内全部目标保持已构建
+    状态（RULE-01 边界编译目标可编译；其运行归独立验证环节）。
+- 未执行项登记（工程规范第 4 节 3-4 款）：
+  1. **全量 ctest 门禁（debug/asan/ubsan/tsan）**：本步骤未执行——实现步骤
+     契约明确不运行 ctest，测试执行归独立验证环节（M3-03..07 验证记录均已
+     注明全量门禁按交接约定由脚本复跑）；本步骤仅执行 debug 预设 configure +
+     全目标构建自检（见下）。"全绿"结论以独立验证环节复跑为准，不预支。
+  2. **D435if 真机验收四项观察**：未执行。姿态跟随（视锥随相机实时旋转）需
+     人手转动相机、3D 视图构图与 IMU 面板读数需目视判定——Agent 无法执行
+     物理操作与目视验收；IMU 出流频率与 restream 恢复的可编程观察载体为
+     `realsense_hardware`（hardware 标签，按 `tests/CMakeLists.txt` 纪律不进
+     默认 ctest）与 viewer 实机运行，同属测试执行，不在本步骤契约内。
+  3. **`realsense_hardware` 真机冒烟**：未运行。其 M3-04 登记的 SKIP(77)
+     前置权限状态已变化（见环境确认），预期转为可执行，实际结果待复跑确认。
+- 负责人：Linductor-alkaid（真机目视验收执行与 `DEC-010` 默认 `Kp`/`Ki`
+  适配性裁决）；全量门禁与硬件冒烟由工作流独立验证环节执行。
+- 补跑条件（可操作）：
+  1. 门禁：四预设依次执行 `cmake --preset <debug|asan|ubsan|tsan>
+     -DRIN_EXECUTOR_SOURCE_DIR=build/iva-debug/_deps/executor-src
+     -DRIN_EUI_NEO_SOURCE_DIR=build/iva-debug/_deps/eui-neo-src
+     -DRIN_REALSENSE2_SOURCE_DIR=build/iva-debug/_deps/realsense2-src` →
+     `cmake --build build/<preset>` → `ctest --test-dir build/<preset>`
+     （tsan 在本机内核需 `setarch -R` 前缀，见 0.1.0 已知限制；hardware 标签
+     用例不进默认 ctest）。
+  2. 真机冒烟：D435if 在位且上述权限保持时，
+     `ctest --test-dir build/debug -R realsense_hardware --output-on-failure`。
+  3. 目视验收：启动 `build/debug/apps/viewer/rin`（viewer 默认请求即
+     `enableMotion=true`，`apps/viewer/app.cpp:42`；契约字段默认 false，
+     `include/rin/camera_types.hpp:48`），依次记录：IMU 面板源频率（对照陀螺
+     200/400 Hz、加速计 63/250 Hz 档位，`DEC-010`）；转动相机时 3D 视图视锥
+     实时跟随与 Reset 重锚定（`view.pose.reset` 按钮，
+     `apps/viewer/pose_view.hpp:284`）；分辨率切换 restream 后 IMU 面板恢复
+     更新且姿态重新收敛；3D 视图构图（世界轴 + 地面网格 + 视锥）与姿态不可用
+     空态。结果记入本节，并按 `DEC-010` 复核默认增益适配性。
+- 限制：`M3-08` 复选框与退出条件"ctest（debug/asan/ubsan/tsan 预设）全绿"
+  维持未勾；"真机验收记录或规范化未执行记录"一项，本条即第 4 节要求的规范
+  化未执行登记（原因、负责人、补跑条件齐备），其与 `M3-08`、总计划
+  `SCOPE-07` 的勾选处置交由记账员/owner 在门禁与真机记录落地后进行。
+- 同步：`CHANGELOG.md`（Unreleased）已补 M3 功能条目；`camera_service_design.md`
+  IMU 通路经 `c4526fd`/`eb12ec9` 已同步，本步骤核对无需再改；`DEC-010`/
+  `DEC-011` 状态与 M3-08 前向引用核对一致，无需改动；总计划 `SCOPE-07`
+  因 M3 未收尾维持未勾；librealsense 台账无新增条目（权限前置属系统环境
+  事项，非依赖能力缺口）。
