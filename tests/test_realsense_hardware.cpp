@@ -365,23 +365,20 @@ int runSmokeTest(ICameraService& service) {
     {
         rin::MotionSample motion;
         std::uint64_t motionSeq = 0;
-        bool gyroSeen = false;
-        bool accelSeen = false;
+        // D435IF 实测（2026-09-24 frameset 组成探针）：ACCEL/GYRO 在同一 frameset 内
+        // 按固定顺序（ACCEL→GYRO）成对到达（137/137 帧形态 "AG"，~27-30 Hz/源），
+        // 单值诊断通道的最新态恒为 GYRO——ACCEL 保持最新态仅到同帧组内下一条采样
+        // （微秒级），轮询节奏无法可靠观察。故通道到达判据为"诊断通道有采样流动
+        // 且样本有效"；ACCEL/GYRO 双源活性由姿态快照的分源会话计数与实测频率承载
+        // （gyroSamples/accelSamples 仅在 ingest 分源累加，下方断言强制双源为正）。
         const bool motionArrived = pollUntil(5s, [&] {
-            if (!service.tryLoadMotion(motionSeq, motion)) {
-                return false;
-            }
-            gyroSeen = gyroSeen || motion.kind == rin::MotionStreamKind::Gyro;
-            accelSeen = accelSeen || motion.kind == rin::MotionStreamKind::Accel;
-            return gyroSeen && accelSeen;
+            return service.tryLoadMotion(motionSeq, motion);
         });
         RIN_CHECK(motionArrived);
         if (motionArrived) {
-            RIN_CHECK(gyroSeen);
-            RIN_CHECK(accelSeen);
             RIN_CHECK(motion.valid());
             RIN_CHECK(motion.deviceTimestampMs >= 0.0);
-            std::printf("hardware: motion sample kind=%s ts=%.1f ms (gyro+accel both seen)\n",
+            std::printf("hardware: motion sample kind=%s ts=%.1f ms (channel flowing)\n",
                         motion.kind == rin::MotionStreamKind::Gyro ? "gyro" : "accel",
                         motion.deviceTimestampMs);
         }
@@ -788,8 +785,14 @@ int runSmokeTest(ICameraService& service) {
         RIN_CHECK(poseResumed);
         if (poseResumed) {
             RIN_CHECK(pose.valid());
-            // 复位后重新收敛（假实现：首个采样即收敛且姿态恒等）。
-            RIN_CHECK_EQ(pose.orientation[0], 1.0f);
+            // M3-05（DEC-010）起 Mahony 真身复位后重新收敛，姿态随真实运动变化，
+            // 恒等断言不再成立；与 2c 首检同契约：单位四元数（norm² 容差 1e-3）。
+            const double poseNormSq =
+                static_cast<double>(pose.orientation[0]) * pose.orientation[0] +
+                static_cast<double>(pose.orientation[1]) * pose.orientation[1] +
+                static_cast<double>(pose.orientation[2]) * pose.orientation[2] +
+                static_cast<double>(pose.orientation[3]) * pose.orientation[3];
+            RIN_CHECK(std::fabs(poseNormSq - 1.0) <= 1e-3);
             RIN_CHECK(pose.sources.gyroSamples >= preGyroSamples);
             RIN_CHECK(pose.sources.accelSamples >= preAccelSamples);
             std::printf(
