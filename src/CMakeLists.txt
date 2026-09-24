@@ -6,6 +6,7 @@ add_library(rin_core STATIC
     core/imu_fuser.cpp
     core/pose_math.cpp
     core/pixel_format.cpp
+    core/workflow_types.cpp
 )
 add_library(rin::core ALIAS rin_core)
 
