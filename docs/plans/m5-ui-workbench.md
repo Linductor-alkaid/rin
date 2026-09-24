@@ -76,7 +76,7 @@
 - [ ] `M5-07` M5 测试矩阵、真机验收与文档回写：全预设测试通过；D435if 真机端到
       端验收（拖拽搭图→运行→中间结果→性能面板）记录；`ui_workspace_design.md`
       与 CHANGELOG 回写。无设备时按工程规范第 4 节记录补跑条件。
-- [ ] `M5-08` 契约假引擎（[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)，
+- [x] `M5-08` 契约假引擎（[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)，
       先于画布/面板实施）：按 `M4-09` 视图契约实现假工作流引擎——合成节点图与
       预置中间结果、仿真逐节点耗时/FPS/丢弃统计；承载与传递必须经 Executor 有限
       任务与 `executor::comm` 通道，复刻 `EXEC-07` 的有界在飞、显式丢弃、提交
@@ -140,3 +140,27 @@ retained layer polygon 缺陷按 EUI-20260924-001 先例规避），两记录 `A
 （含新增两决策记录与设计文档互链）、代码围栏配对、外部 URL 不作仓库内链接。
 总计划 DEC-014/015 暂定条目同步转"已记录"，当前状态段更新。范围注记：P0
 不含逐节点实时执行高亮与断点/单步（契约无对应语义，列为 P1 契约演进候选）。
+
+2026-09-24：`M5-08` 完成关闭——新增 `rin::workflow_fake` 静态库
+（src/workflow/fake_engine.{hpp,cpp}）实现 `M4-09` 视图契约（IWorkflowEngine）：
+合成源经 Executor 周期任务（timer 能力）驱动，每帧 `submit_cancellable` 有限任务
+拓扑序执行；有界在飞（maxInFlight）显式丢弃计数与提交拒绝显式事件（EXEC-07）；
+图替换走 `LatestMailbox` 最新态、参数热更新走 `MpscChannel` 逐条 FIFO、统计/产物/
+事件走 `LatestMailbox`（`executor::comm` 选型按语义，AGENTS 规则 4）；Running 下
+图与参数在帧边界排空生效（"下一帧生效"），Idle 下参数同步生效；节点失败（可注入）
+→ NodeFailed → Failed → stop 回 Idle 可重启；stop 排空消费全部 future（TaskCancelled
+与任务异常区分，取消不计失败），幂等，返回后无新发布、通道 stale 值可读（EXEC-04）。
+契约澄清：workflow_engine.hpp `tryLoadNodeOutput` 注释按 workflow_types.hpp 连线
+语义与 ui_workspace_design.md §5.6 修正（悬空输出端口的末端节点同样保留可查看，
+原"悬空输出不保留"表述与两文档矛盾）。测试（Independent-Verification-Agent 独立
+编写执行）：新增与 `M4-07` 真引擎共用的契约套件
+tests/workflow_engine_contract_suite.hpp（工厂参数化，图从 catalog() 泛式构造，
+M4-07 接入时复用）与 tests/test_workflow_fake_engine.cpp（共用套件 + 假引擎特有：
+工厂校验/有界在飞显式丢弃/crop 参数下一帧生效/仿真耗时注入/会话复位与 sourceSequence
+跨会话单调/Idle 参数同步生效/executor 关停鲁棒），160 项检查 debug/asan/ubsan/tsan
+四预设 0 失败（tsan 因本机内核 ASLR 限制需 `setarch -R` 运行，改动前既有 tsan 测试
+同样受影响；CI 需固定 `vm.mmap_rnd_bits` 或以 setarch 包裹）；debug 全量 ctest
+14 通过 1 跳过（realsense_hardware 无设备）。第一轮独立验证暴露两处测试竞态设计
+缺陷（最新态事件通道的中间事件单会话采样过度断言、会话复位阈值余量不足），由验证
+代理修复后复验通过，无实现缺陷。环境：x86_64 Linux，GCC 13，CMake presets
+debug/asan/ubsan/tsan。`M5-02`..`M5-05` 按计划仅依赖该假引擎开发。

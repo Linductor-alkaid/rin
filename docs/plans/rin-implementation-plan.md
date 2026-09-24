@@ -18,8 +18,11 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 2026-09-24 `M5-01` 完成：工作台 UI 调研落盘（[ui_workspace_research.md](../design/ui_workspace_research.md)，
 含用户指定的 RPA/影刀参考），[DEC-014](../decisions/DEC-014-workbench-information-architecture.md) 与
 [DEC-015](../decisions/DEC-015-node-editor-implementation-path.md) 冻结，
-[ui_workspace_design.md](../design/ui_workspace_design.md) 产出；M5 骨架实施启动
-（下一步 `M5-08` 契约假引擎）。
+[ui_workspace_design.md](../design/ui_workspace_design.md) 产出。2026-09-24 `M5-08`
+契约假引擎完成（`rin::workflow_fake` 库，`IWorkflowEngine` 仿真实现：Executor 周期
+tick + 有限任务有界在飞 + 显式丢弃 + 图/参数帧边界生效 + 节点失败/取消/关闭路径；
+与 M4-07 真引擎共用的契约测试套件入库，160 项检查 debug/asan/ubsan/tsan 四预设
+0 失败）；M5 骨架进入 `M5-02` 导航壳与页面框架。
 
 ## 交付边界（SCOPE）
 
