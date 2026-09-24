@@ -70,7 +70,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential git ca-certificates pkg-config python3-pip \
+            build-essential git ca-certificates file pkg-config python3-pip \
             software-properties-common gnupg \
             libusb-1.0-0-dev libudev-dev libcurl4-openssl-dev \
             libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
