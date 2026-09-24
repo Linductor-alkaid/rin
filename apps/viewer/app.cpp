@@ -227,6 +227,11 @@ void ViewerContext::rebuildResolutionOptions() {
         option.request.depthWidth = color.width;
         option.request.depthHeight = color.height;
         option.request.depthFps = kDefaultRequest.depthFps;
+        // enableMotion 粘性保持（StreamRequest 契约，camera_types.hpp）：分辨率档位
+        // 只覆盖视频字段，运动流意图沿用默认请求——否则 restream 命令携带
+        // enableMotion=false，适配器按新请求重建 pipeline 时静默关闭 IMU 流，
+        // 姿态通道停止发布（IMU 面板/3D 视图停留在陈旧快照）。
+        option.request.enableMotion = kDefaultRequest.enableMotion;
         option.label = std::to_string(color.width) + " x " + std::to_string(color.height);
         resolutionOptions.push_back(std::move(option));
     }
