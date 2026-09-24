@@ -1,7 +1,7 @@
 name: ci
 
-# push 到任意分支触发构建/测试；release 预设额外产出 deb 工件；
-# v* tag 触发将 deb 附着到 GitHub Release。
+# push 到任意分支触发构建/测试；package job 在 ubuntu 20.04 容器内产出
+# focal 兼容的 deb 工件（v0.3.0 起）；v* tag 触发将 deb 附着到 GitHub Release。
 on:
   push:
     branches: ["**"]
@@ -54,34 +54,42 @@ jobs:
         run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure
 
   package:
-    name: deb package
+    # 20.04 (focal) 适配（v0.3.0 起）：deb 在 focal 容器内构建——产物按 focal 的
+    # glibc 2.31 链接、shlibs 依赖按 focal 计算并随 Release 分发；在更新的宿主上
+    # 构建的产物无法在 focal 运行。executor 使用 std::atomic::wait/notify 与
+    # concepts/requires 表达式（libstdc++ 需 GCC 11+），focal 默认 g++-9/10 不可用
+    # → ubuntu-toolchain-r/test PPA 的 g++-12；并静态链接 libstdc++/libgcc，使产物
+    # 不依赖 focal 之外的 GLIBCXX 版本。focal 系统 CMake 为 3.16（低于项目要求的
+    # 3.25），经 pip 安装新版 cmake/ninja。
+    name: deb package (ubuntu 20.04)
     runs-on: ubuntu-24.04
+    container: ubuntu:20.04
     needs: test
     steps:
+      - name: Install toolchain and dev packages (focal)
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential git ca-certificates file pkg-config python3-pip \
+            software-properties-common gnupg \
+            libusb-1.0-0-dev libudev-dev libcurl4-openssl-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc-12 g++-12
+          python3 -m pip install --upgrade "cmake>=3.25,<4" ninja
+          cmake --version
+          g++-12 --version
+
       - uses: actions/checkout@v4
 
-      - name: Install toolchain and dev packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build ccache pkg-config \
-            libusb-1.0-0-dev libudev-dev libcurl4-openssl-dev \
-            libgl1-mesa-dev libegl-dev libx11-dev libxrandr-dev libxinerama-dev \
-            libxcursor-dev libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-release-${{ github.sha }}
-          restore-keys: |
-            ccache-release-
-            ccache-debug-
-
-      - name: Configure (release, no tests)
+      - name: Configure (release, GCC 12, static libstdc++, no tests)
         run: >-
-          cmake --preset release
-          -DRIN_BUILD_TESTS=OFF
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          CXX=g++-12 CC=gcc-12 cmake --preset release -DRIN_BUILD_TESTS=OFF
+          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
       - name: Build
         run: cmake --build build/release
@@ -105,6 +113,21 @@ jobs:
             ldd /tmp/rin-deb-check/usr/bin/rin
             exit 1
           fi
+          # focal 兼容护栏：glibc 符号版本要求不得超过 focal 的 2.31；GLIBCXX
+          # 要求不得超过 focal libstdc++6（GCC 10，3.4.28）——静态链接 libstdc++
+          # 后应为空，若出现更高版本说明静态化失效。
+          required_glibc="$(objdump -T /tmp/rin-deb-check/usr/bin/rin | grep -o 'GLIBC_2\.[0-9]*' | sort -u -V | tail -1)"
+          echo "required ${required_glibc}"
+          [ "$(printf 'GLIBC_2.31\n%s\n' "${required_glibc}" | sort -V | tail -1)" = "GLIBC_2.31" ]
+          required_glibcxx="$(for elf in /tmp/rin-deb-check/usr/bin/rin /tmp/rin-deb-check/usr/lib/rin/*.so*; do
+            objdump -T "$elf" 2>/dev/null | grep -o 'GLIBCXX_3\.4\.[0-9]*' || true
+          done | sort -u -V | tail -1)"
+          echo "required ${required_glibcxx:-none}"
+          if [ -n "${required_glibcxx}" ] &&
+             [ "$(printf 'GLIBCXX_3.4.28\n%s\n' "${required_glibcxx}" | sort -V | tail -1)" != "GLIBCXX_3.4.28" ]; then
+            echo "GLIBCXX requirement beyond focal libstdc++6: ${required_glibcxx}"
+            exit 1
+          fi
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v4
@@ -113,13 +136,25 @@ jobs:
           path: build/release/dist/*.deb
           if-no-files-found: error
 
+  release:
+    # 容器 job 内无 gh CLI：发布附着在宿主 runner 上完成（v* tag 触发）。
+    name: attach deb to GitHub Release
+    runs-on: ubuntu-24.04
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rin-deb
+          path: dist
+
       - name: Attach deb to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            build/release/dist/*.deb ||
-          gh release upload "$GITHUB_REF_NAME" --clobber build/release/dist/*.deb
+            dist/*.deb ||
+          gh release upload "$GITHUB_REF_NAME" --clobber dist/*.deb

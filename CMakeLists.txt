@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(Rin
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "Rin — real-time Intel RealSense RGB/depth preview with an executor-backed runtime"
     LANGUAGES C CXX
 )

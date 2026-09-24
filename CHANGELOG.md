@@ -2,9 +2,40 @@
 
 本项目的版本遵循语义化版本（工程规范 10.5）；tag 与里程碑"建议发布点"一一对应。
 
-## [Unreleased]
+## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
-- （暂无）
+### 新增
+
+- IMU 姿态通路（M3，DEC-010）：采集支持 ACCEL/GYRO 运动流（`StreamRequest::enableMotion`
+  契约开关，viewer 默认开启）；Core 新增 Mahony 六轴姿态融合 `ImuFuser`（四元数、
+  PI 反馈 + 陀螺零偏在线估计、1g 重力参考门限；六轴无磁力计，yaw 长期漂移为
+  传感器物理限制，界面与文档如实披露）；`ICameraService` 新增 `tryLoadMotion()` /
+  `tryLoadPose()` 最新态通道；适配器读取出厂 motion intrinsics 与 gyro→color
+  外参，restream/设备切换后融合复位并重新收敛。
+- viewer 3D 位姿视图（M3，DEC-011）：固定世界坐标系（坐标轴 + 地面网格）中实时
+  呈现相机视锥与相机轴，姿态驱动旋转；Reset 重锚定显示参考，姿态不可用时空态。
+- viewer IMU 状态面板（M3）：实时显示 IMU 源频率与姿态读数（ZYX 欧拉角、四元数）。
+- Ubuntu 20.04 (focal) 适配（v0.3.0 起）：CI 的 deb 打包改在 `ubuntu:20.04` 容器
+  内构建（GCC 10、pip 安装 CMake ≥ 3.25/Ninja；executor 公开头使用 concepts/requires
+  表达式，最低 GCC 10），产物按 focal glibc 2.31 链接并经 objdump 护栏校验，
+  随 Release 分发的 deb 可在 20.04 安装运行。
+
+### 修复
+
+- 3D 位姿视图冻结在初始姿态（M3，EUI-20260924-001）：EUI-NEO retained layer
+  绘制签名不含 polygon 点集，位姿卡场景点集逐帧变化而缓存层永不失效，视图冻结
+  在首次烘焙的姿态（真机插桩 + 像素差分取证，见依赖台账）。绕行：位姿场景
+  polygon 携带姿态通道序号作显式脏键（`dirtyKey`），脱离缓存层逐帧直接绘制；
+  上游修复后回归移除。
+- 运动流打开失败不再拖死视频流（M3）：无 root 运行时 HID/IIO 设备节点权限前置会
+  使含 ACCEL/GYRO 的 pipeline 打开失败，此前服务经有界重试后进入 Failed，视频与
+  IMU 全部无输出；现适配器在运动流打开失败时一次性降级为纯视频配置重试，降级原因
+  以事件显示于界面状态行，之后每次流重建（restream/设备切换/重开）自动重试运动流；
+  纯视频打开失败保持既有重试/Failed 语义。
+- 更换分辨率后 IMU 数据停更（M3）：viewer 分辨率档位构造 `StreamRequest` 时丢失
+  `enableMotion` 位（契约默认 false），restream 命令触发适配器按"无运动流"重建
+  pipeline，姿态通道停止发布、IMU 面板与 3D 视图停留陈旧快照；现分辨率档位沿用
+  默认请求的运动流意图（该位为请求级粘性，跨分辨率切换保持）。
 
 ## [0.2.0] - 2026-09-24（M2：Rin 更名与 Linux 自包含分发）
 

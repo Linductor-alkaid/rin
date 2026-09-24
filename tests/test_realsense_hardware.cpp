@@ -1,19 +1,34 @@
 // 真机冒烟测试（hardware 标签）：D435if 在位时执行完整链路
-// start(640x480@30) -> Started 事件 -> RGB/Depth 帧 -> 内参 -> 设备目录（DEC-006）->
-// requestDevice(活动序列号) 幂等（不中断流）-> 深度配色运行时切换（DEC-007：Grayscale
-// 生效不重流、消息精确、帧内容灰度性质；切回 Jet 伪彩性质；同值幂等）->
-// requestResolution(848x480@30) -> ResolutionChanged + 新分辨率帧 -> stop() 收敛 Idle ->
-// 二次 stop() 幂等。
+// start(640x480@30, enableMotion) -> Started 事件 -> RGB/Depth 帧 -> motion 通道
+// （M3-04：ACCEL/GYRO 原始采样 + IdentityImuFuser 恒等姿态快照 + 源频率收敛）->
+// 内参（含 gyro→color 外参与 ACCEL/GYRO 出厂运动内参，内容级非全零防线）-> 设备目录
+// （DEC-006 + IMU 能力字段）-> requestDevice(活动序列号) 幂等（不中断流）-> 深度配色
+// 运行时切换（DEC-007：Grayscale 生效不重流、消息精确、帧内容灰度性质；切回 Jet 伪彩
+// 性质；同值幂等）-> M3-08 IMU 出流频率验收（EMA 稳态 × 墙钟窗口计数交叉验证，交付
+// 频率对设备档位只记录不断言）-> requestResolution(848x480@30)（M3-04：restream 重建
+// 含 IMU，运动/姿态会话序号不回退、累计样本只增；M3-08：restream 后源频率重新收敛
+// 到 restream 前同一量级）-> ResolutionChanged + 新分辨率帧 -> stop() 收敛
+// Idle -> 二次 stop() 幂等。
 // DEC-006：start 不再因无设备拒绝（worker 进 Waiting 稳态）；无设备时测试经
 // Waiting + 空目录判定打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
+// M3-04 降级语义的测试侧对应：适配器在含运动流的 pipeline.start 失败（典型：
+// 无 root 时 HID/IIO scan_element 权限前置）时一次性降级为纯视频并照常 Started，
+// 服务不再进入 Failed——旧"等 Failed 事件"的 SKIP 判据不可达。改用持久降级
+// 签名 SKIP 77：imuSupported==true 且 motion 通道有界窗口（5s）零采样且最新
+// IntrinsicsSnapshot 的 gyroToColor/gyroIntrinsics 均无效（camera_types.hpp 契约
+// "运动流未使能时保持全零无效值"；降级 Info 事件会被 Started 在 latest-state
+// 事件邮箱覆盖，不可作判据）。补跑条件：安装 librealsense udev 规则
+//（upstream scripts/setup_udev_rules.sh）或等价 HID/IIO 授权后复跑。
 // Waiting 态的设备移除/恢复语义无法在真机上程序化模拟（无免密 sudo 拔 USB），
-// 由真机人工验收覆盖；本测试只覆盖单设备自动选择路径。
+// 由真机人工验收覆盖；本测试只覆盖单设备自动选择路径（无 IMU 设备的退化路径与
+// 多设备切换路径无第二台设备，由 M3-08 真机验收按规范补充）。
 // 全部等待为有界轮询（100ms 间隔），不使用裸 sleep 等待；退出前保证 stop() 收尾。
 #include "test_util.hpp"
 
 #include <executor/executor.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -34,6 +49,22 @@ using rin::ICameraService;
 using rin::ServiceEvent;
 using rin::ServiceEventKind;
 
+// --- M3-08 IMU 出流频率验收参数（真机 D435IF 实测，2026-09-24）---
+// 实测依据：librealsense syncer 把 ACCEL/GYRO 与视频帧按帧率配对交付
+//（137/137 frameset 形态 "AG"，~30 Hz/源），交付速率 ≠ 设备 ODR 档位
+//（本机目录上报 accel 100/200/400、gyro 200/400）。DEC-010 明确不对真机提出
+// 数值阈值（"M3-08 按 D435if 冒烟记录 IMU 出流频率"），故本测试对交付频率
+// 只做"测量完整性"断言并打印记录，档位对照只打印不断言。
+// EMA 稳态 gate：ingest 侧 kMotionRateEmaAlpha=0.1（时间常数 ~10 样本），
+// 30 个新样本后收敛 >95%，随后再跨 90 样本窗口计数。
+constexpr std::uint64_t kFreqSettleGyroSamples = 30;
+constexpr std::uint64_t kFreqWindowGyroSamples = 90;
+// 活流下限：窗口计数速率低于该值视为运动流未有效流动（实测 ~30 Hz/源）。
+constexpr double kMinDeliveredSourceHz = 5.0;
+// EMA（设备时间戳域相邻 dt 的滑动均值）与墙钟窗口计数速率的一致性相对容差
+// （两者统计口径不同——调和 vs 算术平均、100ms 轮询量化——35% 只拦截量级错误）。
+constexpr double kFreqConsistencyRelTol = 0.35;
+
 /// 有界轮询：每 100ms 谓词一次，budget 内为真返回 true，超时返回 false。
 template <typename Pred>
 bool pollUntil(std::chrono::steady_clock::duration budget, Pred&& pred) {
@@ -47,6 +78,79 @@ bool pollUntil(std::chrono::steady_clock::duration budget, Pred&& pred) {
         }
         std::this_thread::sleep_for(100ms);
     }
+}
+
+// --- M3-08：IMU 出流频率测量（M3-08 真机记录的可编程载体）---
+/// 单次频率测量结果：EMA（发布侧统计）+ 墙钟窗口计数均值（独立口径）。
+struct SourceRateMeasurement {
+    double gyroEmaHz = 0.0;
+    double accelEmaHz = 0.0;
+    double gyroCounterHz = 0.0;
+    double accelCounterHz = 0.0;
+    std::uint64_t gyroSamples = 0;
+    std::uint64_t accelSamples = 0;
+    std::uint64_t poseSequence = 0;
+};
+
+/// 跨样本窗口的频率测量：等待该源自 `lastGyroSamples` 起再前进
+/// kFreqSettleGyroSamples 个陀螺样本（EMA 稳态 gate），随后以墙钟窗口跨
+/// kFreqWindowGyroSamples 个陀螺样本计数，读窗口末快照的 EMA 与累计计数。
+/// 窗口未在预算内完成（流停滞）返回 false。轮询经姿态通道最新态语义，
+/// 计数器为 worker 侧累计值，不受轮询节奏影响。
+bool measureSourceRates(ICameraService& service, std::uint64_t& lastSeenPoseSeq,
+                        std::uint64_t lastGyroSamples, SourceRateMeasurement& out) {
+    rin::ImuSnapshot snapshot;
+    // 预算与活流下限自洽：kFreqSettleGyroSamples/kFreqWindowGyroSamples 个样本
+    // 在 5 Hz 下限需 6s/18s，预算留裕量（实测 ~30 Hz 时为 1s/3s）。
+    const bool settled = pollUntil(10s, [&] {
+        return service.tryLoadPose(lastSeenPoseSeq, snapshot) &&
+               snapshot.sources.gyroSamples >= lastGyroSamples + kFreqSettleGyroSamples;
+    });
+    if (!settled) {
+        return false;
+    }
+    const rin::ImuSnapshot begin = snapshot;
+    const auto tBegin = std::chrono::steady_clock::now();
+    const bool windowed = pollUntil(20s, [&] {
+        return service.tryLoadPose(lastSeenPoseSeq, snapshot) &&
+               snapshot.sources.gyroSamples >=
+                   begin.sources.gyroSamples + kFreqWindowGyroSamples;
+    });
+    if (!windowed) {
+        return false;
+    }
+    const auto tEnd = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(tEnd - tBegin).count();
+    if (seconds <= 0.0) {
+        return false;
+    }
+    out.gyroEmaHz = snapshot.sources.gyroHz;
+    out.accelEmaHz = snapshot.sources.accelHz;
+    out.gyroSamples = snapshot.sources.gyroSamples;
+    out.accelSamples = snapshot.sources.accelSamples;
+    out.poseSequence = snapshot.sequence;
+    out.gyroCounterHz =
+        static_cast<double>(snapshot.sources.gyroSamples - begin.sources.gyroSamples) / seconds;
+    out.accelCounterHz =
+        static_cast<double>(snapshot.sources.accelSamples - begin.sources.accelSamples) / seconds;
+    return true;
+}
+
+/// M3-08 频率记录断言（发布侧统计契约的完整性，不对交付频率设阈值）：
+/// EMA 与计数速率均有限、为正、达到活流下限，且两口径在容差内一致。
+void checkRateIntegrity(const SourceRateMeasurement& rates, const char* label) {
+    RIN_CHECK(std::isfinite(rates.gyroEmaHz) && rates.gyroEmaHz > 0.0);
+    RIN_CHECK(std::isfinite(rates.accelEmaHz) && rates.accelEmaHz > 0.0);
+    RIN_CHECK(rates.gyroCounterHz >= kMinDeliveredSourceHz);
+    RIN_CHECK(rates.accelCounterHz >= kMinDeliveredSourceHz);
+    RIN_CHECK(std::fabs(rates.gyroEmaHz - rates.gyroCounterHz) <=
+              kFreqConsistencyRelTol * rates.gyroCounterHz);
+    RIN_CHECK(std::fabs(rates.accelEmaHz - rates.accelCounterHz) <=
+              kFreqConsistencyRelTol * rates.accelCounterHz);
+    std::printf("hardware: M3-08 imu rates %s: gyro ema=%.1fHz counter=%.1fHz, accel "
+                "ema=%.1fHz counter=%.1fHz (pose seq %llu)\n",
+                label, rates.gyroEmaHz, rates.gyroCounterHz, rates.accelEmaHz,
+                rates.accelCounterHz, static_cast<unsigned long long>(rates.poseSequence));
 }
 
 // --- 内容级断言参数（真机 D435IF 暗室实测，2026-09-23）---
@@ -146,10 +250,19 @@ bool hasChromaticPixel(const Frame& frame) {
     return false;
 }
 
-/// 冒烟主体。返回 0 = 通过（RIN_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
+/// 冒烟主体。返回 0 = 通过（RIN_CHECK 结果见 exitStatus），77 = 无设备或 IMU 前置
+/// 缺失（运动流被适配器降级为纯视频，见文件头降级签名）跳过，1 = 失败。
 int runSmokeTest(ICameraService& service) {
-    const rin::StreamRequest baseRequest{640, 480, 30, 640, 480, 30};  // D435if RGB8/Z16 均支持
-    const rin::StreamRequest altRequest{848, 480, 30, 848, 480, 30};
+    // M3-04：全程 enableMotion——D435if 具备 IMU，混合 pipeline（video + ACCEL/GYRO）
+    // 从首次 pipeline.start 起生效，motion 分支与视频链路并行验证。
+    const rin::StreamRequest baseRequest{640, 480, 30, 640, 480, 30, true};  // RGB8/Z16 均支持
+    const rin::StreamRequest altRequest{848, 480, 30, 848, 480, 30, true};
+
+    // M3-04 跨 restream 连续性记账（2c 采样、5c 复核）：会话序号与累计样本数。
+    std::uint64_t preMotionSessionSeq = 0;
+    std::uint64_t prePoseSessionSeq = 0;
+    std::uint64_t preGyroSamples = 0;
+    std::uint64_t preAccelSamples = 0;
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto elapsedMs = [&t0] {
@@ -209,6 +322,22 @@ int runSmokeTest(ICameraService& service) {
     });
     if (!startedEvent && failureMessage.find("no RealSense device") != std::string::npos) {
         std::printf("SKIP: no RealSense device (%s)\n", failureMessage.c_str());
+        return 77;
+    }
+    if (!startedEvent && failureMessage.find("scan_element") != std::string::npos &&
+        failureMessage.find("Permission denied") != std::string::npos) {
+        // M3-04 真机前置缺失：运动流启用需写 IMU 的 HID/IIO scan_elements sysfs
+        //（如 in_accel_y_en，root:root 0644），须安装 librealsense udev 规则或等价
+        // 授权。按工程规范显式 SKIP 并记录补跑条件：安装 librealsense udev 规则
+        //（上游 scripts/setup_udev_rules.sh）后复跑本测试；在此之前 motion 真机
+        // 验证保持未执行状态。
+        // 防御性保留：M3-04 降级语义下服务不再因运动流权限 Failed，本分支常态
+        // 不可达（降级路径有 Started 事件，且降级 Info 文本被 latest-state 事件
+        // 邮箱的 Started 覆盖）；仅当适配器回归为"打开失败即 Failed"时兜底。
+        // 常态 IMU 前置缺失的 SKIP 判据见 2c 的持久降级签名。
+        std::printf("SKIP: IMU motion stream blocked by iio scan_element permissions "
+                    "(install librealsense udev rules, then rerun); last error: %s\n",
+                    failureMessage.c_str());
         return 77;
     }
     if (!startedEvent && service.state() == CameraServiceState::Waiting) {
@@ -333,6 +462,110 @@ int runSmokeTest(ICameraService& service) {
     sampleContent(FrameKind::Rgb, rgbSequence, kRgbMinNonZeroRatio, "rgb");
     sampleContent(FrameKind::Depth, depthSequence, kDepthMinNonZeroRatio, "depth");
 
+    // --- 2c) M3-04 motion 通道：ACCEL/GYRO 原始采样与恒等姿态快照经通道发布 ---
+    // enableMotion 且设备具备 IMU（D435if）：采集 worker 的 motion 分支把原始采样
+    // 与 IdentityImuFuser 姿态快照投递到 motion/pose 通道；源频率 EMA 在数百毫秒内
+    // 收敛为正，会话累计样本数为正。
+    {
+        rin::MotionSample motion;
+        std::uint64_t motionSeq = 0;
+        // D435IF 实测（2026-09-24 frameset 组成探针）：ACCEL/GYRO 在同一 frameset 内
+        // 按固定顺序（ACCEL→GYRO）成对到达（137/137 帧形态 "AG"，~27-30 Hz/源），
+        // 单值诊断通道的最新态恒为 GYRO——ACCEL 保持最新态仅到同帧组内下一条采样
+        // （微秒级），轮询节奏无法可靠观察。故通道到达判据为"诊断通道有采样流动
+        // 且样本有效"；ACCEL/GYRO 双源活性由姿态快照的分源会话计数与实测频率承载
+        // （gyroSamples/accelSamples 仅在 ingest 分源累加，下方断言强制双源为正）。
+        const bool motionArrived = pollUntil(5s, [&] {
+            return service.tryLoadMotion(motionSeq, motion);
+        });
+
+        // IMU 前置缺失降级签名（M3-04 降级语义的测试侧对应，见文件头）：适配器在
+        // 含运动流的 pipeline.start 失败（典型：无 root 时 HID/IIO scan_element
+        // 权限前置）时一次性降级为纯视频并照常 Started，服务不再进入 Failed——
+        // 旧"等 Failed 事件"的 SKIP 判据不可达，且降级 Info 事件被 Started 在
+        // latest-state 事件邮箱覆盖，不可作判据。改用持久可观察签名，三者同时
+        // 成立才判为环境前置缺失（SKIP 77）：
+        //   (a) 目录 imuSupported==true（设备确有 IMU；枚举只查传感器能力，与
+        //       pipeline.start 成败无关）；
+        //   (b) 有界窗口内 motion 通道零采样（motionActive_==false 的直接证据）；
+        //   (c) 最新 IntrinsicsSnapshot 的 gyroToColor/gyroIntrinsics 均无效
+        //      （无运动流快照签名，camera_types.hpp 契约"全零无效可观察"）。
+        // 只要不满足其一即按既有失败路径处理：真机运动流真实断裂（此时快照由
+        // motion=true 路径发布、外参有效）或无 IMU 设备（imuSupported==false，
+        // 既有退化语义：目录断言按原样暴露）都不被误判为 SKIP。
+        if (!motionArrived) {
+            rin::DeviceCatalog catalog;
+            std::uint64_t catalogSeq = 0;
+            rin::IntrinsicsSnapshot intrinsics;
+            std::uint64_t intrinsicsSeq = 0;
+            // 目录与快照先于 Started 发布（resolveTarget 枚举 + streamLoop 出流前
+            // 快照）；此处仅读取不作断言，取不到按签名不成立处理（保守走失败路径）。
+            const bool catalogSeen =
+                pollUntil(1s, [&] { return service.tryLoadCatalog(catalogSeq, catalog); });
+            const bool snapshotSeen = pollUntil(1s, [&] {
+                return service.tryLoadIntrinsics(intrinsicsSeq, intrinsics);
+            });
+            bool activeImuSupported = false;
+            if (catalogSeen) {
+                for (const rin::DeviceInfo& device : catalog.devices) {
+                    if (device.serial == catalog.activeSerial) {
+                        activeImuSupported = device.imuSupported;
+                    }
+                }
+            }
+            if (catalogSeen && snapshotSeen && activeImuSupported &&
+                !intrinsics.gyroToColor.valid() && !intrinsics.gyroIntrinsics.valid()) {
+                std::printf(
+                    "SKIP: IMU motion stream unavailable (adapter degraded to video only: "
+                    "imuSupported=1 but no motion samples within 5s and no motion "
+                    "intrinsics in latest snapshot) — install librealsense udev rules "
+                    "(upstream scripts/setup_udev_rules.sh) or equivalent HID/IIO "
+                    "scan_element authorization, then rerun\n");
+                return 77;
+            }
+        }
+        RIN_CHECK(motionArrived);
+        if (motionArrived) {
+            RIN_CHECK(motion.valid());
+            RIN_CHECK(motion.deviceTimestampMs >= 0.0);
+            std::printf("hardware: motion sample kind=%s ts=%.1f ms (channel flowing)\n",
+                        motion.kind == rin::MotionStreamKind::Gyro ? "gyro" : "accel",
+                        motion.deviceTimestampMs);
+        }
+
+        rin::ImuSnapshot pose;
+        std::uint64_t poseSeq = 0;
+        const bool poseArrived =
+            pollUntil(5s, [&] { return service.tryLoadPose(poseSeq, pose); });
+        RIN_CHECK(poseArrived);
+        if (poseArrived) {
+            RIN_CHECK(pose.valid());
+            // M3-05 起 createImuFuser() 返回 Mahony 真身（DEC-010）：姿态随真实
+            // 运动变化，恒等断言不再成立；真机噪声下契约约束为单位四元数
+            // （ImuSnapshot::valid() 已含 norm² 容差 1e-3，此处显式复核数值面）。
+            const double poseNormSq =
+                static_cast<double>(pose.orientation[0]) * pose.orientation[0] +
+                static_cast<double>(pose.orientation[1]) * pose.orientation[1] +
+                static_cast<double>(pose.orientation[2]) * pose.orientation[2] +
+                static_cast<double>(pose.orientation[3]) * pose.orientation[3];
+            RIN_CHECK(std::fabs(poseNormSq - 1.0) <= 1e-3);
+            RIN_CHECK(pose.sources.gyroHz > 0.0f);
+            RIN_CHECK(pose.sources.accelHz > 0.0f);
+            RIN_CHECK(pose.sources.gyroSamples > 0);
+            RIN_CHECK(pose.sources.accelSamples > 0);
+            preMotionSessionSeq = motion.sequence;
+            prePoseSessionSeq = pose.sequence;
+            preGyroSamples = pose.sources.gyroSamples;
+            preAccelSamples = pose.sources.accelSamples;
+            std::printf(
+                "hardware: pose seq %llu unit-norm (gyro %.1f Hz / %llu samples, accel "
+                "%.1f Hz / %llu samples)\n",
+                static_cast<unsigned long long>(pose.sequence), pose.sources.gyroHz,
+                static_cast<unsigned long long>(pose.sources.gyroSamples),
+                pose.sources.accelHz, static_cast<unsigned long long>(pose.sources.accelSamples));
+        }
+    }
+
     // --- 3) 内参快照 color/depth valid()，且与当前档位一致 ---
     rin::IntrinsicsSnapshot intrinsics;
     std::uint64_t intrinsicsSequence = 0;
@@ -350,6 +583,31 @@ int runSmokeTest(ICameraService& service) {
         std::printf("hardware: intrinsics color %ux%u (fx=%.1f), depth %ux%u (fx=%.1f)\n",
                     intrinsics.color.width, intrinsics.color.height, intrinsics.color.fx,
                     intrinsics.depth.width, intrinsics.depth.height, intrinsics.depth.fx);
+
+        // --- M3-04：motion intrinsics 与 gyro→color 外参链（D435if 读取成功形态）。
+        // 内容级防线：全零旋转不可能是真实外参、全零刻度不可能是真实出厂内参——
+        // 即使 valid() 放行也能拦住"读取失败被静默当成功"（全零应可观察为无效，
+        // 契约面由 test_motion_intrinsics.cpp 锁定）。
+        RIN_CHECK(intrinsics.gyroToColor.valid());
+        RIN_CHECK(intrinsics.accelIntrinsics.valid());
+        RIN_CHECK(intrinsics.gyroIntrinsics.valid());
+        bool gyroRotationNonZero = false;
+        for (const float value : intrinsics.gyroToColor.rotation) {
+            gyroRotationNonZero = gyroRotationNonZero || value != 0.0f;
+        }
+        RIN_CHECK(gyroRotationNonZero);
+        RIN_CHECK(intrinsics.accelIntrinsics.scale[0] != 0.0f);
+        RIN_CHECK(intrinsics.accelIntrinsics.scale[8] != 0.0f);
+        RIN_CHECK(intrinsics.gyroIntrinsics.scale[0] != 0.0f);
+        RIN_CHECK(intrinsics.gyroIntrinsics.scale[8] != 0.0f);
+        std::printf(
+            "hardware: gyro->color t=(%.4f, %.4f, %.4f); scale diag accel (%.4f, %.4f, "
+            "%.4f) gyro (%.4f, %.4f, %.4f)\n",
+            intrinsics.gyroToColor.translation[0], intrinsics.gyroToColor.translation[1],
+            intrinsics.gyroToColor.translation[2], intrinsics.accelIntrinsics.scale[0],
+            intrinsics.accelIntrinsics.scale[4], intrinsics.accelIntrinsics.scale[8],
+            intrinsics.gyroIntrinsics.scale[0], intrinsics.gyroIntrinsics.scale[4],
+            intrinsics.gyroIntrinsics.scale[8]);
     }
 
     // --- 4) 设备目录（DEC-006）：单设备自动选择、目录项完整、与帧流来源一致 ---
@@ -371,6 +629,26 @@ int runSmokeTest(ICameraService& service) {
         RIN_CHECK(!device.firmwareVersion.empty());
         RIN_CHECK(!device.colorOptions.empty());
         RIN_CHECK(!device.depthOptions.empty());
+        // M3-04：D435if 内置 IMU——目录上报 imuSupported 与升序速率档位（混合
+        // pipeline 的设备能力依据，采集侧 deviceHasImu 查询该目录）。
+        RIN_CHECK(device.imuSupported);
+        RIN_CHECK(!device.imuAccelRatesHz.empty());
+        RIN_CHECK(!device.imuGyroRatesHz.empty());
+        for (std::size_t index = 1; index < device.imuAccelRatesHz.size(); ++index) {
+            RIN_CHECK(device.imuAccelRatesHz[index] > device.imuAccelRatesHz[index - 1]);
+        }
+        for (std::size_t index = 1; index < device.imuGyroRatesHz.size(); ++index) {
+            RIN_CHECK(device.imuGyroRatesHz[index] > device.imuGyroRatesHz[index - 1]);
+        }
+        std::printf("hardware: catalog imuSupported=%d accel rates:", device.imuSupported ? 1 : 0);
+        for (const std::uint32_t rate : device.imuAccelRatesHz) {
+            std::printf(" %u", rate);
+        }
+        std::printf(", gyro rates:");
+        for (const std::uint32_t rate : device.imuGyroRatesHz) {
+            std::printf(" %u", rate);
+        }
+        std::printf("\n");
         // 帧流来源一致性：Started 事件携带 "streaming <serial>"（适配器契约）。
         RIN_CHECK(startedMessage.find(activeSerial) != std::string::npos);
         std::printf(
@@ -553,6 +831,35 @@ int runSmokeTest(ICameraService& service) {
         }
     }
 
+    // --- 4d) M3-08 真机记录：IMU 出流频率（EMA 稳态 × 墙钟窗口交叉验证）---
+    // DEC-010 明确不对真机提出数值阈值；交付频率与设备档位的对照只打印记录
+    // 不断言（本机实测：syncer 按视频帧率配对交付 ~30 Hz/源，≠ ODR 档位；
+    // 交付速率与 DEC-010 假设的偏差交 owner 按 DEC-010 复核裁决）。
+    SourceRateMeasurement preRestreamRates;
+    bool preRatesMeasured = false;
+    if (preGyroSamples > 0) {
+        std::uint64_t freqPoseSeq = prePoseSessionSeq;
+        preRatesMeasured =
+            measureSourceRates(service, freqPoseSeq, preGyroSamples, preRestreamRates);
+        RIN_CHECK(preRatesMeasured);
+        if (preRatesMeasured) {
+            checkRateIntegrity(preRestreamRates, "pre-restream");
+            // 档位对照记录（只记录；对照结论由验收记录承载）。
+            if (capsArrived && !caps.devices.empty()) {
+                std::printf("hardware: M3-08 device ODR gears accel:");
+                for (const std::uint32_t rate : caps.devices.front().imuAccelRatesHz) {
+                    std::printf(" %u", rate);
+                }
+                std::printf(", gyro:");
+                for (const std::uint32_t rate : caps.devices.front().imuGyroRatesHz) {
+                    std::printf(" %u", rate);
+                }
+                std::printf(" | delivered rate is syncer video-paced pairing; gear match "
+                            "is a record, not an assertion\n");
+            }
+        }
+    }
+
     // --- 5) requestResolution 848x480：统一 6s 期限等 ResolutionChanged + 新帧 ---
     std::string requestError = "<untouched>";
     const std::uint64_t rgbSeqBeforeChange = rgbSequence;
@@ -636,6 +943,73 @@ int runSmokeTest(ICameraService& service) {
     }
     std::printf("hardware: ResolutionChanged after %.0f ms, 848x480 rgb=%s depth=%s\n", changedMs,
                 rgb848Arrived ? "ok" : "missing", depth848Arrived ? "ok" : "missing");
+
+    // --- 5c) M3-04 restream 重建含 IMU：运动/姿态通道恢复发布，会话序号不回退，
+    //     会话累计样本数只增（resetStreamState 只复位融合器与频率窗口，序号与统计
+    //     跨重建连续——消费方 lastSeen 序号不回退的契约）。
+    {
+        rin::MotionSample motion;
+        std::uint64_t motionSeq = 0;
+        const bool motionResumed = pollUntil(5s, [&] {
+            return service.tryLoadMotion(motionSeq, motion) &&
+                   motion.sequence > preMotionSessionSeq;
+        });
+        RIN_CHECK(motionResumed);
+
+        rin::ImuSnapshot pose;
+        std::uint64_t poseSeq = 0;
+        const bool poseResumed = pollUntil(5s, [&] {
+            return service.tryLoadPose(poseSeq, pose) && pose.sequence > prePoseSessionSeq;
+        });
+        RIN_CHECK(poseResumed);
+        if (poseResumed) {
+            RIN_CHECK(pose.valid());
+            // M3-05（DEC-010）起 Mahony 真身复位后重新收敛，姿态随真实运动变化，
+            // 恒等断言不再成立；与 2c 首检同契约：单位四元数（norm² 容差 1e-3）。
+            const double poseNormSq =
+                static_cast<double>(pose.orientation[0]) * pose.orientation[0] +
+                static_cast<double>(pose.orientation[1]) * pose.orientation[1] +
+                static_cast<double>(pose.orientation[2]) * pose.orientation[2] +
+                static_cast<double>(pose.orientation[3]) * pose.orientation[3];
+            RIN_CHECK(std::fabs(poseNormSq - 1.0) <= 1e-3);
+            RIN_CHECK(pose.sources.gyroSamples >= preGyroSamples);
+            RIN_CHECK(pose.sources.accelSamples >= preAccelSamples);
+            std::printf(
+                "hardware: motion resumed post-restream (motion seq %llu > %llu, pose seq "
+                "%llu > %llu, gyro samples %llu >= %llu, accel samples %llu >= %llu)\n",
+                static_cast<unsigned long long>(motion.sequence),
+                static_cast<unsigned long long>(preMotionSessionSeq),
+                static_cast<unsigned long long>(pose.sequence),
+                static_cast<unsigned long long>(prePoseSessionSeq),
+                static_cast<unsigned long long>(pose.sources.gyroSamples),
+                static_cast<unsigned long long>(preGyroSamples),
+                static_cast<unsigned long long>(pose.sources.accelSamples),
+                static_cast<unsigned long long>(preAccelSamples));
+
+            // --- M3-08：restream 后源频率恢复——EMA（resetStreamState 清零重建）
+            // 重新收敛，且回到 restream 前同一量级（量级漂移 >2x 视为恢复异常；
+            // 精确值仍只记录不设阈值，DEC-010 真机无数值阈值）。
+            SourceRateMeasurement postRestreamRates;
+            const bool postRatesMeasured = measureSourceRates(
+                service, poseSeq, pose.sources.gyroSamples, postRestreamRates);
+            RIN_CHECK(postRatesMeasured);
+            if (postRatesMeasured) {
+                checkRateIntegrity(postRestreamRates, "post-restream");
+                if (preRatesMeasured) {
+                    RIN_CHECK(postRestreamRates.gyroEmaHz >= 0.5 * preRestreamRates.gyroEmaHz &&
+                              postRestreamRates.gyroEmaHz <= 2.0 * preRestreamRates.gyroEmaHz);
+                    RIN_CHECK(postRestreamRates.accelEmaHz >=
+                                  0.5 * preRestreamRates.accelEmaHz &&
+                              postRestreamRates.accelEmaHz <= 2.0 * preRestreamRates.accelEmaHz);
+                    std::printf(
+                        "hardware: M3-08 post-restream rate recovery: gyro %.1fHz vs pre "
+                        "%.1fHz, accel %.1fHz vs pre %.1fHz\n",
+                        postRestreamRates.gyroEmaHz, preRestreamRates.gyroEmaHz,
+                        postRestreamRates.accelEmaHz, preRestreamRates.accelEmaHz);
+                }
+            }
+        }
+    }
 
     // --- 6) stop() 收敛 Idle；二次 stop() 幂等不崩溃 ---
     service.stop();

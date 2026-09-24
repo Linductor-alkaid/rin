@@ -38,6 +38,16 @@ inline int exitStatus() {
         }                                                            \
     } while (0)
 
+/// 带补充消息的检查（参数化用例失败时定位到具体输入）。
+#define RIN_CHECK_MSG(cond, message)                                     \
+    do {                                                                 \
+        ++rin_test::checkCount();                                        \
+        if (!(cond)) {                                                   \
+            rin_test::recordFailure(__FILE__, __LINE__,                  \
+                                    std::string(#cond) + " | " + (message)); \
+        }                                                                \
+    } while (0)
+
 #define RIN_CHECK_EQ(a, b)                                                              \
     do {                                                                                \
         ++rin_test::checkCount();                                                       \
