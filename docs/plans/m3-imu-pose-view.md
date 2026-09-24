@@ -69,7 +69,7 @@
 - [x] `M3-06` 3D 位姿视图控件（按 `DEC-011`）：固定世界坐标系（坐标轴 + 地面
       网格），相机视锥与相机轴随姿态实时更新，视图重置，姿态不可用时的空态。
       完成判据：投影数学单测通过，UI 集成可用。
-- [ ] `M3-07` viewer 集成与关闭回归：IMU 状态面板（源频率、姿态数值）、3D 视图
+- [x] `M3-07` viewer 集成与关闭回归：IMU 状态面板（源频率、姿态数值）、3D 视图
       卡位；`onShutdown` 关闭顺序回归（新增姿态通道的排空语义）。完成判据：
       关闭路径测试 + tsan 通过（跨上下文姿态数据）。
 - [ ] `M3-08` M3 测试矩阵与真机验收：debug/asan/ubsan/tsan 全部通过；D435if 真机
@@ -92,7 +92,7 @@
       投影数学、关闭回归测试。
 - [x] `ImuFuser` 数值验收（`M3-05` 判据）通过并留验证记录。
 - [x] 3D 投影数学测试通过（`M3-06`）。
-- [ ] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
+- [x] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
 - [ ] 真机验收记录或规范化未执行记录（`M3-08`）。
 - [ ] 文档同步：`camera_service_design.md` IMU 通路、`DEC-010`/`DEC-011`、总计划
       `SCOPE-07`、CHANGELOG（Unreleased）。
@@ -397,3 +397,69 @@
 - 同步：本文件勾选 `M3-06`，并勾选退出条件"3D 投影数学测试通过（`M3-06`）"
   （pose_math 201 checks 通过且已入库）；退出条件其余小项（ctest 全绿、
   关闭回归 + tsan、真机矩阵、文档收尾）分属 `M3-07`/`M3-08`，维持未勾。
+
+2026-09-24：`M3-07` viewer 集成与关闭回归
+
+- 范围：IMU 状态面板（`apps/viewer/imu_panel.hpp`：四元数→ZYX 欧拉读数、
+  源频率/姿态/四元数格式化、门控）、pump 门控接入姿态通道与排空
+  （`apps/viewer/app.cpp:326-336`：Streaming/Restreaming 才 tryLoadPose，
+  否则 clear 排空）；两套离线单元测试（面板纯函数 + 跨上下文关闭排空）。
+  不含 compose 卡片视觉路径（`M3-08` 真机验收）。
+- 依据：
+  - `eb12ec9` feat(viewer)：M3-07 实现（212 insertions：`imu_panel.hpp`
+    新增 168 行、`app.cpp` 泵送/排空、`pose_view.hpp` 调整、
+    `camera_service_design.md` IMU 通路同步）。
+  - `3a847e5` test(tests)：新增 `tests/test_imu_panel.cpp`（353 行，ctest
+    `imu_panel`，LABELS unit，70 checks）与 `tests/test_shutdown_drain.cpp`
+    （299 行，ctest `shutdown_drain`，49 checks），`tests/test_util.hpp`
+    新增 `RIN_CHECK_MSG`，4 文件 701 行、全部位于 tests/，注册于
+    `tests/CMakeLists.txt:103-133`。
+  - DEC-011 golden 角度（30/20/40）与 DEC-010 Mahony 真身
+    （`createImuFuser`）作为测试参考基准；`EXEC-06`/`LatestMailbox`
+    跨上下文通路与 app.cpp 门控同构。
+- 验证（独立验证执行；debug/asan/ubsan 门禁通过）：
+  - 配置/构建：`cmake --preset debug`（带三个本地依赖源参数）→
+    Generating done；`cmake --build build/debug --target test_imu_panel
+    test_shutdown_drain` 成功。
+  - 直跑 `./build/debug/tests/test_imu_panel` → `OK: 70 checks,
+    0 failures`（欧拉对照独立 double 四元数直分解：恒等/单轴/golden 30/20/40/
+    9 组角度网格往返/yaw 折叠 200°→−160°/±180° 边界/万向锁 ±89.9° 与恰 ±90°/
+    NaN/Inf/零范数/非单位消毒；formatSourceRate/formatAttitudeDegrees/
+    formatOrientationQuaternion 精确文本；面板门控 `available && valid()`，
+    `imu_panel.hpp:114`）；`./build/debug/tests/test_shutdown_drain` →
+    `OK: 49 checks, 0 failures`（Executor 生产者独占 MotionIngest 真实接缝
+    → LatestMailbox 姿态通道 → PoseViewState 同构泵送：2000 样本序号推进、
+    EMA 200Hz 与发布侧一致、姿态单位范数；停止后无新发布；clear 排空语义
+    ——回空态 + baseline 恒等、stale 读不复活视图且序号不回退、重复排空
+    幂等；任务异常经 future 传播可观察、失败路径排空 + shutdown 收敛；
+    `executor.shutdown(true)==ShutdownResult::Completed`；排空后新会话
+    仅随新快照复活、resetStreamState 序号连续 1000→1800）。
+  - 回归：`setarch -R ctest --test-dir build/debug -R
+    "imu_panel|shutdown_drain|pose_view_state|public_boundary|motion_ingest"`
+    → 5/5 通过（受 M3-07 影响的 pose_view_state/public_boundary 及接缝
+    motion_ingest 同绿）。
+  - tsan：`cmake --preset tsan`（同依赖源参数）+ 构建两目标成功；
+    `setarch -R ctest --test-dir build/tsan -R "imu_panel|shutdown_drain"`
+    → 2/2 通过、无 tsan 报告；未加 setarch 直跑该二进制以
+    `ThreadSanitizer: unexpected memory mapping` 中止，证实插桩生效。
+  - 完成判据对照：关闭路径测试通过（shutdown_drain 49 checks：跨上下文
+    姿态数据的排空、异常传播、shutdown 收敛）+ tsan 通过（两目标复跑无
+    报告）。
+- 限制（观察项，非功能缺陷，实现未动，已留档测试注释）：
+  - pitch=+89.9° 实测 89.905128°（float32 经 1/cos(pitch)≈573 倍病态放大，
+    `imu_panel.hpp:34` 已声明万向锁附近读数仅参考），容差按病态程度标定
+    0.02°。
+  - 恰 −180° 四元数实测 yaw=−180.000000，与 `imu_panel.hpp:34` 声明
+    "yaw ∈ (−180°, 180°]" 开端点在 measure-zero 输入上不符（atan2 域端点；
+    +180→+180 与 200→−160 实测精确）；测试锁定物理不变量 |yaw|==180，
+    区间措辞端点细化建议 owner 酌情同步注释。
+  - DOD-02：提交拒绝（路径内 shutdown 前完成排空、无 post-shutdown 提交）、
+    执行中取消（属 EXEC-01 采集服务层，drain 自 worker 回收后开始）、超时
+    （无定时等待，消费者有界尝试数兜底）按适用性说明不适用。
+  - 全量 debug/asan/ubsan/tsan 门禁按交接约定由脚本复跑；compose 卡片视觉
+    路径需活动 EUI-NEO 运行时，归 `M3-08` 真机验收；测试提交（`3a847e5`）
+    尚未 push。
+- 同步：本文件勾选 `M3-07`，并勾选退出条件"关闭/取消路径回归 + tsan 通过
+  （`M3-07`）"（shutdown_drain 49 checks + tsan 两目标复跑无报告）；
+  `camera_service_design.md` 已随 `eb12ec9` 同步；退出条件其余小项
+  （ctest 全绿、真机矩阵、文档收尾）归 `M3-08`，维持未勾。
