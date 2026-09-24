@@ -11,6 +11,14 @@
 // Idle -> 二次 stop() 幂等。
 // DEC-006：start 不再因无设备拒绝（worker 进 Waiting 稳态）；无设备时测试经
 // Waiting + 空目录判定打印 SKIP 并返回 77（ctest SKIP_RETURN_CODE 记为跳过）。
+// M3-04 降级语义的测试侧对应：适配器在含运动流的 pipeline.start 失败（典型：
+// 无 root 时 HID/IIO scan_element 权限前置）时一次性降级为纯视频并照常 Started，
+// 服务不再进入 Failed——旧"等 Failed 事件"的 SKIP 判据不可达。改用持久降级
+// 签名 SKIP 77：imuSupported==true 且 motion 通道有界窗口（5s）零采样且最新
+// IntrinsicsSnapshot 的 gyroToColor/gyroIntrinsics 均无效（camera_types.hpp 契约
+// "运动流未使能时保持全零无效值"；降级 Info 事件会被 Started 在 latest-state
+// 事件邮箱覆盖，不可作判据）。补跑条件：安装 librealsense udev 规则
+//（upstream scripts/setup_udev_rules.sh）或等价 HID/IIO 授权后复跑。
 // Waiting 态的设备移除/恢复语义无法在真机上程序化模拟（无免密 sudo 拔 USB），
 // 由真机人工验收覆盖；本测试只覆盖单设备自动选择路径（无 IMU 设备的退化路径与
 // 多设备切换路径无第二台设备，由 M3-08 真机验收按规范补充）。
@@ -242,7 +250,8 @@ bool hasChromaticPixel(const Frame& frame) {
     return false;
 }
 
-/// 冒烟主体。返回 0 = 通过（RIN_CHECK 结果见 exitStatus），77 = 无设备跳过，1 = 失败。
+/// 冒烟主体。返回 0 = 通过（RIN_CHECK 结果见 exitStatus），77 = 无设备或 IMU 前置
+/// 缺失（运动流被适配器降级为纯视频，见文件头降级签名）跳过，1 = 失败。
 int runSmokeTest(ICameraService& service) {
     // M3-04：全程 enableMotion——D435if 具备 IMU，混合 pipeline（video + ACCEL/GYRO）
     // 从首次 pipeline.start 起生效，motion 分支与视频链路并行验证。
@@ -322,6 +331,10 @@ int runSmokeTest(ICameraService& service) {
         // 授权。按工程规范显式 SKIP 并记录补跑条件：安装 librealsense udev 规则
         //（上游 scripts/setup_udev_rules.sh）后复跑本测试；在此之前 motion 真机
         // 验证保持未执行状态。
+        // 防御性保留：M3-04 降级语义下服务不再因运动流权限 Failed，本分支常态
+        // 不可达（降级路径有 Started 事件，且降级 Info 文本被 latest-state 事件
+        // 邮箱的 Started 覆盖）；仅当适配器回归为"打开失败即 Failed"时兜底。
+        // 常态 IMU 前置缺失的 SKIP 判据见 2c 的持久降级签名。
         std::printf("SKIP: IMU motion stream blocked by iio scan_element permissions "
                     "(install librealsense udev rules, then rerun); last error: %s\n",
                     failureMessage.c_str());
@@ -465,6 +478,52 @@ int runSmokeTest(ICameraService& service) {
         const bool motionArrived = pollUntil(5s, [&] {
             return service.tryLoadMotion(motionSeq, motion);
         });
+
+        // IMU 前置缺失降级签名（M3-04 降级语义的测试侧对应，见文件头）：适配器在
+        // 含运动流的 pipeline.start 失败（典型：无 root 时 HID/IIO scan_element
+        // 权限前置）时一次性降级为纯视频并照常 Started，服务不再进入 Failed——
+        // 旧"等 Failed 事件"的 SKIP 判据不可达，且降级 Info 事件被 Started 在
+        // latest-state 事件邮箱覆盖，不可作判据。改用持久可观察签名，三者同时
+        // 成立才判为环境前置缺失（SKIP 77）：
+        //   (a) 目录 imuSupported==true（设备确有 IMU；枚举只查传感器能力，与
+        //       pipeline.start 成败无关）；
+        //   (b) 有界窗口内 motion 通道零采样（motionActive_==false 的直接证据）；
+        //   (c) 最新 IntrinsicsSnapshot 的 gyroToColor/gyroIntrinsics 均无效
+        //      （无运动流快照签名，camera_types.hpp 契约"全零无效可观察"）。
+        // 只要不满足其一即按既有失败路径处理：真机运动流真实断裂（此时快照由
+        // motion=true 路径发布、外参有效）或无 IMU 设备（imuSupported==false，
+        // 既有退化语义：目录断言按原样暴露）都不被误判为 SKIP。
+        if (!motionArrived) {
+            rin::DeviceCatalog catalog;
+            std::uint64_t catalogSeq = 0;
+            rin::IntrinsicsSnapshot intrinsics;
+            std::uint64_t intrinsicsSeq = 0;
+            // 目录与快照先于 Started 发布（resolveTarget 枚举 + streamLoop 出流前
+            // 快照）；此处仅读取不作断言，取不到按签名不成立处理（保守走失败路径）。
+            const bool catalogSeen =
+                pollUntil(1s, [&] { return service.tryLoadCatalog(catalogSeq, catalog); });
+            const bool snapshotSeen = pollUntil(1s, [&] {
+                return service.tryLoadIntrinsics(intrinsicsSeq, intrinsics);
+            });
+            bool activeImuSupported = false;
+            if (catalogSeen) {
+                for (const rin::DeviceInfo& device : catalog.devices) {
+                    if (device.serial == catalog.activeSerial) {
+                        activeImuSupported = device.imuSupported;
+                    }
+                }
+            }
+            if (catalogSeen && snapshotSeen && activeImuSupported &&
+                !intrinsics.gyroToColor.valid() && !intrinsics.gyroIntrinsics.valid()) {
+                std::printf(
+                    "SKIP: IMU motion stream unavailable (adapter degraded to video only: "
+                    "imuSupported=1 but no motion samples within 5s and no motion "
+                    "intrinsics in latest snapshot) — install librealsense udev rules "
+                    "(upstream scripts/setup_udev_rules.sh) or equivalent HID/IIO "
+                    "scan_element authorization, then rerun\n");
+                return 77;
+            }
+        }
         RIN_CHECK(motionArrived);
         if (motionArrived) {
             RIN_CHECK(motion.valid());
