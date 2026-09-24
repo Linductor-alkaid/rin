@@ -153,8 +153,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 本 job 无 checkout（非 git 目录），gh 必须显式指定仓库。
           gh release create "$GITHUB_REF_NAME" \
+            -R "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             dist/*.deb ||
-          gh release upload "$GITHUB_REF_NAME" --clobber dist/*.deb
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+            --clobber dist/*.deb
