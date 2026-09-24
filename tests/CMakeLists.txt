@@ -164,3 +164,14 @@ target_link_libraries(test_workflow_contracts PRIVATE rin::core)
 target_include_directories(test_workflow_contracts PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME workflow_contracts COMMAND test_workflow_contracts)
 set_tests_properties(workflow_contracts PROPERTIES LABELS "unit")
+
+# M5-08 契约假引擎（DEC-016）：FakeWorkflowEngine 行为测试 + 与 M4-07 真引擎共用
+# 的契约套件（workflow_engine_contract_suite.hpp，以引擎工厂参数化）。覆盖 DOD-02
+# 并发矩阵（正常完成/任务异常/提交拒绝/执行中取消/shutdown）与关闭排空语义；
+# tsan 预设复跑目标（跨上下文通道与关闭顺序）。
+add_executable(test_workflow_fake_engine test_workflow_fake_engine.cpp)
+target_link_libraries(test_workflow_fake_engine PRIVATE rin::workflow_fake)
+add_test(NAME workflow_fake_engine COMMAND test_workflow_fake_engine)
+set_tests_properties(workflow_fake_engine PROPERTIES
+    LABELS "unit"
+    TIMEOUT 300)  # 套件设计 <30s；挂看门狗兜底关闭/关停竞态检查不悬挂。
