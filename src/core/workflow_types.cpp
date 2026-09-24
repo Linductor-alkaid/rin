@@ -71,7 +71,10 @@ bool ParamDescriptor::valid() const noexcept {
     if (hasRange && kind != ParamKind::Integer && kind != ParamKind::Real) {
         return false;
     }
-    if (hasRange && minValue > maxValue) {
+    if (hasRange &&
+        (std::isnan(minValue) || std::isnan(maxValue) || minValue > maxValue)) {
+        // NaN 与任何值比较均为 false，会绕过 min>max 检查并使一切赋值被判越界；
+        // ±Inf 端点允许（语义为对应侧不限）。
         return false;
     }
     if (kind == ParamKind::Enumeration) {
@@ -127,8 +130,10 @@ bool NodeOutputSnapshot::valid() const noexcept {
     if (node == kInvalidNode || pixels == nullptr || width == 0 || height == 0) {
         return false;
     }
-    const std::uint32_t minStride =
-        format == PortType::Rgba8 ? width * 4u : width;
+    // 64 位乘法：Rgba8 的 width*4 在 uint32 下会回绕（width=2^30 时积为 0），
+    // 使任何 stride 都满足比较；最小行宽超出 uint32 时任何 uint32 stride 必不满足。
+    const std::uint64_t minStride =
+        format == PortType::Rgba8 ? static_cast<std::uint64_t>(width) * 4u : width;
     return stride >= minStride &&
            pixels->size() >= static_cast<std::size_t>(stride) * height;
 }

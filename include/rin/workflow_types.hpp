@@ -84,7 +84,8 @@ struct ParamDescriptor {
     std::vector<std::string> enumOptions;
 
     /// 有效性：id 非空、defaultValue 与 kind 匹配、枚举选项非空且默认值在选项内、
-    /// hasRange 仅用于 Integer/Real 且 min <= max。
+    /// hasRange 仅用于 Integer/Real 且范围端点非 NaN（±Inf 允许，对应侧语义为
+    /// 不限）、min <= max。
     [[nodiscard]] bool valid() const noexcept;
 };
 
