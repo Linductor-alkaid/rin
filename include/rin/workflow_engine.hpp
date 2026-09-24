@@ -50,7 +50,10 @@ public:
                                             WorkflowStats& out) = 0;
 
     /// 取指定节点 sequence > lastSeenSequence 的最新中间产物；无新产物返回 false。
-    /// 引擎未保留该节点产物（未运行/悬空输出/未产生）时同样返回 false。
+    /// 引擎对当前生效图中已执行的节点保留最新一幅产物（悬空输出端口的末端节点
+    /// 同样保留可查看——workflow_types.hpp 连线语义与 ui_workspace_design.md
+    /// §5.6 "末端结果预览"）；节点未运行、尚未产生产物或不在当前生效图（如图
+    /// 重建后移除）时返回 false。
     [[nodiscard]] virtual bool tryLoadNodeOutput(NodeId node,
                                                  std::uint64_t& lastSeenSequence,
                                                  NodeOutputSnapshot& out) = 0;
