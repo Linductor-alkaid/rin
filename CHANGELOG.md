@@ -2,7 +2,7 @@
 
 本项目的版本遵循语义化版本（工程规范 10.5）；tag 与里程碑"建议发布点"一一对应。
 
-## [Unreleased]
+## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
 ### 新增
 
@@ -15,6 +15,10 @@
 - viewer 3D 位姿视图（M3，DEC-011）：固定世界坐标系（坐标轴 + 地面网格）中实时
   呈现相机视锥与相机轴，姿态驱动旋转；Reset 重锚定显示参考，姿态不可用时空态。
 - viewer IMU 状态面板（M3）：实时显示 IMU 源频率与姿态读数（ZYX 欧拉角、四元数）。
+- Ubuntu 20.04 (focal) 适配（v0.3.0 起）：CI 的 deb 打包改在 `ubuntu:20.04` 容器
+  内构建（GCC 10、pip 安装 CMake ≥ 3.25/Ninja；executor 公开头使用 concepts/requires
+  表达式，最低 GCC 10），产物按 focal glibc 2.31 链接并经 objdump 护栏校验，
+  随 Release 分发的 deb 可在 20.04 安装运行。
 
 ### 修复
 

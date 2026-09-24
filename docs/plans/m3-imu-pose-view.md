@@ -1,6 +1,6 @@
 # M3：IMU 数据通路与相机位姿 3D 视图
 
-> 状态：Planned
+> 状态：Done（2026-09-24 收尾，发布点 v0.3.0；owner 授权按工程规范自治执行）
 > 负责人：Linductor-alkaid（授权 Agent 按工程规范自治执行）
 > 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：M1（M2 无代码依赖）
@@ -95,8 +95,9 @@
 - [x] 3D 投影数学测试通过（`M3-06`）。
 - [x] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
 - [x] 真机验收记录或规范化未执行记录（`M3-08`）。
-- [ ] 文档同步：`camera_service_design.md` IMU 通路、`DEC-010`/`DEC-011`、总计划
-      `SCOPE-07`、CHANGELOG（Unreleased）。
+- [x] 文档同步：`camera_service_design.md` IMU 通路、`DEC-010`/`DEC-011`、总计划
+      `SCOPE-07`、CHANGELOG（Unreleased）。（2026-09-24 收尾：SCOPE-07 勾选、
+      CHANGELOG 0.3.0 切版、20.04 适配条目，owner 授权发版时一并落地）
 
 ## 验证记录
 

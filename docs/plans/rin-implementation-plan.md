@@ -6,11 +6,12 @@
 
 ## 当前整体状态
 
-M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完成并通过验收
-（v0.1.0、v0.2.0 已发布；见 [m2-linux-packaging.md](m2-linux-packaging.md) 验证
-记录）。2026-09-24 立项 M3-M5（IMU 位姿视图、图像处理节点工作流、工作台 UI），
-由自治开发工作流按工程规范逐项推进；关键实现策略先经调研决策（DEC-010..015）
-冻结后实施。
+M1（viewer 基础能力）、M2（更名与 Linux 自包含分发）与 M3（IMU 位姿视图）均已
+完成并通过验收（v0.1.0、v0.2.0 已发布；v0.3.0 为 M3 发布点，deb 自该版起按
+Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-packaging.md)、
+[m3-imu-pose-view.md](m3-imu-pose-view.md) 验证记录）。2026-09-24 立项 M3-M5
+（IMU 位姿视图、图像处理节点工作流、工作台 UI），由自治开发工作流按工程规范逐项
+推进；关键实现策略先经调研决策（DEC-010..015）冻结后实施。
 
 ## 交付边界（SCOPE）
 
@@ -30,9 +31,10 @@ M1（viewer 基础能力）与 M2（更名与 Linux 自包含分发）均已完�
 - [x] `SCOPE-06` 项目标识统一更名 Rin，Linux 自包含 deb 分发（捆绑 librealsense2 +
       udev 规则）与 CI 工件导出（[DEC-008](../decisions/DEC-008-project-rename-to-rin.md)、
       [DEC-009](../decisions/DEC-009-self-contained-deb-distribution.md)）。
-- [ ] `SCOPE-07` IMU 姿态通路与 3D 位姿视图：ACCEL/GYRO 混合流采集、六轴姿态
+- [x] `SCOPE-07` IMU 姿态通路与 3D 位姿视图：ACCEL/GYRO 混合流采集、六轴姿态
       融合（Core 纯逻辑）、固定世界坐标系下相机位姿 3D 实时视图（视锥 + 坐标轴）
-      与 IMU 状态面板（M3，[DEC-010](../decisions/)、[DEC-011](../decisions/)）。
+      与 IMU 状态面板（M3，[DEC-010](../decisions/)、[DEC-011](../decisions/)；
+      2026-09-24 随 v0.3.0 收尾，见 [m3-imu-pose-view.md](m3-imu-pose-view.md)）。
 - [ ] `SCOPE-08` 图像处理节点库与工作流引擎：裁切、降分辨率、自定义卷积核、
       高斯模糊、直方图均衡、FFT 高通/低通/带通节点，DAG 工作流引擎（拓扑执行、
       逐节点中间产物、每节点耗时与端到端 FPS 统计，执行经 Executor）（M4，
