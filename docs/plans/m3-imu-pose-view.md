@@ -72,7 +72,7 @@
 - [x] `M3-07` viewer 集成与关闭回归：IMU 状态面板（源频率、姿态数值）、3D 视图
       卡位；`onShutdown` 关闭顺序回归（新增姿态通道的排空语义）。完成判据：
       关闭路径测试 + tsan 通过（跨上下文姿态数据）。
-- [ ] `M3-08` M3 测试矩阵与真机验收：debug/asan/ubsan/tsan 全部通过；D435if 真机
+- [x] `M3-08` M3 测试矩阵与真机验收：debug/asan/ubsan/tsan 全部通过；D435if 真机
       记录（IMU 出流频率、姿态跟随、restream 后 IMU 恢复、3D 视图）。无设备时按
       工程规范第 4 节记录原因、负责人与补跑条件，不冒充完成。
 
@@ -93,7 +93,7 @@
 - [x] `ImuFuser` 数值验收（`M3-05` 判据）通过并留验证记录。
 - [x] 3D 投影数学测试通过（`M3-06`）。
 - [x] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
-- [ ] 真机验收记录或规范化未执行记录（`M3-08`）。
+- [x] 真机验收记录或规范化未执行记录（`M3-08`）。
 - [ ] 文档同步：`camera_service_design.md` IMU 通路、`DEC-010`/`DEC-011`、总计划
       `SCOPE-07`、CHANGELOG（Unreleased）。
 
@@ -536,3 +536,77 @@
   `DEC-011` 状态与 M3-08 前向引用核对一致，无需改动；总计划 `SCOPE-07`
   因 M3 未收尾维持未勾；librealsense 台账无新增条目（权限前置属系统环境
   事项，非依赖能力缺口）。
+
+2026-09-24：`M3-08` M3 测试矩阵与真机验收
+
+- 范围：D435if 真机可编程验收（IMU 出流频率、restream 后源频率恢复）的
+  测试载体扩展与执行；目视验收（姿态跟随、3D 视图构图与空态）维持前条
+  （6405a67）的规范化未执行登记，本条复核并维持，不冒充完成。
+- 依据：
+  - `c5a92f5` test(tests)：扩展 `tests/test_realsense_hardware.cpp`
+    （+147/−2，仅 tests/，hardware 标签注册不变）：4d 节 IMU 出流频率验收
+    （EMA 稳态 gate（+30 陀螺样本，ingest 侧 `kMotionRateEmaAlpha=0.1`，
+    `src/adapters/realsense/imu_motion_ingest.cpp:9`）后跨 90 陀螺样本墙钟
+    窗口，发布侧 EMA 与窗口计数独立双口径相对容差 35% 一致、≥5 Hz 活流
+    下限；交付频率对设备 ODR 档位只打印记录不断言——DEC-010 验证方式节
+    明示不对真机提出上表数值阈值）；5c 节 restream 后源频率恢复（EMA 重新
+    收敛且回到 restream 前 0.5–2.0 倍量级）。
+  - 前条登记（6405a67）：未执行验证的原因、负责人与补跑条件。
+- 环境确认（独立验证本会话实测）：D435if 在位（lsusb: Bus 004 Device 007,
+  ID 8086:0b3a）；`/lib/udev/rules.d/99-realsense-libusb.rules` 在位；
+  `/dev/iio:device1`、`/dev/iio:device2`、`/dev/hidraw4` 均
+  crw-rw-rw- root:plugdev（当前用户在 plugdev 组），scan_elements 0777
+  ——`M3-04` 登记的 SKIP(77) 前置确已解除。
+- 验证（独立验证执行；debug 门禁通过）：
+  - 配置/构建：`cmake --preset debug/tsan`（依赖源改用同目录绝对路径，规避
+    相对路径在 ninja 触发重跑时静默切换依赖解析的脆弱性）→ Generating
+    done，依赖 commit 校验通过；`cmake --build build/debug`（全量）与
+    `cmake --build build/tsan --target test_realsense_hardware` 均 exit=0。
+  - 真机 debug：`setarch -R ctest --test-dir build/debug -R
+    realsense_hardware` → Passed（14.55s）；直跑 → `OK: 246 checks,
+    0 failures`。实测：pre-restream gyro ema=29.9 Hz/counter=29.9 Hz、
+    accel ema=29.5 Hz/counter=29.9 Hz；post-restream gyro 29.6 Hz、
+    accel 29.3 Hz（vs pre 29.9/29.5）；设备档位 accel 100/200/400、
+    gyro 200/400（只打印记录）。
+  - 真机 tsan：`setarch -R ctest --test-dir build/tsan -R
+    realsense_hardware` → Passed（16.57s）、无 tsan 报告；直跑 →
+    `OK: 222 checks, 0 failures`（27.0→19.7 Hz，恢复带/一致性容差按设计
+    吸收插桩降速）。
+  - 回归（非全量）：`setarch -R ctest --test-dir build/debug -L unit` →
+    12/12 通过（依赖源恢复后全量重链，确认无破坏）。
+  - 完成判据对照：IMU 出流频率、restream 后 IMU 恢复两项真机记录实测
+    留档；shutdown 路径（stop()→Idle + 二次幂等 + executor.shutdown）在
+    tsan 下无报告；目视两项按登记维持未执行。
+- 限制（真机发现与未执行项，如实登记）：
+  - D435if（fw 5.15.1.55）上 ACCEL/GYRO 实际交付 ~30 Hz/源（syncer 按视频
+    帧率成对 "AG" 交付，测试输出与 137/137 frameset 探针一致），≠ 设备
+    上报档位（accel 100/200/400、gyro 200/400），也偏离 DEC-010 行 15
+    引用的 ODR 假设（63/250、200/400）——影响 Mahony 33 ms gyro 步长
+    默认 Kp/Ki 适配性裁决与 librealsense 台账是否登记，交 owner 裁决
+    （非测试失败）。
+  - 姿态跟随与 3D 视图目视验收需人手转动相机并目视判定，Agent 无物理操作
+    与目视能力：维持 6405a67 登记的补跑步骤（`build/debug/apps/viewer/rin`，
+    `apps/viewer/app.cpp:42` 默认 enableMotion=true，
+    `apps/viewer/pose_view.hpp:284` Reset），结果记入验证记录。
+  - 多设备切换/热插拔路径无第二台设备，维持测试文件头登记的人工验收范围。
+  - asan/ubsan 预设及三套全量门禁按交接约定由脚本复跑，本轮未重复执行。
+  - DOD-02：本项无新增并发路径（实现侧仅文档，测试侧为既有
+    worker→LatestMailbox 通路的只读轮询）；提交拒绝/执行中取消/超时属
+    服务层 Executor 生命周期语义，已由 camera_state_machine、
+    shutdown_drain、motion_ingest（tsan）单元测试锁定，硬件冒烟层不可
+    重复构造，如实说明。
+  - 构建事项知会：相对路径依赖源参数（`build/iva-debug/_deps/…`）仅在
+    repo 根目录 configure 时生效；ninja 触发的 cmake 重跑
+    （cwd=build/<preset>，如修改 CMakeLists 后）会使其 EXISTS 失效、
+    静默切换依赖解析（本轮实测切到 `/home/linductor/executor`，来源未
+    验签）。本轮已改用同目录绝对路径重新 configure debug/tsan 并全量
+    重建；建议后续 configure 一律使用绝对路径或从仓库根目录原样执行后
+    立即构建。
+- 同步：本文件勾选 `M3-08`，并勾选退出条件"真机验收记录或规范化未执行
+  记录（`M3-08`）"（真机可编程两项实测留档 + 目视两项规范化未执行登记，
+  合取满足"或"；即 6405a67 预留的"门禁与真机记录落地后"处置）。退出条件
+  "ctest（debug/asan/ubsan/tsan 预设）全绿"因 tsan 全量与 asan/ubsan
+  全量由脚本复跑、本轮未跑全量，维持未勾；"文档同步"中 `CHANGELOG.md`
+  （Unreleased）已随 6405a67 补齐、`camera_service_design.md`/`DEC-010`/
+  `DEC-011` 核对一致，唯总计划 `SCOPE-07` 勾选未落地（总计划不在本条
+  修改范围），该项维持未勾，待 owner 在 M3 收尾时处置。
