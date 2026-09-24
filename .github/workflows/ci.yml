@@ -70,12 +70,27 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential git ca-certificates file pkg-config python3-pip \
-            software-properties-common gnupg \
+            build-essential curl git ca-certificates file gnupg pkg-config python3-pip \
             libusb-1.0-0-dev libudev-dev libcurl4-openssl-dev \
             libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
             libxcursor-dev libxi-dev libxkbcommon-dev libwayland-dev wayland-protocols
-          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+      - name: Add ubuntu-toolchain-r/test PPA (keyring over HTTPS)
+        run: |
+          # 不用 add-apt-repository：其 Launchpad 客户端查询偶发失败即整体退出 1
+          # （run 35963168991 实测），且连带引入 software-properties-common。改为
+          # 从 Launchpad API 取 PPA 签名指纹，经 HTTPS keyserver 建独立 keyring，
+          # 套件显式锁定 focal。
+          set -eu
+          fingerprint="$(curl -fsSL 'https://api.launchpad.net/1.0/~ubuntu-toolchain-r/+archive/ubuntu/test' \
+            | grep -o '"signing_key_fingerprint": "[0-9A-F]*"' | grep -o '[0-9A-F]\{40\}')"
+          test -n "${fingerprint}"
+          echo "PPA signing key: ${fingerprint}"
+          mkdir -p /etc/apt/keyrings
+          curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${fingerprint}" \
+            | gpg --dearmor -o /etc/apt/keyrings/ubuntu-toolchain-r-test.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain-r-test.gpg] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu focal main" \
+            > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             gcc-12 g++-12
