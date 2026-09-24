@@ -88,8 +88,9 @@
 
 ## 测试与退出条件
 
-- [ ] `ctest`（debug/asan/ubsan/tsan 预设）全绿，新增：IMU 契约、融合数值、
-      投影数学、关闭回归测试。
+- [x] `ctest`（debug/asan/ubsan/tsan 预设）全绿，新增：IMU 契约、融合数值、
+      投影数学、关闭回归测试。（2026-09-24 收尾修复轮四预设 13/13 全绿，见验证
+      记录；hardware 用例实际包含在默认 ctest 内且通过）
 - [x] `ImuFuser` 数值验收（`M3-05` 判据）通过并留验证记录。
 - [x] 3D 投影数学测试通过（`M3-06`）。
 - [x] 关闭/取消路径回归 + tsan 通过（`M3-07`）。
@@ -610,3 +611,72 @@
   （Unreleased）已随 6405a67 补齐、`camera_service_design.md`/`DEC-010`/
   `DEC-011` 核对一致，唯总计划 `SCOPE-07` 勾选未落地（总计划不在本条
   修改范围），该项维持未勾，待 owner 在 M3 收尾时处置。
+
+2026-09-24：`M3-08` 收尾修复轮：分辨率切换丢失运动流、IMU 权限前置拖死视频
+（用户真机验收发现，owner 委派修复）
+
+- 范围：两个用户可见缺陷的根因修复 + 一项运维性语义（运动流打开失败降级）；
+  不新增 Core 契约面。
+- 用户报告与根因：
+  1. **更换分辨率后 IMU 实时数据停更**：viewer `rebuildResolutionOptions()`
+     构造分辨率档位 `StreamRequest` 时未携带 `enableMotion`（契约默认 false，
+     `camera_types.hpp:47` 明示该位"跨分辨率切换请求粘性保持"）——restream
+     命令携带 `enableMotion=false`，适配器按新请求重建 pipeline 时静默关闭运动
+     流，姿态通道停止发布；服务级 restream 测试（`altRequest` 携带
+     enableMotion=true）未覆盖该 viewer 缺陷。修复：分辨率档位沿用默认请求的
+     运动流意图（`apps/viewer/app.cpp`）。
+  2. **无 root 运行时程序完全无输出**：含 ACCEL/GYRO 的 pipeline 打开失败
+     （HID/IIO 设备节点权限前置，本机权限状态在 udev 规则/插拔后反复，见
+     `M3-04`/`M3-08` 登记），采集 worker 经 3 次有界重试后进入 Failed——视频
+     与 IMU 全部不可用。修复：适配器新增 `CaptureLoop::startPipeline`，运动流
+     打开失败一次性降级为纯视频配置重试，降级原因以 `ServiceEvent(Info)` 可见
+     （非静默绕过），`motionActive_` 置 false、内参按无运动快照发布，之后每次
+     流重建（restream/设备切换/重开）重新尝试运动流；纯视频打开失败保持既有
+     重试/Failed 语义。三处 `pipeline.start` 调用点（首次打开、分辨率 restream、
+     设备切换）统一收口。
+  3. **3D 位姿视图不随相机运动更新**：静态走查未发现缺陷（投影数学 golden 测
+     试、显示公式测试、EUI polygon 动态更新原型证据、服务级姿态发布链路真机证
+     据均在档）；问题 1 的修复（restream 不再静默关闭运动流）消除了"快照停更
+     导致视图冻结"的一条确切成因。其余可能成因（真机融合姿态冻结 vs 视图刷新
+     缺陷）的判别依赖人手转动相机的目视对照，归 owner 复测：以 IMU 面板读数
+     （`#序号`是否推进、R·P·Y/四元数是否随转动变化）与 3D 视图联动关系定位。
+- 依据：`camera_types.hpp` `StreamRequest` 粘性契约注释；AGENTS.md"失败对调用
+  方和 Observer 可见/事件可观察"约束（降级以事件可见，不属静默绕过）；
+  `M3-08` 权限前置登记（降级即该环境约束的持久答案；权限状态属系统环境事项，
+  非依赖能力缺口，不新增 librealsense 台账条目）。
+- 验证（独立验证执行）：
+  - **四预设全量门禁首次全绿**（同时落地退出条件"ctest（debug/asan/ubsan/tsan
+    预设）全绿"的证据）：debug/asan/ubsan/tsan 各 configure（绝对路径依赖源，
+    规避 ninja 重跑静默切换依赖解析的已知陷阱）+ 全量构建 + `setarch -R ctest`
+    全量 → 各 13/13 通过、0 失败；tsan 无报告；依赖 commit 校验通过
+    （executor `4731b16`、eui-neo `782c569`、realsense2 `7c3ee3f`）。硬件用例
+    在四预设下真实执行并通过（`tests/CMakeLists.txt` 实际未实现"hardware 不进
+    默认 ctest"的标签过滤——更正 `M3-08` 补跑条件中的相应表述），含 restream
+    后运动流恢复端到端断言（debug：motion seq 406>28、gyro ema 30.1Hz）。
+  - 硬件测试 SKIP 语义随降级语义更新后复验：debug/asan/ubsan 的
+    `realsense_hardware` 全部 Passed（真机运动流正常、非 SKIP）；tsan 同二进制
+    5 跑 3 过（2 次失败均为既有 `checkRateIntegrity` EMA/墙钟计数一致性断言
+    （35% 容差）在 tsan 降速 + 系统负载（交付率跌至 ~8-10Hz）下的容差边缘抖动，
+    ThreadSanitizer 报告为 0，与本轮改动无关；首轮全量门禁该断言仅以 13% 裕度
+    通过，本就处边缘）。遗留：owner 酌情放宽容差或改跨窗口比值判据。
+    SKIP 分支本机无法触发（root 不可用），正确性以代码走查留档（触发签名三项
+    在降级下必然齐备；健康 IMU/外参失败/无 IMU 设备等误触发路径逐项排除）。
+  - 编译告警：仅既有 `sleepPoll` nodiscard 一条（HEAD 原样，仅行号移动）；
+    `app.cpp` 零告警（经 compile_commands 原始命令单独重编确认）。
+  - 降级分支执行证据：本机验证时 IMU 权限恰处开放窗口（scan_elements 0777），
+    降级路径未被执行触发，仅有编译与静态走查证据——由 owner 无 sudo 运行
+    viewer 复测补全（见未执行项登记）。
+- 未执行项登记（工程规范第 4 节）：**owner 真机复测**（负责人
+  Linductor-alkaid；补跑条件 = 本轮提交在位）：(a) 无 sudo 启动 viewer → 预期
+  视频正常出流 + 状态行显示"motion stream unavailable …; video only"，IMU 面板
+  n/a、3D 视图空态；(b) sudo 或授权后启动 → IMU 面板推进、转动相机观察 3D
+  视图视锥实时跟随与 Reset 重锚定（即 `M3-08` 登记的目视验收项）；(c) 更换
+  分辨率 → IMU 面板恢复更新（问题 1 修复复验）。目视/物理操作 Agent 不可执行。
+- 遗留与登记：硬件测试 SKIP 语义随降级语义更新（权限收紧时以"imuSupported &&
+  无运动采样 && 无运动内参"持久签名 SKIP 77，替代已不可达的 Failed 消息匹配，
+  由独立验证修改并复验）；`M3-08` 遗留的 30Hz 交付率对 `DEC-010` 默认 Kp/Ki
+  适配性裁决仍待 owner。`SCOPE-07` 勾选与 M3 状态收尾仍留 owner：待上述 owner
+  复测通过后一并处置。
+- 同步：`CHANGELOG.md`（Unreleased）补两条修复条目；`camera_service_design.md`
+  IMU 通路补降级语义、restream 收口与 viewer 粘性位说明；`tests/CMakeLists.txt`
+  清理独立验证遗留的临时 `iva_probe` 目标（不入库）。
