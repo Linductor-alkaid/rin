@@ -104,6 +104,60 @@
 - 状态：Reported（绕行已实施；Release 打包验证通过）
 - 跟进：2026-09-23 登记。
 
+### EUI-20260924-001：retained layer 签名不含 polygon points，点集更新后缓存层永不失效（3D 位姿视图冻结）
+
+- 级别：P1（实时 polygon 内容在缓存层内冻结，Rin 3D 位姿视图核心功能不可用）
+- 现象/证据（2026-09-24 真机运行时取证，插桩 + 像素差分，日志 `/tmp/iva_rin_stderr.log`、
+  `/tmp/iva_run3_stderr.log`、`/tmp/iva_run4_stderr.log`，截图 `/tmp/iva_p{A,A2,B}.xwd`）：
+  - 环境：Ubuntu 24.04，Mesa Intel (ARL)，debug 构建，GLFW X11（XWayland）窗口
+    1280x860 @59 FPS。
+  - 提交侧（Rin compose 边界，每帧 37 个 polygon：grid 18 + world axis 3 + face 5 +
+    frustum edge 8 + cam axis 3；元素 id `view.pose.grid.*`、`view.pose.axis.*`、
+    `view.pose.face.*`、`view.pose.edge.0..7`、`view.pose.cam.*`）：采样 79/79 帧全部
+    提交 37 polys，视锥 apex→像平面 edge.0 的 quad 点集在 79/79 个采样间隔内逐帧
+    不同（静止相机下 ~1px/0.5s 漂移，30s 累计 12-18px；运动激励下幅度更大），
+    segmentToQuad 无剔除（edge0State=1 全程）。
+  - 屏幕侧（xwd 抓窗口客户区像素差分）：t=8s 与 t=30s 两帧之间，位姿卡区域
+    0 像素变化（完全逐位相同）；同一窗口 RGB 视频卡 26.5-26.7% 像素/秒变化
+    （直播常新）、IMU 面板数字持续刷新、整窗 59 FPS 重绘——唯有 polygon 内容冻结在
+    首次烘焙的姿态。
+  - EUI 自报统计（窗口标题）：`Draw R14 P0 TP33 T44 I3`——平均每帧 polygon 直接绘制
+    0 次（37 个 polygon 元素全部走 retained layer 缓存路径）；`Layer H2 M4 D2 Re2`。
+  - 上游机制定位（pinned `782c5699`）：
+    - `core/runtime/runtime_update.h` `updatePolygon()` L853-858 能正确检出点集变化
+      （`!samePoints(instance.points, element.polygonPoints)`，容差
+      `closeEnough` ε=0.001 逻辑像素，`core/runtime/runtime_animation.h` L71/L144），
+      拷贝新点并 `addDirtyUnion`——失效检测正常。
+    - `core/runtime/runtime_render.h` `retainedElementPaintSignature()` L672-756 对
+      id/kind/zIndex/bounds/颜色/文本/图片 contentVersion 等做哈希，**唯独不含
+      `element.polygonPoints`**；`renderRetainedElements()` L836-838 以
+      `layer.signature == signature` 判定缓存层复用并直接 blit 旧纹理。
+    - 结论：仅点集变化的子树签名恒定 → 缓存层永不失效（pendingSignature 稳定帧
+      计数也永不满足重建条件）→ 首帧姿态被永久缓存，dirty 区域重绘的是旧纹理。
+- 影响：凡位于 retained layer 候选子树（clip/高绘制成本）内、id/布局/颜色稳定而
+  仅 points 逐帧变化的 polygon，视觉内容冻结在层首次重建时的状态；Rin 3D 位姿视图
+  （DEC-011）是该缺陷的直接受害者——真机表现为"冻结在初始姿态"，运动激励下同样
+  不动。
+- 期望语义：polygon 点集变化应使所在 retained layer 缓存失效并重建（点集参与签名，
+  或 pointsChanged 触发所在层 dirty）。
+- 建议最小能力：`retainedElementPaintSignature()` 将 `element.polygonPoints`
+  （尺寸 + 逐点量化值）混入签名；或 `updatePolygon` 检出 `pointsChanged` 时使包含该
+  元素的 retained layer 失效。
+- 复现要点（上游最小复现）：层缓存候选容器（`clip()` + 足够绘制成本）内放一个
+  polygon：id/position/size/color 每帧不变，仅 points 以 >0.001px/帧 连续变化——
+  预期内容移动，实际冻结；标题统计 `P0`（polygon 直接绘制为 0）可作判定指纹。
+- 候选绕行（已实施，选型记录）：位姿场景 polygon 全部携带非空
+  `dirtyKey`（取姿态通道序号，`apps/viewer/pose_view.hpp` `composePoseScene`）——
+  非 `dirtyKey` 变签名再等层重建，而是利用框架"显式键控内容"语义：
+  `elementBlocksRetainedLayer()` 对非空 `dirtyKey` 元素直接排除出 retained
+  layer 改为逐帧直接绘制，`updateExplicitDirtyKey` 在键变化时补脏区。代价为位姿
+  场景 37 个 polygon 逐帧直接绘制（DEC-011 原型实测同量级组装 ~40µs/帧，预算
+  内）；键取会话单调序号，静止时稳定、随快照推进变化。备选的 id 附加帧计数
+  方案否决：id 不稳定波及 instance/state 作用域生命周期，收益不优于 dirtyKey。
+- 状态：Open（绕行已实施；待上报上游，上游修复后移除 dirtyKey 绕行并回归）
+- 跟进：2026-09-24 登记；运行时取证完成，插桩已还原；同日绕行实施
+  （`pose_view.hpp`，引用本编号）。
+
 ## 跟进记录表
 
 | 编号 | 状态 | 优先级 | 跟进 |
@@ -112,3 +166,4 @@
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
 | EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 已绕行（GpuFrameView），上游修复后回归 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
+| EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |

@@ -78,8 +78,13 @@ constexpr float kCamAxisWidthPx = 2.2f;
 
 /// 投影相机局部场景 → polygon 点集组装（有界：网格 18 + 世界轴 3 + 视锥面 5 +
 /// 视锥边 8 + 相机轴 3）。x/y/w/h 为场景区域（相对位姿卡片），polygon 元素
-/// 覆盖整个区域，点集即区域局部坐标。
-inline void composePoseScene(eui::Ui& ui, const rin::PoseMat3& camToWorld, float x, float y,
+/// 覆盖整个区域，点集即区域局部坐标。poseDirtyKey 为姿态显式脏键（取姿态通道
+/// 序号）：EUI-NEO retained layer 签名不含 polygonPoints（EUI-20260924-001），
+/// 仅点集变化的子树缓存层永不失效、冻结在首次烘焙内容——非空 dirtyKey 使场景
+/// polygon 脱离 retained layer 改为逐帧直接绘制（框架"显式键控内容"语义），
+/// 键静止时稳定、随快照推进变化，不引入额外抖动。
+inline void composePoseScene(eui::Ui& ui, const rin::PoseMat3& camToWorld,
+                             const std::string& poseDirtyKey, float x, float y,
                              float w, float h) {
     const theme::PoseSceneTokens& scene = theme::poseScene();
     const rin::OrbitView view =
@@ -98,6 +103,7 @@ inline void composePoseScene(eui::Ui& ui, const rin::PoseMat3& camToWorld, float
             .ignoreLayout()
             .points(std::move(points))
             .color(color)
+            .dirtyKey(poseDirtyKey)  // EUI-20260924-001 绕行：见函数头注释。
             .build();
         points.clear();  // move 后处于有效未指定态，clear 恢复空缓冲
     };
@@ -262,7 +268,10 @@ inline void composePoseViewCard(eui::Ui& ui, PoseViewState& state,
                         rin::transposeMatrix3(
                             rin::matrix3FromColumnMajor(intrinsics->gyroToColor.rotation)));
                 }
-                composePoseScene(ui, camToWorld, pad, areaY, areaWidth, areaHeight);
+                // 显式脏键取姿态通道序号（会话单调递增，跨 restream 连续）：快照
+                // 推进时键变化驱动场景重绘，静止时键稳定（EUI-20260924-001 绕行）。
+                composePoseScene(ui, camToWorld, std::to_string(state.snapshot.sequence),
+                                 pad, areaY, areaWidth, areaHeight);
 
                 // 源频率与姿态数值读数自 M3-07 起由 IMU 状态面板（imu_panel.hpp）
                 // 统一呈现，本卡不再重复叠加元数据。
