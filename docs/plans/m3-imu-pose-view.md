@@ -634,12 +634,19 @@
      流重建（restream/设备切换/重开）重新尝试运动流；纯视频打开失败保持既有
      重试/Failed 语义。三处 `pipeline.start` 调用点（首次打开、分辨率 restream、
      设备切换）统一收口。
-  3. **3D 位姿视图不随相机运动更新**：静态走查未发现缺陷（投影数学 golden 测
-     试、显示公式测试、EUI polygon 动态更新原型证据、服务级姿态发布链路真机证
-     据均在档）；问题 1 的修复（restream 不再静默关闭运动流）消除了"快照停更
-     导致视图冻结"的一条确切成因。其余可能成因（真机融合姿态冻结 vs 视图刷新
-     缺陷）的判别依赖人手转动相机的目视对照，归 owner 复测：以 IMU 面板读数
-     （`#序号`是否推进、R·P·Y/四元数是否随转动变化）与 3D 视图联动关系定位。
+  3. **3D 位姿视图不随相机运动更新**：经两轮真机取证钉死为 **EUI-NEO retained
+     layer 绘制签名缺陷（EUI-20260924-001，已登记依赖台账）**——viewer 消费/合成
+     层全部正常（插桩实测：pump ~226 次/s、快照序号推进、orientation 逐帧变化、
+     视锥 quad 点集 79/79 采样间隔逐帧不同），但 `retainedElementPaintSignature`
+     不含 `polygonPoints`，位姿卡缓存层签名恒定、永不失效，屏幕位姿卡区域
+     t=8s vs t=30s 像素差分为 0（指纹：标题统计 `Draw … P0`，polygon 直接绘制
+     0 次）。服务侧同轮取证排除数据/融合/发布段：accel m/s² 量纲实测确认、gyro
+     时间戳单调（dt≈33ms，GLOBAL 域）、快照 450/450 逐位互不相同、yaw 漂移与
+     gyro 积分吻合、人为 +1 rad/s 激励驱动 yaw 至 +151°。修复：位姿场景 37 个
+     polygon 携带姿态通道序号作非空 `dirtyKey`（框架"显式键控内容"语义，
+     `elementBlocksRetainedLayer` 将其排除出 retained layer 逐帧直接绘制，
+     键静止时稳定），绕行引用台账编号留档于 `pose_view.hpp`；上游修复后回归
+     移除。
 - 依据：`camera_types.hpp` `StreamRequest` 粘性契约注释；AGENTS.md"失败对调用
   方和 Observer 可见/事件可观察"约束（降级以事件可见，不属静默绕过）；
   `M3-08` 权限前置登记（降级即该环境约束的持久答案；权限状态属系统环境事项，
@@ -670,13 +677,19 @@
   Linductor-alkaid；补跑条件 = 本轮提交在位）：(a) 无 sudo 启动 viewer → 预期
   视频正常出流 + 状态行显示"motion stream unavailable …; video only"，IMU 面板
   n/a、3D 视图空态；(b) sudo 或授权后启动 → IMU 面板推进、转动相机观察 3D
-  视图视锥实时跟随与 Reset 重锚定（即 `M3-08` 登记的目视验收项）；(c) 更换
-  分辨率 → IMU 面板恢复更新（问题 1 修复复验）。目视/物理操作 Agent 不可执行。
+  视图视锥实时跟随与 Reset 重锚定（即 `M3-08` 登记的目视验收项；EUI-20260924-001
+  绕行生效后视锥应随转动旋转）；(c) 更换分辨率 → IMU 面板恢复更新（问题 2 修复
+  复验，已由 owner 首轮复测确认）。目视/物理操作 Agent 不可执行。
 - 遗留与登记：硬件测试 SKIP 语义随降级语义更新（权限收紧时以"imuSupported &&
   无运动采样 && 无运动内参"持久签名 SKIP 77，替代已不可达的 Failed 消息匹配，
   由独立验证修改并复验）；`M3-08` 遗留的 30Hz 交付率对 `DEC-010` 默认 Kp/Ki
-  适配性裁决仍待 owner。`SCOPE-07` 勾选与 M3 状态收尾仍留 owner：待上述 owner
-  复测通过后一并处置。
-- 同步：`CHANGELOG.md`（Unreleased）补两条修复条目；`camera_service_design.md`
+  适配性裁决仍待 owner；EUI-20260924-001 待上报上游，修复后回归移除 dirtyKey
+  绕行；插桩运行 4 次中 1 次复现运动通道完全饥饿（Streaming 态但 motion/pose
+  通道零投递，疑似 HID 快速重启竞态，同日 ctest 硬件用例 10+ 次未复现）——
+  登记为观察项，若 owner 复测再现按 librealsense 台账流程取证登记。
+  `SCOPE-07` 勾选与 M3 状态收尾仍留 owner：待复测通过后一并处置。
+- 同步：`CHANGELOG.md`（Unreleased）补修复条目（3D 视图冻结、运动流降级、
+  分辨率切换粘性）；`camera_service_design.md`
   IMU 通路补降级语义、restream 收口与 viewer 粘性位说明；`tests/CMakeLists.txt`
-  清理独立验证遗留的临时 `iva_probe` 目标（不入库）。
+  清理独立验证遗留的临时 `iva_probe` 目标（不入库）；EUI-NEO 台账新增
+  EUI-20260924-001（含绕行实施记录）。
