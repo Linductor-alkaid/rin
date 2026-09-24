@@ -96,6 +96,14 @@ private:
                           executor::StopToken stopToken);
     /// 枚举 + 选择策略发布目录（requested 在线优先 > 唯一自动 > 未选）。
     void refreshCatalog(rs2::context& context);
+    /// 打开 pipeline（M3-04 混合配置 + 运动流降级）：wantMotion 时先按含 ACCEL/GYRO
+    /// 的配置打开；运动流打开失败一次性降级为纯视频并发布可见事件（典型原因：
+    /// 无 root 时 HID/IIO 设备节点权限前置），视频流不因 IMU 不可用而失败。纯视频
+    /// 打开失败照常上抛（打开重试/Failed 语义不变）。返回运动流是否实际启用。
+    bool startPipeline(rs2::pipeline& pipeline,
+                       rs2::pipeline_profile& profile,
+                       const std::string& serial,
+                       bool wantMotion);
     [[nodiscard]] bool serialOnline(const rs2::context& context, const std::string& serial);
     /// 设备是否具备 IMU（查最近一次目录枚举；enableMotion 在无 IMU 设备上按契约
     /// 退化为纯视频流，运动通道保持空，不视为错误）。
@@ -115,7 +123,8 @@ private:
     DeviceCatalog lastCatalog_;
 
     /// EXEC-06：motion 分支（校验 + 融合推进 + 邮箱投递），与 CaptureLoop 同寿命
-    /// （单 worker 独占调用）；motionActive_ 表示当前 pipeline 是否含运动流。
+    /// （单 worker 独占调用）；motionActive_ 表示当前 pipeline 是否实际含运动流
+    /// （打开/restream 时运动流失败降级为纯视频后为 false，见 startPipeline）。
     detail::MotionIngest motionIngest_;
     bool motionActive_ = false;
 };
@@ -598,9 +607,9 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
     std::vector<std::uint8_t> rgba;
     activeSerial_ = serial;
 
-    // 运动流状态（M3-04）：enableMotion 且设备具备 IMU 才有运动分支；每次流重建
-    // （打开/restream/设备切换）复位融合器与频率窗口，姿态重新收敛。
-    motionActive_ = request_.enableMotion && deviceHasImu(serial);
+    // 运动流状态（M3-04）：motionActive_ 由打开路径（run 的 startPipeline）或本函数
+    // 内的 restream/设备切换重建设置——运动流打开失败降级为纯视频后为 false（事件
+    // 可见）。每次流重建后运动分支复位融合器与频率窗口，姿态重新收敛。
     if (motionActive_) {
         motionIngest_.resetStreamState();
     }
@@ -678,10 +687,11 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                                         "resolution switch");
                 owner_.publishEvent(ServiceEventKind::Info, "switching resolution");
                 pipeline.stop();
-                // restream 重建含 IMU（M3-04）：按新请求与当前设备能力重配运动流。
-                const bool motion = request_.enableMotion && deviceHasImu(activeSerial_);
-                profile = pipeline.start(buildConfig(request_, activeSerial_, motion));
-                motionActive_ = motion;
+                // restream 重建含 IMU（M3-04）：按新请求与当前设备能力重配运动流；
+                // 运动流打开失败一次性降级为纯视频（事件可见），下次重建重新尝试。
+                motionActive_ = startPipeline(pipeline, profile, activeSerial_,
+                                              request_.enableMotion &&
+                                                  deviceHasImu(activeSerial_));
                 if (motionActive_) {
                     motionIngest_.resetStreamState();
                 }
@@ -702,11 +712,11 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                 owner_.publishEvent(ServiceEventKind::Info, "switching device");
                 pipeline.stop();
                 // 设备切换重建含 IMU（M3-04）：按新设备能力重配运动流（IMU 坐标系
-                // 随设备变化，融合器复位后重新收敛）。
-                const bool motion = request_.enableMotion && deviceHasImu(requestedSerial_);
-                profile = pipeline.start(buildConfig(request_, requestedSerial_, motion));
+                // 随设备变化，融合器复位后重新收敛）；运动流打开失败降级同 restream。
+                motionActive_ = startPipeline(pipeline, profile, requestedSerial_,
+                                              request_.enableMotion &&
+                                                  deviceHasImu(requestedSerial_));
                 activeSerial_ = requestedSerial_;
-                motionActive_ = motion;
                 if (motionActive_) {
                     motionIngest_.resetStreamState();
                 }
@@ -811,6 +821,27 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
         return false;
     }
     return serialInDevices(enumerateDevices(context), serial);
+}
+
+bool CaptureLoop::startPipeline(rs2::pipeline& pipeline,
+                                rs2::pipeline_profile& profile,
+                                const std::string& serial,
+                                bool wantMotion) {
+    if (wantMotion) {
+        try {
+            profile = pipeline.start(buildConfig(request_, serial, true));
+            return true;
+        } catch (const std::exception& error) {
+            // 降级不是静默绕过：失败原因随事件进入 observer（header 状态行可见）；
+            // 下次流重建（打开/restream/设备切换）重新尝试运动流。纯视频打开失败
+            // 不在此捕获，照常上抛保持既有重试/Failed 语义。
+            owner_.publishEvent(ServiceEventKind::Info,
+                                std::string("motion stream unavailable (") + error.what() +
+                                    "); video only");
+        }
+    }
+    profile = pipeline.start(buildConfig(request_, serial, false));
+    return false;
 }
 
 /// 设备 IMU 能力（M3-04）：查最近一次目录枚举（resolveTarget / 流送检查点刚刷新）。
@@ -928,9 +959,12 @@ void CaptureLoop::run(executor::StopToken stopToken) {
             bool opened = false;
             while (!stopToken.stop_requested()) {
                 try {
-                    // 混合 pipeline（M3-04）：按请求与设备能力决定是否附加运动流。
-                    profile = pipeline.start(buildConfig(
-                        request_, serial, request_.enableMotion && deviceHasImu(serial)));
+                    // 混合 pipeline（M3-04）：按请求与设备能力决定是否附加运动流；
+                    // 运动流打开失败（典型：无 root 时的 HID/IIO 权限前置）一次性
+                    // 降级为纯视频（事件可见），视频不因 IMU 不可用而失败。
+                    motionActive_ = startPipeline(pipeline, profile, serial,
+                                                  request_.enableMotion &&
+                                                      deviceHasImu(serial));
                     opened = true;
                     break;
                 } catch (const std::exception& error) {

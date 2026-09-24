@@ -97,6 +97,11 @@ Failed --stop()--> Stopping --> Idle
   `imuSupported`）时，`rs2::config` 在双视频流外附加 `RS2_STREAM_ACCEL/GYRO`
   （`RS2_FORMAT_MOTION_XYZ32F`，速率取 SDK 默认档位；实际出流频率由适配器实测）。
   设备无 IMU 时运动流退化为不配置——运动通道保持空，契约语义"不视为错误"。
+  **运动流打开失败降级**：含运动流的 `pipeline.start` 失败（典型：无 root 时
+  HID/IIO 设备节点权限前置）一次性降级为纯视频配置重试，视频流不因 IMU 不可用
+  而失败；降级原因随 `ServiceEvent(Info)` 可见（非静默绕过），`motionActive_`
+  置 false、内参快照按无运动发布，之后每次流重建（restream/设备切换/重开）重新
+  尝试运动流。纯视频打开失败照常走打开重试/Failed 语义。
 - **motion/intrinsics/extrinsics 读取**：每次流重建后从 `pipeline_profile` 读取
   gyro→color 外参与 ACCEL/GYRO 出厂运动内参，随 `IntrinsicsSnapshot` 经内参通道
   发布；读取失败保持全零无效值，不阻塞出流。
@@ -110,7 +115,8 @@ Failed --stop()--> Stopping --> Idle
   样本收敛；dt 非正不污染估计，≥1s 间隙重建窗口），随 `MotionSourceStats` 发布；
   样本计数为会话累计（自上次 start，跨 restream/设备切换保留）。
 - **restream / 设备切换重建含 IMU**：三处 `pipeline.start`（首次打开、分辨率
-  restream、设备切换）统一按"当前请求 + 当前设备能力"重配运动流；流重建成功后
+  restream、设备切换）统一经 `startPipeline` 按"当前请求 + 当前设备能力"重配运动流
+  （含上述运动流失败降级）；流重建成功后
   `MotionIngest::resetStreamState()` 复位融合器（姿态回到不可用，重新收敛）与频率
   窗口。motion/pose 通道序号自会话起单调递增、跨重建保持连续——消费方 lastSeen
   序号不回退，邮箱 stale 读语义不失效。
@@ -155,6 +161,10 @@ run(StopToken):
   不滞留陈旧姿态）；3D 位姿视图（DEC-011 CPU 投影 + polygon）与 IMU 状态面板
   （源频率 EMA Hz + 会话样本、ZYX 欧拉角与四元数读数）消费同一份快照，不新增
   通道；原始运动通道 `tryLoadMotion()` 仅作诊断，不进面板。
+- 运动流意图粘性（M3 修复）：`StreamRequest::enableMotion` 为请求级粘性位
+  （camera_types.hpp 契约）——viewer 分辨率档位只覆盖视频字段，运动流意图沿用
+  默认请求携带；否则 restream 命令携带 `enableMotion=false`，适配器按新请求重建
+  pipeline 时静默关闭运动流，姿态通道停止发布（面板/视图停留陈旧快照）。
 - 设备目录与热插拔（DEC-006）：适配器构造时长驻 `rs2::context` 并注册
   `set_devices_changed_callback`；回调（librealsense 线程）仅向 `LatestMailbox` 投递
   信号（规则 11），worker 以 ≤300ms 有界轮询消费并重新枚举发布 `DeviceCatalog`
