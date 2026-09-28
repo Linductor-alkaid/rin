@@ -30,6 +30,7 @@
 
 #include "canvas_model.hpp"
 #include "param_model.hpp"
+#include "perf_model.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -76,6 +77,9 @@ struct WorkflowCanvasState {
     /// 节点执行失败标注（M5-04 §4：NodeFailed → destructive 徽标；会话级，
     /// Started/Stopped 事件清空；事件消费在 app.cpp pump）。
     NodeFailureMarks failures;
+    /// 性能面板统计管道（M5-05 §5.7：sequence 推进消费 + 停止冻结语义；
+    /// 消费在 app.cpp pump，工具栏状态徽标/节点耗时徽标/右面板总览读取）。
+    WorkflowPerfState perf;
     /// 画布内容修订号（连线 polygon 的显式脏键，EUI-20260924-001 绕行）。
     std::uint64_t revision = 0;
 
@@ -185,8 +189,10 @@ using viewer::theme::kSpace3;
     return std::max(minimum, base * scale);
 }
 
-// --- 工具栏（§5.8 运行控制 M5-06 接入；本区当前：标题/校验状态/反馈/Fit） ---
-inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state, const float x,
+// --- 工具栏（§5.8 运行控制 M5-06 接入；本区当前：标题/引擎状态徽标/校验状态/
+// 反馈/Fit。状态徽标按 §5.7：四态点标 + toString，色经 workflowStateColor） ---
+inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
+                                   const rin::WorkflowEngineState engineState, const float x,
                                    const float y, const float width, const float height) {
     const theme::ThemeTokens& tokens = theme::dark();
     const float pad = kSpace3;
@@ -226,6 +232,23 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state, cons
                 .color(state.model.validation.ok ? tokens.fgSubtlest : tokens.warning)
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
+            // 引擎状态徽标（§5.7 执行状态）：状态点 + 文本，语义色映射与 M5-02
+            // 令牌扩展同源；启动/停止按钮归 M5-06 运行控制。
+            const eui::Color stateTint = theme::workflowStateColor(engineState);
+            ui.rect("workflow.toolbar.stateDot")
+                .position(344.0f, (height - kSpace2) * 0.5f)
+                .size(kSpace2, kSpace2)
+                .radius(kSpace2)
+                .color(stateTint)
+                .build();
+            ui.text("workflow.toolbar.state")
+                .position(344.0f + kSpace2 + kSpace2, 0.0f)
+                .size(90.0f, height)
+                .text(rin::toString(engineState))
+                .fontSize(kFontSm)
+                .color(stateTint)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
             // 帧全图按钮（§5.1 快捷键 F 的鼠标等价路径）。
             ui.rect("workflow.toolbar.fit")
                 .position(width - pad - fitWidth, (height - 26.0f) * 0.5f)
@@ -251,14 +274,14 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state, cons
                 .build();
             if (!state.feedback.empty()) {
                 ui.text("workflow.toolbar.feedback")
-                    .position(340.0f, 0.0f)
-                    .size(width - 340.0f - fitWidth - pad * 2.0f, height)
+                    .position(452.0f, 0.0f)
+                    .size(width - 452.0f - fitWidth - pad * 2.0f, height)
                     .text(state.feedback)
                     .fontSize(kFontSm)
                     .color(tokens.fgSubtlest)
                     .horizontalAlign(eui::HorizontalAlign::Right)
                     .verticalAlign(eui::VerticalAlign::Center)
-                    .maxWidth(width - 340.0f - fitWidth - pad * 2.0f)
+                    .maxWidth(width - 452.0f - fitWidth - pad * 2.0f)
                     .build();
             }
         })
@@ -486,6 +509,21 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                     .size(r * 2.0f, r * 2.0f)
                     .radius(r)
                     .color(portColor(descriptor->outputs[i], rin::PortDirection::Output))
+                    .build();
+            }
+            // 每节点耗时徽标（§5.7）：底部页脚带呈现滚动窗口均值 avgCostMs，
+            // 统一小数位达成等宽对齐（DEC-005 mono 替代纪律）；无统计（未运行/
+            // 不在当前生效图）不绘制。
+            if (const rin::NodeStats* stats = state.perf.nodeStats(node.id);
+                stats != nullptr) {
+                ui.text(base + ".cost")
+                    .position(kSpace2 * s, h - kNodeFooterHeight * s)
+                    .size(w - kSpace2 * 2.0f * s, kNodeFooterHeight * s)
+                    .text(formatCostMs(stats->avgCostMs))
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fgSubtlest)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(w - kSpace2 * 2.0f * s)
                     .build();
             }
         })

@@ -266,6 +266,104 @@ inline void composeNodeOutputBlock(eui::Ui& ui, const WorkflowPanelState& panel,
         .build();
 }
 
+/// 右面板工作流总览（M5-05 §5.7，无选中时）：端到端 FPS、累计处理/丢弃帧、
+/// 在飞任务数；丢弃计数非零时 warning 提示（EXEC-07 显式丢弃的可观察面，
+/// 禁止静默）；引擎非 Running 时末次值冻结并标注 stopped（§4，stale 数值
+/// 只在冻结标注下出现）。数值右对齐固定列（DEC-005 mono 替代纪律）。
+inline void composeWorkflowOverview(eui::Ui& ui, const WorkflowPerfState& perf,
+                                    const float x, const float y, const float width,
+                                    const float height) {
+    const theme::ThemeTokens& tokens = theme::dark();
+    const float rowHeight = 22.0f;
+    const float labelHeight = kFontXs + kSpace1;
+
+    ui.stack("workflow.context.overview")
+        .position(x, y)
+        .size(width, height)
+        .content([&] {
+            ui.text("workflow.context.overview.title")
+                .position(0.0f, 0.0f)
+                .size(width, labelHeight)
+                .text("Workflow overview")
+                .fontSize(kFontXs)
+                .color(tokens.fgSubtlest)
+                .build();
+            const rin::WorkflowStats* stats = perf.stats();
+            if (stats == nullptr) {
+                ui.text("workflow.context.overview.empty")
+                    .position(0.0f, labelHeight + kSpace1)
+                    .size(width, rowHeight)
+                    .text("run the workflow to see statistics")
+                    .fontSize(kFontXs)
+                    .color(tokens.fgSubtlest)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+                return;
+            }
+            const auto row = [&ui, &tokens, width, rowHeight](
+                                 const char* id, const std::string& label,
+                                 const std::string& value, const eui::Color valueTint) {
+                ui.text(std::string("workflow.context.overview.") + id + ".label")
+                    .position(0.0f, 0.0f)
+                    .size(width * 0.5f, rowHeight)
+                    .text(label)
+                    .fontSize(kFontSm)
+                    .color(tokens.fgSubtle)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+                ui.text(std::string("workflow.context.overview.") + id + ".value")
+                    .position(0.0f, 0.0f)
+                    .size(width, rowHeight)
+                    .text(value)
+                    .fontSize(kFontSm)
+                    .color(valueTint)
+                    .horizontalAlign(eui::HorizontalAlign::Right)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+            };
+            float rowY = labelHeight + kSpace1;
+            const auto labeledRow = [&](const char* id, const std::string& label,
+                                        const std::string& value,
+                                        const eui::Color valueTint) {
+                ui.stack(std::string("workflow.context.overview.") + id)
+                    .position(0.0f, rowY)
+                    .size(width, rowHeight)
+                    .content([&] { row(id, label, value, valueTint); })
+                    .build();
+                rowY += rowHeight;
+            };
+            labeledRow("fps", "end-to-end", formatFps(stats->endToEndFps), tokens.fg);
+            labeledRow("processed", "processed", std::to_string(stats->processedFrames),
+                       tokens.fg);
+            const bool dropping = stats->droppedFrames > 0;
+            labeledRow("dropped", "dropped", std::to_string(stats->droppedFrames),
+                       dropping ? tokens.warning : tokens.fg);
+            labeledRow("inFlight", "in flight", std::to_string(stats->inFlight), tokens.fg);
+            // 过载丢弃警示（EXEC-07：显式丢弃必须可观察，禁止静默排队）。
+            if (dropping) {
+                ui.text("workflow.context.overview.overload")
+                    .position(0.0f, rowY)
+                    .size(width, labelHeight)
+                    .text("overload - frames are being dropped")
+                    .fontSize(kFontXs)
+                    .color(tokens.warning)
+                    .build();
+                rowY += labelHeight;
+            }
+            // 冻结标注（§4 停止/关闭排空）：末次值仅在非活动标注下呈现。
+            if (!perf.live()) {
+                ui.text("workflow.context.overview.frozen")
+                    .position(0.0f, rowY)
+                    .size(width, labelHeight)
+                    .text("stopped")
+                    .fontSize(kFontXs)
+                    .color(tokens.fgSubtlest)
+                    .build();
+            }
+        })
+        .build();
+}
+
 }  // namespace
 
 /// pump 边界的中间结果消费（RULE-05：渲染线程只做有界取快照与提交）。引擎
@@ -339,13 +437,18 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
 
             const CanvasNode* node = panelSelection(canvas.model);
             if (node == nullptr) {
+                if (canvas.model.selection.empty()) {
+                    // 无选中 = 工作流总览（M5-05 §5.7）。
+                    composeWorkflowOverview(ui, canvas.perf, pad, pad + kFontSm + kSpace2,
+                                            innerWidth,
+                                            outputTop - (pad + kFontSm + kSpace2));
+                    return;
+                }
                 ui.text("workflow.context.empty")
                     .position(pad, pad + kFontSm + kSpace2)
                     .size(innerWidth, 40.0f)
-                    .text(canvas.model.selection.empty()
-                              ? "select a node to edit its parameters"
-                              : std::to_string(canvas.model.selection.size()) +
-                                    " nodes selected - select one to edit parameters")
+                    .text(std::to_string(canvas.model.selection.size()) +
+                          " nodes selected - select one to edit parameters")
                     .fontSize(kFontXs)
                     .color(tokens.fgSubtlest)
                     .build();
@@ -378,6 +481,23 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
             rowY += kFontBase + kSpace1;
+
+            // 选中节点耗时展开（M5-05 §5.7）：last/avg/执行帧数一行，统一小数
+            // 位（DEC-005 mono 替代纪律）；无统计（未运行/不在生效图）不占行。
+            if (const rin::NodeStats* stats = canvas.perf.nodeStats(nodeId);
+                stats != nullptr) {
+                ui.text("workflow.context.nodeStats")
+                    .position(pad, rowY)
+                    .size(innerWidth, kFontXs + kSpace1)
+                    .text("last " + formatCostMs(stats->lastCostMs) + " · avg " +
+                          formatCostMs(stats->avgCostMs) + " · " +
+                          std::to_string(stats->executedFrames) + " frames")
+                    .fontSize(kFontXs)
+                    .color(tokens.fgSubtlest)
+                    .maxWidth(innerWidth)
+                    .build();
+                rowY += kFontXs + kSpace2;
+            }
 
             // 节点错误可视化（§4 NodeFailed）：destructive 徽标 + 最近失败消息。
             if (const std::string* failure = canvas.failures.failureOf(nodeId);
@@ -770,7 +890,10 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
     const float bodyHeight = height - toolbarHeight - bottomHeight - gap * 2.0f;
     const float canvasWidth = width - paletteWidth - contextWidth - gap * 2.0f;
 
-    composeWorkflowToolbar(ui, state, x, y, width, toolbarHeight);
+    composeWorkflowToolbar(ui, state,
+                           engine != nullptr ? engine->state()
+                                             : rin::WorkflowEngineState::Idle,
+                           x, y, width, toolbarHeight);
     composeWorkflowPalette(ui, state, engine, x, bodyTop, paletteWidth, bodyHeight);
     composeWorkflowCanvas(ui, state, engine, x + paletteWidth + gap, bodyTop, canvasWidth,
                           bodyHeight);
