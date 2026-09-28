@@ -63,11 +63,20 @@ jet 伪彩不利于观察深度连续层次，需要提供灰度黑白（黑白�
 借鉴 roboparty 训练侧的深度可视化习惯（逐帧最大值归一化 + OpenCV 灰度直显），
 公共契约 `rin::DepthColorScheme` 尾部追加 `AdaptiveGrayscale`（既有枚举值序不变）：
 
-- 语义：两趟扫描取帧内最大有效原始值 frameMax，`t = raw / frameMax` 经新纯函数
-  `adaptiveGrayscaleColor` 映射；**近黑远白**，帧内最远有效像素恒为纯白。比例对
-  depthScale 不变，故不消费 `depthScaleMeters/nearMeters/farMeters`（统一入口
-  `convertDepth16ToRgba8` 的参数校验仍与其它配色一致）；无效深度（raw==0）与
-  全帧无效均输出不透明黑。
+- 语义：两趟扫描取帧内有效深度的 **99 分位** frameQuantile，`t = raw / frameQuantile`
+  经新纯函数 `adaptiveGrayscaleColor` 映射；**近黑远白**，分位深度映射为纯白，
+  超过截断为白。比例对 depthScale 不变，故不消费 `depthScaleMeters/nearMeters/
+  farMeters`（统一入口 `convertDepth16ToRgba8` 的参数校验仍与其它配色一致）；
+  无效深度（raw==0）与全帧无效均输出不透明黑；有效像素不足 100 个时 P99 退化
+  为绝对最大值。
+- 修订（2026-09-28，频闪修复）：初版基准为绝对最大值 frameMax，真机 Z16 中
+  占比极小、数值极端的孤立过远噪声（飞点/饱和像素）会逐帧推动基准，整帧亮度
+  跳变（频闪）；过近噪声表现为"近黑"极性下的暗斑，不影响全局基准。roboparty
+  侧印证：其逐帧最大值可视化无频闪是因为仿真数据干净，而对真实传感器缺陷的
+  对策恰是固定区间截断（`DepthNormalizationCfg(0,10)m`）与像素失效仿真
+  （`PixelFailureNoiseCfg`/`DepthSkyArtifactNoiseCfg`）。自适应模式改为 P99
+  基准（高/低字节两级 256-bin 直方图 + 整数秩，无浮点、无状态、逐帧确定）：
+  占比 <1% 的噪声无法移动归一化基准，超分位像素截断为白，其余语义不变。
 - 与既有固定区间灰度（近白远黑，[nearMeters, farMeters] 截断）互补：自适应模式
   帧内永远满对比度、不依赖量程假设，但同一物体跨帧亮度随 frameMax 跳变，不适合
   绝对距离判读，定位为观察深度层次结构的辅助配色。
