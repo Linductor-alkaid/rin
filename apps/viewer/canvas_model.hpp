@@ -150,6 +150,8 @@ inline constexpr float kPortVisualRadius = 4.0f;
 inline constexpr float kPortHitRadius = 12.0f;
 /// 连线命中距离（贝塞尔采样折线的点到线段距离阈值）。
 inline constexpr float kWireHitDistance = 7.0f;
+/// 连线视觉宽度（画布坐标；wireRibbon 带状轮廓用，小于命中距离）。
+inline constexpr float kWireWidth = 2.5f;
 
 /// 节点高度 = 标题行 + max(输入数, 输出数, 1) 个端口行 + 底部留白。
 [[nodiscard]] inline float nodeHeight(const rin::NodeDescriptor& descriptor) {
@@ -206,6 +208,43 @@ inline constexpr float kWireHitDistance = 7.0f;
     return points;
 }
 
+/// 连线带状轮廓（粗细一致的曲线）：`polygon` 原语为填充语义（点集三角形扇、
+/// 末点直连首点），开放曲线点集会渲染成"弦线与曲线围成的封闭区域"而非线条
+/// （M5-04 真机反馈实证）。走线以贝塞尔采样为中心线，逐点求切线法向并偏移
+/// ±width/2，构造前向 + 逆向回程的带状封闭轮廓；与 M3 位姿视图 segmentToQuad
+/// 的线段四边形同一先例。width 为画布坐标单位（随缩放与节点图形同比例）；
+/// 相邻采样重合（零切向）时沿用上一法向，不放大为异常。
+[[nodiscard]] inline std::vector<CanvasPoint> wireRibbon(const CanvasPoint& from,
+                                                         const CanvasPoint& to,
+                                                         const int segments,
+                                                         const float width) {
+    const std::vector<CanvasPoint> center = sampleWire(from, to, segments);
+    if (center.size() < 2 || !(width > 0.0f) || !std::isfinite(width)) {
+        return center;
+    }
+    const float half = width * 0.5f;
+    const std::size_t n = center.size();
+    std::vector<CanvasPoint> leftSide(n);
+    std::vector<CanvasPoint> rightSide(n);
+    CanvasPoint normal{0.0f, 1.0f};
+    for (std::size_t i = 0; i < n; ++i) {
+        const CanvasPoint& prev = center[i > 0 ? i - 1 : 0];
+        const CanvasPoint& next = center[i + 1 < n ? i + 1 : n - 1];
+        const CanvasPoint tangent = next - prev;
+        const float length = std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y);
+        if (length > 1e-6f) {
+            normal = {-tangent.y / length, tangent.x / length};
+        }
+        leftSide[i] = {center[i].x + normal.x * half, center[i].y + normal.y * half};
+        rightSide[i] = {center[i].x - normal.x * half, center[i].y - normal.y * half};
+    }
+    std::vector<CanvasPoint> ribbon;
+    ribbon.reserve(n * 2);
+    ribbon.insert(ribbon.end(), leftSide.begin(), leftSide.end());
+    ribbon.insert(ribbon.end(), rightSide.rbegin(), rightSide.rend());
+    return ribbon;
+}
+
 /// 点到线段最短距离。
 [[nodiscard]] inline float pointSegmentDistance(const CanvasPoint& p, const CanvasPoint& a,
                                                 const CanvasPoint& b) {
@@ -222,11 +261,13 @@ inline constexpr float kWireHitDistance = 7.0f;
 
 // --- 画布图模型：节点位置 + 选中集 + WorkflowGraph 变换 ---
 
-/// 画布节点：类型实例 + UI 私有位置（DEC-014 决策 5）。
+/// 画布节点：类型实例 + UI 私有位置（DEC-014 决策 5）+ 已赋值参数（M5-04：
+/// 参数面板提交的持久层，随图结构变更经 applyGraph 携带，避免图重建丢失参数）。
 struct CanvasNode {
     rin::NodeId id = rin::kInvalidNode;
     std::string typeId;
     CanvasPoint position;
+    std::vector<rin::ParamAssignment> params;
 };
 
 /// 一次画布图操作的结果；ok=false 时 error 携带人可读拒绝原因（§5.4 不静默失败）。
@@ -285,12 +326,12 @@ struct CanvasGraphModel {
         return catalog != nullptr ? rin::findNodeDescriptor(*catalog, node.typeId) : nullptr;
     }
 
-    /// 组装契约图（M4-09）：参数全部未赋值（引擎取声明默认值，契约允许）。
+    /// 组装契约图（M4-09）：携带已赋值参数（未赋值参数由引擎取声明默认值）。
     [[nodiscard]] rin::WorkflowGraph toGraph() const {
         rin::WorkflowGraph graph;
         graph.nodes.reserve(nodes.size());
         for (const CanvasNode& node : nodes) {
-            graph.nodes.push_back({node.id, node.typeId, {}});
+            graph.nodes.push_back({node.id, node.typeId, node.params});
         }
         graph.connections = connections;
         return graph;
@@ -386,6 +427,28 @@ struct CanvasGraphModel {
         return {true, {}};
     }
 
+    /// 参数赋值提交（M5-04 §5.5）：替换同 paramId 旧赋值（实例内 paramId 唯一）
+    /// 或追加；调用方（参数面板）负责提交前的声明校验——此处仅存储并刷新校验
+    /// 缓存（BadParam 等问题经校验标注呈现）。
+    [[nodiscard]] CanvasOpResult setParam(const rin::NodeId id,
+                                          const rin::ParamAssignment& assignment) {
+        CanvasNode* node = findNode(id);
+        if (node == nullptr) {
+            return {false, "unknown node"};
+        }
+        auto it = std::find_if(node->params.begin(), node->params.end(),
+                               [&assignment](const rin::ParamAssignment& existing) {
+                                   return existing.paramId == assignment.paramId;
+                               });
+        if (it != node->params.end()) {
+            *it = assignment;
+        } else {
+            node->params.push_back(assignment);
+        }
+        revalidate();
+        return {true, {}};
+    }
+
     /// 建立连线（§5.3）：仅 Output→Input；类型一致；拒绝自环与成环；目标输入
     /// 已有入边时替换旧边（契约单驱动约束的 UI 表达）；重复同边幂等。
     [[nodiscard]] CanvasOpResult connect(const rin::PortRef& from, const rin::PortRef& to) {
@@ -431,7 +494,7 @@ struct CanvasGraphModel {
                 rin::WorkflowGraph graph;
                 graph.nodes.reserve(nodes.size());
                 for (const CanvasNode& node : nodes) {
-                    graph.nodes.push_back({node.id, node.typeId, {}});
+                    graph.nodes.push_back({node.id, node.typeId, node.params});
                 }
                 graph.connections = tentative;
                 return graph;

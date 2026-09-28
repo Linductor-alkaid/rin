@@ -65,7 +65,7 @@
 - [x] `M5-03` 节点编辑器画布：节点框渲染 / 选中 / 拖动、端口连线创建与删除、
       画布平移缩放、调色板拖出创建节点、画布图与引擎 `NodeGraph` 同步（含非法
       操作拒绝反馈）。完成判据：坐标 / 命中 / 图同步逻辑的平台无关单测通过。
-- [ ] `M5-04` 参数面板与中间结果查看：选中节点的类型化参数编辑（滑块 / 输入 /
+- [x] `M5-04` 参数面板与中间结果查看：选中节点的类型化参数编辑（滑块 / 输入 /
       下拉）、节点输出缩略图（有界缓存最近一帧）、节点错误可视化。完成判据：
       控件-参数绑定与中间结果路径测试通过。
 - [ ] `M5-05` 性能面板：每节点耗时（滚动窗口）、端到端 FPS、丢弃计数；数据源为
@@ -250,3 +250,68 @@ use-after-rotate、按下优先级与文档矛盾、组拖动缺失），主循�
 渲染 20s 稳定无崩溃（工作流页 compose 路径需输入自动化，交互与视觉验收按
 既定纪律归 `M5-07` 真机端到端）。环境：x86_64 Linux（GNOME/Wayland），GCC 13。
 `M5-04`（参数面板与中间结果查看）为下一工作项。
+
+2026-09-28：`M5-04` 完成关闭——参数面板与中间结果查看落地（对 `M5-08` 契约
+假引擎开发调试，DEC-016）。新增 `apps/viewer/param_model.hpp`（§5.5/§5.6/§7
+平台无关纯逻辑层）：控件-参数绑定（严格文本解析、值对声明校验——种类匹配/
+范围闭区间/枚举选项/RealArray 有限性、滑条归一化映射与 Integer 取整、生效值
+解析"未赋值取声明默认"、控件初值文本）、`RealArrayGrid` 矩阵网格（扁平数据
+推断 KxK/1xN、重排尺寸行主序截断/零扩展）、`NodeOutputCache` 有界缓存（每节点
+仅最新一幅、容量 4 LRU 驱逐、停止/关闭排空）、`thumbnailRgbaFromSnapshot`
+（Gray8/Rgba8 按格式、最近邻只缩不放最长边 ≤256、stride 处理、sourceSequence
+透传）、`NodeFailureMarks`（NodeFailed 置位、Started/Stopped 清空的会话级
+标注）。`canvas_model.hpp` 扩展：`CanvasNode.params` + `setParam`（替换同
+paramId/追加；`toGraph` 携带赋值——图结构变更重建不丢参数；无效赋值经校验
+标注 BadParam 呈现）。新增 `apps/viewer/param_panel.hpp` 组装层（上下文面板
+与五区组装自 node_canvas.hpp 迁入）：右面板参数编辑按 §5.5 控件映射落地
+（Boolean→`toggleSwitch`、Integer/Real→`slider`+`input`（hasRange 显示区间、
+滑条归一化夹取）、Enumeration→`dropdown`（`bindOpen`/`onOpenChange` 外接开合，
+台账 EUI-20260923-002）、RealArray→自研矩阵网格（行列步进 + 单元文本，全格
+有限值校验））；编辑即经 `requestParamUpdate` 逐参数提交，同步拒绝就地报错，
+引擎接受后同步记入画布模型（不经 `applyGraph`——Running 下重复图重建触发
+事件刷屏，假引擎已知重建语义 M4-07 对齐项）；"参数下一帧生效"常驻提示；
+参数行超出面板参数区下限截断并计数提示。底部缩略图（§5.6：GpuFrameView 绕行
+路径 EUI-20260923-003，pump 边界消费；引擎非 Running 整体排空，§4 停止/关闭
+排空语义）。节点错误可视化（§4）：NodeFailed 事件经 `NodeFailureMarks` →
+画布节点 destructive 徽标 + 面板失败徽标 + 消息入底部事件列表。组件接线纪律
+（DEC-005，设计文档 §5.5 补记同步）：颜色字段全部取 viewer 令牌显式赋值
+（SliderStyle/SwitchStyle/DropdownStyle/InputStyle），几何度量沿用组件默认
+（与 M5-03 input 显式字号/inset 并列记录）；slider/switch/dropdown 构建器无
+position，统一包裹定位 stack；下拉弹层浮于后续参数行依赖同父容器 zIndex
+（展开时抬升）；面板于五区中最后合成（弹层可浮于底部列表）。app.cpp：
+`pumpNodeOutput` 消费（RULE-05 有界）、onShutdown 面板排空（缩略图清空/控件
+绑定复位/失败标注清空）。测试（Independent-Verification-Agent 独立编写执行，
+两轮）：`tests/test_param_panel.cpp` 12 分区 310 项检查——解析/校验/滑条映射/
+生效值/矩阵网格/假引擎拉取与 LRU 驱逐与排空/缩略图降采样与 stride/失败标注
+事件语义/画布 setParam 与 toGraph 携带/connect 预检携带参数；debug/asan/ubsan
+/tsan 四预设 0 失败，debug 全量 ctest 18/18（含 D435if 真机硬件冒烟）。
+**冒烟发现并修复 M5-03 潜伏缺陷**：`composeWorkflowPalette` 目录实参三目
+`*catalog : NodeCatalog{}` 左值/纯右值混合，左值分支被拷贝为临时目录、语句
+结束时析构，`PaletteGroup::items` 持有的节点指针全部悬垂（分组标题为值拷贝
+而幸存）——工作流页 compose 路径此前从未真机执行过（M5-03 冒烟停留在预览页），
+M5-04 冒烟（临时本地补丁：预置三节点图 + 选中节点 + 启动引擎注入延迟故障，
+验证后已回退不入库）实证 `bad_alloc` 崩溃；修复为 `static const` 空目录使
+三目两侧同为左值，复验真机运行 24s+ 稳定（RSS 平稳无增长，引擎启动/参数热
+更新/缩略图消费/注入失败→Failed 排空路径全通过）+ 最终代码四预设全量复验。
+环境：x86_64 Linux（GNOME/XWayland），GCC 13。面板交互与视觉验收按既定纪律
+归 `M5-07` 真机端到端。复验过程另记录一项与本次无关的既有抖动：tsan+真机
+组合下 `realsense_hardware` 的 M3-08 restream 后 EMA 频率恢复断言 8 次中 2 次
+越界（插桩拖慢宿主时序，比值 0.483 贴近 0.5 下限；debug/asan/ubsan 确定性
+通过，最终 tsan 全量全绿）——后续可评估放宽测量窗或重试语义。
+`M5-05`（性能面板）为下一工作项。
+
+2026-09-28：连线渲染修复（用户真机视觉反馈，随 `M5-04` 分支入账）——画布
+连线被绘制成"两点连线与曲线的封闭区域"。根因：EUI-NEO `polygon` 原语为填充
+语义（点集三角形扇、末点直连首点，`appendPolygonTriangleFan`），M5-03 将开放
+贝塞尔采样点集直接提交，渲染为弦-曲线封闭面而非线条；设计文档 §5.3"polygon
+采样渲染"的隐含"折线描边"假设不成立。修复：`canvas_model.hpp` 新增
+`wireRibbon`（贝塞尔采样中心线 + 逐点切线法向偏移 ±width/2 的带状封闭轮廓，
+`kWireWidth`=2.5 画布单位随缩放），`node_canvas.hpp` 连线与拖线预览改用之——
+粗细一致且随曲线弯曲，与 M3 位姿视图 `segmentToQuad` 同一先例；命中检测
+（`wireAt`）几何不变。拖线预览补零长度守卫（光标停回发起端口时控制点下限
+使中心线外凸成小环；已提交连线拒绝自连，仅预览可达，不绘制）。测试
+（Independent-Verification-Agent 独立编写执行）：`test_node_canvas.cpp` 新增
+`wire_ribbon` 分区 46 项检查（配对几何/粗细一致/中心线重合/法向随解析贝塞尔
+导数旋转/取向回归守卫/退化输入），468 项检查 debug/asan/ubsan/tsan 四预设
+0 失败（tsan 3 次稳定）。真机冒烟（临时本地补丁预置两连线图，验证后回退）：
+工作流页 30fps 重绘 16s+ 稳定，RSS 平稳。视觉确认待用户在 MR 分支复核。

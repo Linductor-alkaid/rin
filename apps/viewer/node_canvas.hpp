@@ -3,7 +3,7 @@
 // 节点编辑器画布组装（M5-03，[DEC-014] 五区骨架的工作流页填充 / [DEC-015]
 // EUI-NEO 原语自研画布）。替代 M5-02 的 workflow_shell.hpp 静态骨架（五区几何
 // 不变：工具栏 44 / 调色板 200 / 画布 / 上下文 264 / 底部 120，间距 kSpace3）；
-// 上下文面板仍为骨架（M5-04 参数面板接入）。
+// M5-04 起上下文面板（参数面板/缩略图）与五区组装迁移至 param_panel.hpp。
 //
 // 交互结构（DEC-015 决策 2：交互几何下沉纯逻辑）：画布内全部指针语义由覆盖
 // 视口的一层 `components::mouseArea` 承载，经 canvas_model.hpp 的命中检测与
@@ -17,7 +17,9 @@
 // 以校验标注呈现而非阻塞搭图；被拒绝的连线操作以反馈行显式说明（不静默）。
 //
 // 原语映射（ui_workspace_design.md §6）：画布视口 stack+clip、节点 rect、
-// 端口 rect、连线 polygon（贝塞尔采样）、右键创建菜单为自绘浮层（沿用
+// 端口 rect、连线 polygon（贝塞尔采样 + 法向偏移带状轮廓——polygon 为填充
+// 语义，开放点集会渲染成弦-曲线封闭区域，粗细一致曲线经 wireRibbon 构造）、
+// 右键创建菜单为自绘浮层（沿用
 // EUI-20260928-001 的 rect/text 退化先例，未用 components::contextMenu）、
 // 调色板过滤输入为 components::input（样式字段逐一取 viewer 令牌，不引入
 // 组件主题度量）。键盘路径（F/Del/Esc）在 app.cpp 的 DslAppConfig::onKeyEvent，
@@ -27,6 +29,7 @@
 // [DEC-015]: ../../docs/decisions/DEC-015-node-editor-implementation-path.md
 
 #include "canvas_model.hpp"
+#include "param_model.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -70,6 +73,9 @@ struct WorkflowCanvasState {
     std::string feedback;
     /// 引擎最新事件行（底部列表；pump 消费 tryLoadEvent 写入）。
     std::string lastEvent;
+    /// 节点执行失败标注（M5-04 §4：NodeFailed → destructive 徽标；会话级，
+    /// Started/Stopped 事件清空；事件消费在 app.cpp pump）。
+    NodeFailureMarks failures;
     /// 画布内容修订号（连线 polygon 的显式脏键，EUI-20260924-001 绕行）。
     std::uint64_t revision = 0;
 
@@ -311,10 +317,15 @@ inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
                 .style(inputStyle)
                 .build();
 
+            // 目录引用必须两侧同为左值：`cond ? *catalog : NodeCatalog{}` 会因
+            // 左值/纯右值混合把左值分支拷贝成临时目录，语句结束时 items 里指向
+            // 其节点元素的指针全部悬垂（M5-04 冒烟实证的 M5-03 潜伏缺陷）。
+            static const rin::NodeCatalog kEmptyPaletteCatalog{};
+            const rin::NodeCatalog& paletteCatalog =
+                state.model.catalog != nullptr ? *state.model.catalog
+                                               : kEmptyPaletteCatalog;
             const std::vector<PaletteGroup> groups =
-                paletteGroups(state.model.catalog != nullptr ? *state.model.catalog
-                                                             : rin::NodeCatalog{},
-                              state.paletteFilter.get());
+                paletteGroups(paletteCatalog, state.paletteFilter.get());
             float rowY = pad + kFontSm + kSpace2 + inputHeight + kSpace2;
             for (const PaletteGroup& group : groups) {
                 ui.text("workflow.palette.group." + group.title)
@@ -401,6 +412,9 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
         std::find(state.model.selection.begin(), state.model.selection.end(), node.id) !=
         state.model.selection.end();
     const bool invalid = state.model.nodeHasIssue(node.id);
+    // 节点错误可视化（M5-04 §4）：执行失败（NodeFailed）与校验问题同样以
+    // destructive 描边标注，失败另加徽标；消息走面板徽标与底部事件列表。
+    const bool failed = state.failures.failureOf(node.id) != nullptr;
     const std::string base = "workflow.canvas.node." + std::to_string(node.id);
 
     ui.stack(base)
@@ -412,8 +426,8 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                 .radius(std::max(2.0f, kRadiusMd * s))
                 .color(selected ? tokens.accentSurface : tokens.card)
                 .border(kBorderHairline,
-                        invalid ? tokens.destructive
-                                : (selected ? tokens.brand : tokens.cardBorder))
+                        (invalid || failed) ? tokens.destructive
+                                            : (selected ? tokens.brand : tokens.cardBorder))
                 .build();
             ui.text(base + ".title")
                 .position(kSpace2 * s, 0.0f)
@@ -423,6 +437,24 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                 .color(tokens.fg)
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
+            if (failed) {
+                const float badge = 12.0f * s;
+                ui.rect(base + ".failedBadge")
+                    .position(w - badge - 3.0f * s, 3.0f * s)
+                    .size(badge, badge)
+                    .radius(badge * 0.5f)
+                    .color(tokens.destructive)
+                    .build();
+                ui.text(base + ".failedBadge.mark")
+                    .position(w - badge - 3.0f * s, 3.0f * s)
+                    .size(badge, badge)
+                    .text("!")
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.background)
+                    .horizontalAlign(eui::HorizontalAlign::Center)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+            }
             // 端口（视觉尺寸 kPortVisualRadius；输入左缘、输出右缘，§5.3）。
             const float r = kPortVisualRadius * s;
             const auto portColor = [&](const rin::PortType type,
@@ -511,9 +543,11 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                 }
                 const CanvasPoint a = portPosition(fromNode->position, connection.from);
                 const CanvasPoint b = portPosition(toNode->position, connection.to);
+                // 贝塞尔带状轮廓（粗细一致曲线；polygon 为填充语义，开放点集
+                // 会渲染成弦-曲线封闭区域，见 canvas_model.hpp wireRibbon）。
                 std::vector<eui::Vec2> points;
-                points.reserve(25);
-                for (const CanvasPoint& p : sampleWire(a, b, 24)) {
+                points.reserve(50);
+                for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
                     const CanvasPoint screen = state.view.toScreen(p);
                     points.push_back({screen.x, screen.y});
                 }
@@ -534,19 +568,23 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                     fromNode != nullptr && draftType) {
                     const CanvasPoint a = portPosition(fromNode->position, from);
                     const CanvasPoint b = state.interaction.connectCurrent;
-                    std::vector<eui::Vec2> points;
-                    points.reserve(25);
-                    for (const CanvasPoint& p : sampleWire(a, b, 24)) {
-                        const CanvasPoint screen = state.view.toScreen(p);
-                        points.push_back({screen.x, screen.y});
+                    // 零长度守卫：光标停回发起端口时中心线因控制点下限外凸
+                    // 成小环（from==to 仅预览可达，已提交连线拒绝自连）。
+                    if (canvasDistance(a, b) >= 0.5f) {
+                        std::vector<eui::Vec2> points;
+                        points.reserve(50);
+                        for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
+                            const CanvasPoint screen = state.view.toScreen(p);
+                            points.push_back({screen.x, screen.y});
+                        }
+                        ui.polygon("workflow.canvas.wire.draft")
+                            .position(0.0f, 0.0f)
+                            .size(width, height)
+                            .points(std::move(points))
+                            .color(theme::portTypeColor(*draftType))
+                            .dirtyKey(dirty)
+                            .build();
                     }
-                    ui.polygon("workflow.canvas.wire.draft")
-                        .position(0.0f, 0.0f)
-                        .size(width, height)
-                        .points(std::move(points))
-                        .color(theme::portTypeColor(*draftType))
-                        .dirtyKey(dirty)
-                        .build();
                 }
             }
 
@@ -658,39 +696,8 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
         .build();
 }
 
-// --- 上下文面板（M5-04 参数编辑接入；本里程碑保持骨架空态） ---
-inline void composeWorkflowContext(eui::Ui& ui, const float x, const float y,
-                                   const float width, const float height) {
-    const theme::ThemeTokens& tokens = theme::dark();
-    const float pad = kSpace3;
-    ui.stack("workflow.context")
-        .position(x, y)
-        .size(width, height)
-        .content([&] {
-            ui.rect("workflow.context.card")
-                .size(width, height)
-                .radius(kRadiusLg)
-                .color(tokens.card)
-                .border(kBorderHairline, tokens.cardBorder)
-                .build();
-            ui.text("workflow.context.title")
-                .position(pad, pad)
-                .size(width - pad * 2.0f, kFontSm + kSpace1)
-                .text("Context")
-                .fontSize(kFontSm)
-                .fontWeight(theme::kWeightSemibold)
-                .color(tokens.fgSubtle)
-                .build();
-            ui.text("workflow.context.empty")
-                .position(pad, pad + kFontSm + kSpace2)
-                .size(width - pad * 2.0f, 40.0f)
-                .text("select a node to edit its parameters")
-                .fontSize(kFontXs)
-                .color(tokens.fgSubtlest)
-                .build();
-        })
-        .build();
-}
+// --- 上下文面板与五区组装（M5-04 起迁移至 param_panel.hpp：参数编辑、节点
+// 错误徽标与中间产物缩略图；composeWorkflowPage 同址） ---
 
 // --- 底部：校验问题与事件列表（§4：逐条 kind + node + message，点击定位） ---
 inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const float x,
@@ -796,27 +803,6 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
 }
 
 }  // namespace
-
-// --- 工作流页五区组装（几何与 M5-02 骨架一致） ---
-inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
-                                rin::IWorkflowEngine* engine, const float x, const float y,
-                                const float width, const float height) {
-    const float gap = theme::kSpace3;
-    const float toolbarHeight = 44.0f;
-    const float bottomHeight = 120.0f;
-    const float paletteWidth = 200.0f;
-    const float contextWidth = 264.0f;
-    const float bodyTop = y + toolbarHeight + gap;
-    const float bodyHeight = height - toolbarHeight - bottomHeight - gap * 2.0f;
-    const float canvasWidth = width - paletteWidth - contextWidth - gap * 2.0f;
-
-    composeWorkflowToolbar(ui, state, x, y, width, toolbarHeight);
-    composeWorkflowPalette(ui, state, engine, x, bodyTop, paletteWidth, bodyHeight);
-    composeWorkflowCanvas(ui, state, engine, x + paletteWidth + gap, bodyTop, canvasWidth,
-                          bodyHeight);
-    composeWorkflowContext(ui, x + width - contextWidth, bodyTop, contextWidth, bodyHeight);
-    composeWorkflowIssues(ui, state, x, y + height - bottomHeight, width, bottomHeight);
-}
 
 // --- 右键创建菜单（§5.2.2：浮层 + 即输即筛；自绘，EUI-20260928-001 先例） ---
 inline void composeWorkflowCreateMenu(eui::Ui& ui, WorkflowCanvasState& state,
