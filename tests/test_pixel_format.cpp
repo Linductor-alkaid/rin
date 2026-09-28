@@ -12,8 +12,13 @@
 //    clamp/通道恒等；转换按帧内最大有效值归一化（参照 level=round(raw*255/frameMax)
 //    逐像素核对）、raw=0 黑且不入 frameMax、全零帧、尺度与 near/far 不变性、
 //    参数校验、stride padding 不泄漏、与 Grayscale 差异、灰度单调不减。
+// 7) AdaptiveGrayscale P99 分位基准（频闪修复）：N=100 边界分位语义（第二大值成
+//    基准、超分位截断纯白）、离群免疫（与去离群帧逐字节一致的频闪回归锁定）、
+//    多档超分位值截断无差异、N<100 小帧退化为绝对最大值（不免疫离群的已知边界）、
+//    固定种子 LCG 随机帧与排序参照逐字节核对、大帧（N>=100）既有不变量回归。
 #include "test_util.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -650,6 +655,253 @@ int main() {
                 RIN_CHECK(rgba[offset] >= rgba[offset - 4]);  // 近黑远白：非减
             }
         }
+    }
+
+    // ============ AdaptiveGrayscale P99 分位基准（频闪修复）============
+
+    // 32) 分位语义（N=100 边界）：10x10 全有效帧，99 个 <=2000（第二大值恰为
+    //     2000）+ 1 个 4000（排名 100）。rank = ceil(0.99*100) = 99 ->
+    //     frameQuantile = 2000：4000（超分位）截断纯白 255；2000（恰在基准）
+    //     纯白 255；1000 -> 128（1000*255/2000 = 127.5，+0.5 取整 128）。
+    //     排序参照（升序取 rank-1 下标）逐像素双重核对。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        std::vector<std::uint16_t> depth(100, 1000);  // 10x10 全有效
+        depth[98] = 2000;  // 第二大值：排名 99 = targetRank -> frameQuantile
+        depth[99] = 4000;  // 最大值：排名 100，超分位截断
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 10, 10, 10, 0.001f, 0.2f, 6.5f,
+                                             scheme, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{400});
+        // 排序参照：有效值升序，rank-1 = 98 下标 -> 2000。
+        std::vector<std::uint16_t> sorted(depth);
+        std::sort(sorted.begin(), sorted.end());
+        const std::uint16_t refQuantile = sorted[98];  // rank = 100 - 100/100 = 99
+        RIN_CHECK_EQ(refQuantile, std::uint16_t{2000});
+        RIN_CHECK(sameColor(rgba.data() + 99 * 4, 255, 255, 255, 255));  // 4000 超分位截断
+        RIN_CHECK(sameColor(rgba.data() + 98 * 4, 255, 255, 255, 255));  // 2000 恰在基准
+        for (int p = 0; p < 98; ++p) {  // 1000 -> 128（round-half-up：127.5 -> 128）
+            RIN_CHECK(sameColor(rgba.data() + static_cast<std::size_t>(p) * 4, 128, 128,
+                                128, 255));
+        }
+        // 双重核对：经纯函数以同一 t = raw/refQuantile 逐像素重算。
+        for (int p = 0; p < 100; ++p) {
+            const Rgba ref =
+                adaptiveAt(static_cast<float>(depth[static_cast<std::size_t>(p)]) /
+                           static_cast<float>(refQuantile));
+            RIN_CHECK(sameColor(rgba.data() + static_cast<std::size_t>(p) * 4, ref[0],
+                                ref[1], ref[2], ref[3]));
+        }
+    }
+
+    // 33) 离群免疫（频闪回归锁定）：64x64 = 4096 全有效帧，4056 个 <=3000
+    //     （4016 个 2500 + 40 个恰为 3000）+ 40 个 65535 离群（占比 <1%）。
+    //     targetRank = 4096 - 40 = 4056 -> frameQuantile = 3000，离群不移动基准。
+    //     断言：与"40 个离群换成 3000"的同一帧在非离群位置逐字节一致（整帧亮度
+    //     稳定）；离群像素超分位截断纯白。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        constexpr std::size_t kCount = 4096;        // 64x64
+        constexpr std::size_t kFirstOutlier = 4056;
+        std::vector<std::uint16_t> withOutlier(kCount);
+        std::vector<std::uint16_t> cleaned(kCount);
+        for (std::size_t i = 0; i < kCount; ++i) {
+            const std::uint16_t base =
+                i < 4016 ? std::uint16_t{2500} : std::uint16_t{3000};
+            withOutlier[i] = i < kFirstOutlier ? base : std::uint16_t{65535};
+            cleaned[i] = base;  // 离群换成 3000
+        }
+        std::vector<std::uint8_t> fromOutlier;
+        std::vector<std::uint8_t> fromClean;
+        RIN_CHECK(rin::convertDepth16ToRgba8(withOutlier.data(), 64, 64, 64, 0.001f, 0.2f,
+                                             6.5f, scheme, fromOutlier));
+        RIN_CHECK(rin::convertDepth16ToRgba8(cleaned.data(), 64, 64, 64, 0.001f, 0.2f,
+                                             6.5f, scheme, fromClean));
+        RIN_CHECK_EQ(fromOutlier.size(), std::size_t{kCount * 4});
+        RIN_CHECK_EQ(fromClean.size(), std::size_t{kCount * 4});
+        for (std::size_t i = 0; i < kCount; ++i) {
+            const std::size_t offset = i * 4;
+            if (i >= kFirstOutlier) {
+                // 离群像素超分位截断为纯白。
+                RIN_CHECK(sameColor(fromOutlier.data() + offset, 255, 255, 255, 255));
+                continue;
+            }
+            // 非离群位置：与无离群版本逐字节一致（基准未动 -> 亮度稳定）。
+            RIN_CHECK(fromOutlier[offset + 0] == fromClean[offset + 0]);
+            RIN_CHECK(fromOutlier[offset + 1] == fromClean[offset + 1]);
+            RIN_CHECK(fromOutlier[offset + 2] == fromClean[offset + 2]);
+            RIN_CHECK(fromOutlier[offset + 3] == fromClean[offset + 3]);
+        }
+    }
+
+    // 34) 超分位截断：20x20 = 400 全有效帧，395 个 250 + 1 个 1000（排名 396 =
+    //     targetRank -> frameQuantile = 1000）+ 4 个远超基准（1.5/2/4/16 倍）。
+    //     多档超分位值均截断为纯白 255，彼此灰度无差异；基准以下不受影响。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        std::vector<std::uint16_t> depth(400, 250);
+        depth[395] = 1000;   // 排名 396 = targetRank -> frameQuantile = 1000
+        depth[396] = 1500;   // 1.5x
+        depth[397] = 2000;   // 2x
+        depth[398] = 4000;   // 4x
+        depth[399] = 16000;  // 16x
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 20, 20, 20, 0.001f, 0.2f, 6.5f,
+                                             scheme, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{1600});
+        for (std::size_t i = 395; i < 400; ++i) {  // 四档超分位 + 基准值全为纯白
+            RIN_CHECK(sameColor(rgba.data() + i * 4, 255, 255, 255, 255));
+        }
+        // 基准以下抽检：250 -> 0.25 -> 64（0.25*255+0.5 = 64.25 截断）。
+        RIN_CHECK(sameColor(rgba.data() + 0, 64, 64, 64, 255));
+        RIN_CHECK(sameColor(rgba.data() + 394 * 4, 64, 64, 64, 255));
+    }
+
+    // 35) 小帧退化性质（已知语义边界）：7x7 = 49（N<100）全有效帧含极端离群
+    //     65535。P99 退化为绝对最大值 -> frameQuantile = 65535，离群不被免疫
+    //     （真机小 ROI 场景的已知边界）。其余像素按 raw/65535 渲染：1000 -> 4、
+    //     13107 -> 51（13107*255 = 65535*51，精确整倍数），参照逐像素核对。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        std::vector<std::uint16_t> depth(49, 1000);
+        depth[47] = 13107;
+        depth[48] = 65535;  // 极端离群：N<100 时成为归一化基准
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 7, 7, 7, 0.001f, 0.2f, 6.5f,
+                                             scheme, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{196});
+        RIN_CHECK(sameColor(rgba.data() + 48 * 4, 255, 255, 255, 255));  // 离群 -> 纯白
+        RIN_CHECK(sameColor(rgba.data() + 47 * 4, 51, 51, 51, 255));
+        RIN_CHECK(sameColor(rgba.data() + 0, 4, 4, 4, 255));
+        // 参照核对：N<100 时 rank = N -> frameQuantile = 帧内最大值 65535。
+        for (int p = 0; p < 49; ++p) {
+            const Rgba ref =
+                adaptiveAt(static_cast<float>(depth[static_cast<std::size_t>(p)]) /
+                           65535.0f);
+            RIN_CHECK(sameColor(rgba.data() + static_cast<std::size_t>(p) * 4, ref[0],
+                                ref[1], ref[2], ref[3]));
+        }
+    }
+
+    // 36) 排序参照随机化核对：固定种子 LCG 生成 32x32 = 1024 帧（值域 [1,65535]，
+    //     约 1/8 置 0，另强制两个 0），与参照实现（有效值收集 + 排序 + 独立秩公式
+    //     rank = N - floor(N/100)，与 ceil(99N/100) 恒等）计算的 frameQuantile
+    //     渲染结果逐字节一致。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        constexpr std::size_t kCount = 1024;  // 32x32
+        std::uint32_t lcg = 20260928u;        // 固定种子，保证可复现
+        std::vector<std::uint16_t> depth(kCount);
+        for (std::size_t i = 0; i < kCount; ++i) {
+            lcg = lcg * 1103515245u + 12345u;
+            const std::uint32_t sample = (lcg >> 16) & 0xFFFFu;
+            depth[i] = (sample == 0 || sample % 8u == 0)
+                           ? std::uint16_t{0}
+                           : static_cast<std::uint16_t>(sample);
+        }
+        depth[0] = 0;      // 强制无效像素，确保 raw==0 分支被覆盖
+        depth[513] = 0;
+        // 参照：收集有效值排序，rank = N - floor(N/100)。
+        std::vector<std::uint16_t> valid;
+        valid.reserve(kCount);
+        std::size_t zeroCount = 0;  // 强制置 0 之后统计，保证与帧一致
+        for (const std::uint16_t raw : depth) {
+            if (raw != 0) {
+                valid.push_back(raw);
+            } else {
+                ++zeroCount;
+            }
+        }
+        std::sort(valid.begin(), valid.end());
+        const std::size_t rank = valid.size() - valid.size() / 100u;
+        const std::uint16_t refQuantile = valid[rank - 1];
+        RIN_CHECK(zeroCount >= 2);
+        RIN_CHECK(valid.size() + zeroCount == kCount);
+        RIN_CHECK(refQuantile >= 1);
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 32, 32, 32, 0.001f, 0.2f, 6.5f,
+                                             scheme, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{kCount * 4});
+        for (std::size_t i = 0; i < kCount; ++i) {
+            const std::size_t offset = i * 4;
+            if (depth[i] == 0) {
+                RIN_CHECK(sameColor(rgba.data() + offset, 0, 0, 0, 255));
+                continue;
+            }
+            const Rgba ref =
+                adaptiveAt(static_cast<float>(depth[i]) /
+                           static_cast<float>(refQuantile));
+            RIN_CHECK(sameColor(rgba.data() + offset, ref[0], ref[1], ref[2], ref[3]));
+        }
+    }
+
+    // 37) 既有不变量在 P99 大帧路径（N>=100：两趟直方图 + 渲染趟）下回归：
+    //     全零帧不透明黑、尺度不变性、near/far 不变性、参数校验拒绝不写 dst、
+    //     stride 哨兵隔离（小帧版本由既有 25-29 号用例继续覆盖；且 padding 哨兵
+    //     0xFFFF 若进入直方图，validCount 与 targetRank 均被推移，e) 必然失败）。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        // a) 全零 64x64：整帧不透明黑，返回 true。
+        std::vector<std::uint16_t> zeros(4096, 0);
+        std::vector<std::uint8_t> black;
+        RIN_CHECK(rin::convertDepth16ToRgba8(zeros.data(), 64, 64, 64, 0.001f, 0.2f, 6.5f,
+                                             scheme, black));
+        RIN_CHECK_EQ(black.size(), std::size_t{16384});
+        bool allBlack = true;
+        for (std::size_t offset = 0; offset + 3 < black.size(); offset += 4) {
+            if (!sameColor(black.data() + offset, 0, 0, 0, 255)) {
+                allBlack = false;
+            }
+        }
+        RIN_CHECK(allBlack);
+        // b) 尺度不变性 + c) near/far 不变性（64x64 全有效帧）。
+        std::vector<std::uint16_t> depth(4096);
+        for (std::size_t i = 0; i < 4096; ++i) {
+            depth[i] = static_cast<std::uint16_t>(100 + (i * 37u) % 60000u);
+        }
+        std::vector<std::uint8_t> base;
+        std::vector<std::uint8_t> scaleB;
+        std::vector<std::uint8_t> windowB;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, 0.001f, 0.2f, 6.5f,
+                                             scheme, base));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, 0.002f, 0.2f, 6.5f,
+                                             scheme, scaleB));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, 0.001f, 1.0f, 3.0f,
+                                             scheme, windowB));
+        RIN_CHECK(base == scaleB);
+        RIN_CHECK(base == windowB);
+        // d) 参数校验：返回 false 且 dst 不被写。
+        std::vector<std::uint8_t> dst{0x5A, 0x5A};
+        const std::vector<std::uint8_t> sentinel = dst;
+        RIN_CHECK(!rin::convertDepth16ToRgba8(nullptr, 64, 64, 64, 0.001f, 0.2f, 6.5f,
+                                              scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 0, 64, 64, 0.001f, 0.2f, 6.5f,
+                                              scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 64, 0, 64, 0.001f, 0.2f, 6.5f,
+                                              scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 64, 64, 63, 0.001f, 0.2f,
+                                              6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, 0.0f, 0.2f, 6.5f,
+                                              scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, -1.0f, 0.2f, 6.5f,
+                                              scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, 0.001f, 6.5f,
+                                              6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth.data(), 64, 64, 64, 0.001f, 6.5f,
+                                              0.2f, scheme, dst));
+        RIN_CHECK(dst == sentinel);
+        // e) stride 哨兵隔离：每行 64 数据 + 8 个 0xFFFF padding 单元。
+        constexpr std::uint32_t kStrideUnits = 72;
+        std::vector<std::uint16_t> padded(kStrideUnits * 64, 0xFFFF);
+        for (std::uint32_t row = 0; row < 64; ++row) {
+            for (std::uint32_t col = 0; col < 64; ++col) {
+                padded[row * kStrideUnits + col] = depth[row * 64 + col];
+            }
+        }
+        std::vector<std::uint8_t> fromPadded;
+        RIN_CHECK(rin::convertDepth16ToRgba8(padded.data(), 64, 64, kStrideUnits, 0.001f,
+                                             0.2f, 6.5f, scheme, fromPadded));
+        RIN_CHECK(fromPadded == base);  // padding 单元不泄漏、行间不错位
     }
 
     return rin_test::exitStatus();

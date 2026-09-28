@@ -29,7 +29,7 @@ void grayscaleColor(float t, std::uint8_t out[4]) noexcept {
 
 void adaptiveGrayscaleColor(float t, std::uint8_t out[4]) noexcept {
     t = std::clamp(t, 0.0f, 1.0f);
-    // 近黑远白：t = raw/frameMax，帧内最远有效像素恒为纯白（DEC-007 扩展）。
+    // 近黑远白：t = raw/frameQuantile，分位深度映射为纯白（DEC-007 扩展修订）。
     const std::uint8_t level = static_cast<std::uint8_t>(t * 255.0f + 0.5f);
     out[0] = level;
     out[1] = level;
@@ -52,27 +52,75 @@ void fillOpaqueBlack(std::vector<std::uint8_t>& dst) {
     }
 }
 
-/// 自适应灰度（DEC-007 扩展）：两趟扫描——先取帧内最大有效原始值，再按
-/// t = raw / frameMax 经 adaptiveGrayscaleColor 映射。深度比例对缩放不变
-/// （raw/max 与 meters/maxMeters 相等），故不使用 depthScale/near/far。
+/// 自适应灰度归一分位（DEC-007 扩展修订，频闪修复）：真机 Z16 存在占比极小、
+/// 数值极端的孤立过远/过近噪声，绝对最大值基准会被单个飞点逐帧推动，造成整帧
+/// 亮度跳变（频闪）。改取帧内有效深度的 P99 作基准后，占比 <1% 的噪声无法移动
+/// 归一化基准；超过分位的像素经 ramp clamp 截断为纯白。
+constexpr unsigned kAdaptiveFramePercentile = 99;
+
+/// 自适应灰度（DEC-007 扩展）：先统计帧内有效深度的 P99 分位 frameQuantile
+/// （高/低字节两级 256-bin 直方图，整数秩计算，无浮点与状态），再按
+/// t = raw / frameQuantile 经 adaptiveGrayscaleColor 映射。深度比例对缩放不变
+/// （raw/q 与 meters/qMeters 相等），故不使用 depthScale/near/far。有效像素
+/// 不足 100 个时 P99 退化为绝对最大值（rank = ceil(P*N) = N）。
 bool convertDepth16ToRgba8Adaptive(const std::uint16_t* src,
                                    std::uint32_t width,
                                    std::uint32_t height,
                                    std::uint32_t srcStrideUnits,
                                    std::vector<std::uint8_t>& dst) {
-    std::uint16_t maxRaw = 0;
+    std::uint32_t histHigh[256] = {};
+    std::uint64_t validCount = 0;
     for (std::uint32_t row = 0; row < height; ++row) {
         const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
         for (std::uint32_t column = 0; column < width; ++column) {
-            maxRaw = std::max(maxRaw, srcRow[column]);
+            const std::uint16_t raw = srcRow[column];
+            if (raw != 0) {
+                ++histHigh[raw >> 8];
+                ++validCount;
+            }
         }
     }
     dst.resize(requiredBytes(width, height));
-    if (maxRaw == 0) {
+    if (validCount == 0) {
         // 全帧无效深度：与逐像素 raw==0 分支同语义，输出不透明黑。
         fillOpaqueBlack(dst);
         return true;
     }
+    // 1 基目标秩 = ceil(P% * validCount)，整数运算避免浮点边界。
+    const std::uint64_t targetRank =
+        (validCount * kAdaptiveFramePercentile + 99u) / 100u;
+    std::uint32_t belowTarget = 0;
+    unsigned highBin = 255;
+    for (unsigned bin = 0; bin < 256; ++bin) {
+        if (belowTarget + histHigh[bin] >= targetRank) {
+            highBin = bin;
+            break;
+        }
+        belowTarget += histHigh[bin];
+    }
+    std::uint32_t histLow[256] = {};
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw != 0 && (raw >> 8) == highBin) {
+                ++histLow[raw & 0xFF];
+            }
+        }
+    }
+    const std::uint32_t inBinRank =
+        static_cast<std::uint32_t>(targetRank - belowTarget);
+    std::uint32_t lowCumulative = 0;
+    unsigned lowBin = 255;
+    for (unsigned bin = 0; bin < 256; ++bin) {
+        lowCumulative += histLow[bin];
+        if (lowCumulative >= inBinRank) {
+            lowBin = bin;
+            break;
+        }
+    }
+    const std::uint16_t frameQuantile =
+        static_cast<std::uint16_t>((highBin << 8) | lowBin);
     for (std::uint32_t row = 0; row < height; ++row) {
         const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
         std::uint8_t* dstRow = dst.data() + static_cast<std::size_t>(row) * width * 4u;
@@ -86,7 +134,7 @@ bool convertDepth16ToRgba8Adaptive(const std::uint16_t* src,
                 continue;
             }
             const float normalized =
-                static_cast<float>(raw) / static_cast<float>(maxRaw);
+                static_cast<float>(raw) / static_cast<float>(frameQuantile);
             adaptiveGrayscaleColor(normalized, dstRow + column * 4u);
         }
     }
