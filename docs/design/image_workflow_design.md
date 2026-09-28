@@ -1,7 +1,7 @@
 # 图像工作流设计：Core 算子契约与执行语义（M4）
 
 > 状态：Active
-> 日期：2026-09-28（随 `M4-02` 产出）
+> 日期：2026-09-28（随 `M4-02` 产出）；2026-09-29 随 `M4-03` 冻结几何算子数值语义
 > 负责人：Linductor-alkaid
 > 关联：[M4 里程碑](../plans/m4-cv-node-workflow.md)、[DEC-012](../decisions/DEC-012-image-operator-strategy.md)、
 > [DEC-013（暂定，M4-07 冻结）](../plans/rin-implementation-plan.md)、
@@ -92,7 +92,11 @@ Executor 承载细节（`M4-07` 实现，执行模型经 DEC-013 冻结）。
 `ImageNodeFactory(descriptor, instance) -> unique_ptr<IImageNode>`：按目录声明与
 实例参数构造可执行节点；返回 nullptr 表示注入型源节点（typeId 无节点实现，执行
 时由引擎注入相机帧）；构造失败抛异常，由 `buildNodeGraph` 转为显式校验问题。
-M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录。
+M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默认工厂入口为
+`makeDefaultImageNode`（`include/rin/image_ops.hpp`，M4-03 起）："crop"/"downscale"
+返回对应实现、"source" 返回 nullptr、其余 M4 类型（卷积/直方图/FFT 族，随
+M4-04..06 扩展）抛 `std::invalid_argument`——目录声明与工厂能力的偏差显式暴露，
+不静默。
 
 ## 5. 图编译与执行语义
 
@@ -163,9 +167,32 @@ M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录。
 冻结）至少覆盖：
 
 - `crop`（M4-03）：ROI 越界（x+width > 图宽等）显式拒绝、退化区域（0 宽/高）
-  拒绝、正常裁切像素级 golden、stride 保持。
+  拒绝、正常裁切像素级 golden、stride 保持。数值语义（M4-03 冻结）：
+  - 参数 x/y/width/height 构造期定型（Integer，未赋值取默认 0/0/64/64）；图像
+    尺寸是运行期数据，ROI 合法性在 `apply` 期判定：width/height ≤ 0（退化，
+    含运行期直接构造的负值）或 x+width > 输入宽、y+height > 输入高（越界，
+    uint64 运算，负值按无符号回绕自然落入越界拒绝）→ 抛 `std::invalid_argument`
+    （runNodeGraph 原样传播 → 引擎 NodeFailed，EXEC-07）。
+  - 输出为 width×height 同格式新紧凑缓冲：stride = width×elementSize（不继承
+    源 stride、不共享源像素），逐行 memcpy（"stride 保持"= 输出行紧凑无 padding）。
 - `downscale`（M4-03）：nearest/bilinear 各一组已知小图 golden、scale=1.0 恒等、
-  输出尺寸公式冻结（向下取整）。
+  输出尺寸公式冻结（向下取整）。数值语义（M4-03 冻结）：
+  - 参数 interpolation（Enumeration，nearest|bilinear，默认 nearest）、scale
+    （Real，默认 0.5）构造期定型；scale 需 ∈ (0,1] 且有限（图准入范围为
+    [0.1,1.0]，构造期复核为防御运行期直接构造的实例），违者构造抛
+    `std::invalid_argument`。
+  - 输出尺寸：outW = floor(inW×scale)、outH = floor(inH×scale)（double 乘后
+    floor）；任一 < 1 → `apply` 抛 `std::invalid_argument`（退化输出显式拒绝）。
+    输出为 outW×outH 同格式新紧凑缓冲（stride = outW×elementSize）。
+  - nearest：ratioX = inW/outW、ratioY = inH/outH（double）；源采样下标
+    srcX = min(floor((outX+0.5)×ratioX), inW−1)、srcY 同理（clamp 为浮点防御，
+    数学上 (outX+0.5)×ratioX < inW 恒成立）；逐通道复制。
+  - bilinear：srcXf = (outX+0.5)×ratioX − 0.5 饱和到 [0, inW−1]，x0 = floor、
+    fx = srcXf−x0、x1 = min(x0+1, inW−1)，y 同理；四点双线性加权（double），
+    逐通道独立计算（Rgba8 不做 alpha 预乘补偿），结果 floor(v+0.5)（round-
+    half-up）并饱和到 [0,255]。
+  - scale = 1.0 时两种插值均逐像素恒等（公式自然给出：ratio=1、frac=0；实现
+    不设特例快路径，测试对两条插值路径分别验证恒等）。
 - `conv_kernel`（M4-04）：1/3/5 核尺寸与 kernel RealArray 长度一致性（K²）、
   单位核恒等、已知核响应 golden（边缘/角点）、边界填充策略可配且逐策略 golden。
 - `gaussian_blur`（M4-04）：可分离高斯与直接卷积数值等价（容差内）、已知

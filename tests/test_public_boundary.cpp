@@ -8,6 +8,7 @@
 
 #include <rin/camera_service.hpp>
 #include <rin/image_node.hpp>
+#include <rin/image_ops.hpp>
 #include <rin/image_types.hpp>
 #include <rin/node_graph.hpp>
 #include <rin/workflow_engine.hpp>
@@ -200,6 +201,43 @@ int main() {
         RIN_CHECK_EQ(outputs.size(), std::size_t{2});
         RIN_CHECK(outputs[0][0].valid() && outputs[0][0].format() == rin::PortType::Rgba8);
         RIN_CHECK(outputs[1][0].valid() && outputs[1][0].format() == rin::PortType::Gray8);
+    }
+
+    // M4-03 几何算子工厂（仅公开头可见性 + 最小实例化，RULE-01）：rin/image_ops.hpp
+    // 的 makeDefaultImageNode 经公开头可用——crop 返回实现（参数 schema 需声明，
+    // 构造期参数缺失抛 std::invalid_argument 是冻结契约）、source 返回 nullptr
+    // （注入型语义的最小见证；数值 golden 归 test_image_ops_geometry.cpp）。
+    {
+        rin::NodeDescriptor crop;
+        crop.typeId = "crop";
+        crop.displayName = "裁切";
+        crop.inputs = {rin::PortType::Rgba8};
+        crop.outputs = {rin::PortType::Rgba8};
+        for (const char* id : {"x", "y", "width", "height"}) {
+            rin::ParamDescriptor param;
+            param.id = id;
+            param.label = id;
+            param.kind = rin::ParamKind::Integer;
+            param.defaultValue = static_cast<std::int64_t>(0);
+            crop.params.push_back(std::move(param));
+        }
+        rin::NodeDescriptor source;
+        source.typeId = "source";
+        source.displayName = "源";
+        source.outputs = {rin::PortType::Rgba8};
+
+        rin::NodeInstance cropInstance;
+        cropInstance.id = 1;
+        cropInstance.typeId = "crop";
+        const std::unique_ptr<rin::IImageNode> node =
+            rin::makeDefaultImageNode(crop, cropInstance);
+        RIN_CHECK(node != nullptr);
+        RIN_CHECK(node != nullptr && node->descriptor().typeId == "crop");
+
+        rin::NodeInstance sourceInstance;
+        sourceInstance.id = 2;
+        sourceInstance.typeId = "source";
+        RIN_CHECK(rin::makeDefaultImageNode(source, sourceInstance) == nullptr);
     }
     return rin_test::exitStatus();
 }

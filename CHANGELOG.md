@@ -13,6 +13,11 @@
   拓扑序）与 `runNodeGraph` 单帧同步求值（注入型源节点、算子输出防御性契约
   核对）；设计文档 `docs/design/image_workflow_design.md`（M4 节点目录与逐算子
   golden 测试项要求，DEC-012 的 FFT 内部 2 幂填充 + 归一化频率掩膜约束 golden 化）。
+- 几何算子节点（M4，`M4-03`）：`rin::makeDefaultImageNode` 默认节点工厂与
+  `crop`/`downscale` 实现——裁切 ROI 退化/越界在执行期显式拒绝、输出为紧凑
+  新缓冲；降分辨率输出尺寸 floor(in×scale)，nearest 面积覆盖采样与 bilinear
+  中心对齐插值（逐通道独立、round-half-up 量化），scale=1.0 逐像素恒等；
+  数值语义冻结于 `docs/design/image_workflow_design.md` §7。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 

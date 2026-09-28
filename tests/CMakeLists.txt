@@ -274,3 +274,21 @@ target_link_libraries(test_node_graph PRIVATE rin::core)
 target_include_directories(test_node_graph PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME node_graph COMMAND test_node_graph)
 set_tests_properties(node_graph PROPERTIES LABELS "unit")
+
+# M4-03 几何算子节点 golden 数值测试（Core 纯逻辑，image_workflow_design.md §7 冻结
+# 数值语义）：工厂 makeDefaultImageNode（source→nullptr、crop/downscale 实现签名一致、
+# 未实现类型抛 invalid_argument）；crop 像素级 golden（4×3 @(1,1,2,2)、全图恒等、
+# padding stride 输入输出紧凑不泄漏）、越界/退化/默认参数/无效输入/数量/格式/参数
+# 种类错位拒绝；downscale nearest/bilinear 小图 golden（含 x.5 round-half-up 半值、
+# 中心像素、alpha 不预乘）、floor 尺寸公式（5×3、848×480）、scale=1.0 双插值恒等、
+# 常值图、线性渐变 |out−理想|≤1、37×23 与测试内独立 double 参考交叉验证（nearest
+# 精确、bilinear ≤1）、退化输出/默认参数/构造期（scale 0/负/1.5/NaN/inf、非法枚举、
+# 种类错位、参数缺失）拒绝；图集成（source→crop→downscale 链逐级 golden、图内越界
+# 原样抛、未实现类型 buildNodeGraph 显式 BadParam）。golden 期望由 §7 冻结公式独立
+# 手推/测试内参考实现推导，不参考实现代码。单线程纯逻辑：无跨上下文状态/关闭路径
+# （DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_image_ops_geometry test_image_ops_geometry.cpp)
+target_link_libraries(test_image_ops_geometry PRIVATE rin::core)
+target_include_directories(test_image_ops_geometry PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME image_ops_geometry COMMAND test_image_ops_geometry)
+set_tests_properties(image_ops_geometry PROPERTIES LABELS "unit")
