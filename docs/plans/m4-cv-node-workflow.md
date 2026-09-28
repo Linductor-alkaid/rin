@@ -51,7 +51,7 @@
       的构建体积、CI 时长、许可证与性能（512² 与 848×480 灰度 FFT 实测）。
       完成判据：`DEC-012` `Accepted` + 基准数据；新依赖同步 lock/许可证/供应链
       记录。
-- [ ] `M4-02` Core 图像与节点契约：`ImageU8`（RGBA8 / Gray8、共享像素、容量有
+- [x] `M4-02` Core 图像与节点契约：`ImageU8`（RGBA8 / Gray8、共享像素、容量有
       界）、`IImageNode`（类型化参数模型 + `apply`）、端口类型系统、`NodeGraph`
       构建与校验（环、悬空输入、类型不匹配显式拒绝）。完成判据：契约与校验单测
       通过。
@@ -108,6 +108,43 @@
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-28：`M4-02` 完成关闭——Core 图像与节点契约落地（`rin_core`，零第三方
+公开依赖，RULE-01）。新增 `include/rin/image_types.hpp`（`ImageU8`：Gray8/Rgba8、
+共享不可变像素 `shared_ptr<const vector<uint8_t>>` 与 `NodeOutputSnapshot` 同款
+承载、16 MiB 单图字节预算、stride/64 位乘法防回绕）+ `elementSize`；
+`include/rin/image_node.hpp`（`IImageNode` 同步工作单元契约——参数构造期定型、
+运行期热更新经帧边界重建实例实现"下一帧生效"；`ImageNodeFactory` 工厂接缝，
+nullptr=注入型源节点；`effectiveParamValue` + 五个按 kind 的类型化读取助手）；
+`include/rin/node_graph.hpp`（`NodeGraph` 编译图：`buildNodeGraph` 以
+`validateWorkflowGraph` 为唯一判据（UI 预检/引擎准入不重复实现）+ 节点数准入
+（默认 64，与假引擎同）+ 工厂异常/签名不符显式化为校验问题 + 稳定拓扑序；
+`runNodeGraph` 单帧同步求值——注入型源节点语义（格式/有效性核对，M4-07 引擎
+提供相机帧注入器）、算子输出防御性契约核对（数量/有效/格式违规显式抛出）、
+节点异常原样传播；`M4-09` 视图契约之外的引擎侧延伸，端口类型系统复用
+`PortType` 唯一类型面）。产出
+[design/image_workflow_design.md](../design/image_workflow_design.md)：分层边界、
+图像/端口类型语义、节点契约与参数模型、图编译与执行语义、M4-07 真引擎对齐项
+（假引擎 `drainBoundary` peek 不消费缺陷不复刻，按"帧边界排空重建"消费）、
+M4 节点目录表（与 `M5-08` 假目录签名一致，`grayify` 桥接节点注记）与逐算子
+golden 测试项要求（DEC-012 的 FFT 内部 2 幂填充 + 归一化频率掩膜约束 golden
+化：848×480 填充路径与 512×512 原生路径正弦注入→单频滤除各一组、填充/裁剪
+往返误差、cutoff 跨尺寸语义不变）。测试（Independent-Verification-Agent 独立
+编写执行，两轮）：新增 `tests/test_image_contracts.cpp`（ImageU8 正例/全负例/
+回绕反例/预算边界/共享引用计数/参数模型三态生效值与五类类型化读取，133 项）、
+`tests/test_node_graph.cpp`（buildNodeGraph 校验透传/准入/工厂失败显式化/注入
+型/拓扑序/入边解析/空图，runNodeGraph 注入九分支/防御核对/异常传播/零拷贝
+共享，148 项）；`test_public_boundary.cpp` 扩展三公开头包含与最小实例化
+（30 项）。第一轮独立验证暴露一处实现缺陷：`buildNodeGraph` 组装只把入边写入
+拓扑序位置而节点身份（id/descriptor/impl）滞留声明序，声明序≠拓扑序时边挂到
+错误节点、消费者先于生产者执行（既有 M4-09/M5-08 测试未暴露——其图声明序恰为
+拓扑序）；主循环修复为按拓扑序整体重排完整 Node 后第二轮复验 PASS（最小反例
+程序输出逐字一致，原 7 项失败检查同批转绿）。debug/asan/ubsan 三预设全量
+ctest 21/21（含 D435if 真机硬件冒烟，设备在位通过），asan/ubsan 零报告、编译
+零警告。环境：x86_64 Linux，GCC 13，CMake presets debug/asan/ubsan；tsan 未跑
+（本层单线程纯逻辑，DOD-02 并发矩阵归 `M4-07` 引擎与 `M5-08` 契约套件覆盖）。
+已知未测路径：`buildNodeGraph` 防御性 Cycle 兜底经公开 API 不可达（校验先行
+拒绝环）。`M4-03`（几何算子节点：裁切/降分辨率）为下一工作项。
 
 2026-09-28：`M4-01` 完成关闭——[DEC-012](../decisions/DEC-012-image-operator-strategy.md)
 冻结（`Accepted`）：**基础算子自研 + pinned kissfft `131.2.0`（BSD-3-Clause）承载

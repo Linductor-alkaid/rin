@@ -48,8 +48,17 @@ ctest 四预设 18/18；冒烟发现并修复 M5-03 调色板临时目录悬垂�
 自研 + pinned kissfft `131.2.0` 承载 FFT 族 + FFT 节点内部 2 幂填充，OpenCV 与
 全自研路线经四维取证（性能/构建体积/CI 时长/许可证）否决；基准工具
 `tools/fft_bench` 入库（含正确性交叉校验），kissfft 台账登记 master 溢出预检
-误报缺陷（KIS-20260928-001），lock/Dependencies.cmake/台账索引同步。`M4-02`
-（Core 图像与节点契约）为下一工作项。
+误报缺陷（KIS-20260928-001），lock/Dependencies.cmake/台账索引同步。
+2026-09-28 `M4-02` 完成：Core 图像与节点契约落地（`ImageU8` 共享不可变像素图像
++ 16 MiB 容量上界、`IImageNode` 同步节点契约与类型化参数模型（参数构造期定型，
+热更新经帧边界重建）、`NodeGraph` 图编译（`validateWorkflowGraph` 唯一判据 +
+节点数准入 + 稳定拓扑序）与 `runNodeGraph` 单帧求值（注入型源节点 + 防御性
+输出核对）；设计文档 [image_workflow_design.md](../design/image_workflow_design.md)
+产出（M4 节点目录表与逐算子 golden 测试项，DEC-012 FFT 2 幂填充约束 golden 化）；
+契约单测 image_contracts 133 项 + node_graph 148 项 + public_boundary 30 项
+debug/asan/ubsan 0 失败 [独立验证两轮，第一轮暴露 buildNodeGraph 拓扑组装缺陷
+修复后复验 PASS]，全量 ctest 三预设 21/21）。`M4-03`（几何算子节点）为下一
+工作项。
 
 ## 交付边界（SCOPE）
 

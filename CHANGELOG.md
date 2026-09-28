@@ -2,6 +2,18 @@
 
 本项目的版本遵循语义化版本（工程规范 10.5）；tag 与里程碑"建议发布点"一一对应。
 
+## [Unreleased]
+
+### 新增
+
+- 图像工作流 Core 契约（M4，`M4-02`）：`rin::ImageU8`（Gray8/Rgba8、共享不可变
+  像素、16 MiB 单图字节预算、stride 语义）、`rin::IImageNode` 同步节点契约与
+  类型化参数模型（构造期定型，运行期热更新经帧边界重建实现"下一帧生效"）、
+  `rin::NodeGraph` 图编译（`validateWorkflowGraph` 唯一判据、节点数准入、稳定
+  拓扑序）与 `runNodeGraph` 单帧同步求值（注入型源节点、算子输出防御性契约
+  核对）；设计文档 `docs/design/image_workflow_design.md`（M4 节点目录与逐算子
+  golden 测试项要求，DEC-012 的 FFT 内部 2 幂填充 + 归一化频率掩膜约束 golden 化）。
+
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
 ### 新增
