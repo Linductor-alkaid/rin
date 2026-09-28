@@ -5,7 +5,8 @@
 // 公开契约（include/rin/workflow_engine.hpp），以及假引擎特有语义：
 // - 工厂校验：frameWidth/frameHeight==0、maxInFlight==0、frameInterval<=0 抛
 //   std::invalid_argument；
-// - 默认调色板目录：M4 节点集与参数 schema（source/grayify/gaussian_blur+radius）；
+// - 默认调色板目录：M4 节点集与参数 schema（source/grayify、gaussian_blur 的
+//   radius+sigma、conv_kernel 的 size+kernel+border）；
 // - EXEC-07 有界在飞显式丢弃：maxInFlight=1 + 过载帧 → droppedFrames>0 且
 //   processedFrames 仍增长、inFlight 不越界（提交拒绝显式化归 Executor 自身
 //   设施，引擎侧只断言显式化结果）；
@@ -33,6 +34,8 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "fake_engine.hpp"
 #include "rin/workflow_engine.hpp"
@@ -153,6 +156,31 @@ int main() {
                 hasRadius = hasRadius || param.id == "radius";
             }
             RIN_CHECK(hasRadius);
+        }
+        // M4-04：conv_kernel 目录声明同步设计文档 §6——size/kernel/border 三参数，
+        // border 默认 "clamp"、选项 clamp/reflect/zero。
+        const NodeDescriptor* conv = rin::findNodeDescriptor(catalog, "conv_kernel");
+        RIN_CHECK(conv != nullptr);
+        if (conv != nullptr) {
+            bool hasSize = false;
+            bool hasKernel = false;
+            const ParamDescriptor* border = nullptr;
+            for (const ParamDescriptor& param : conv->params) {
+                hasSize = hasSize || param.id == "size";
+                hasKernel = hasKernel || param.id == "kernel";
+                if (param.id == "border") {
+                    border = &param;
+                }
+            }
+            RIN_CHECK(hasSize);
+            RIN_CHECK(hasKernel);
+            RIN_CHECK(border != nullptr);
+            if (border != nullptr) {
+                const std::string* defaultValue = std::get_if<std::string>(&border->defaultValue);
+                RIN_CHECK(defaultValue != nullptr && *defaultValue == "clamp");
+                RIN_CHECK((border->enumOptions ==
+                           std::vector<std::string>{"clamp", "reflect", "zero"}));
+            }
         }
     }
 

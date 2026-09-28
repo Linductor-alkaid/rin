@@ -5,7 +5,8 @@
 //
 // 被测面与范围（对应设计文档 §7 crop/downscale golden 项）：
 // 1) 工厂 makeDefaultImageNode："source" → nullptr（注入型）；"crop"/"downscale"
-//    返回实现且 descriptor().typeId 与请求一致；其他 typeId（gaussian_blur）抛
+//    返回实现且 descriptor().typeId 与请求一致；未实现类型（grayify，M4-04 起
+//    gaussian_blur/conv_kernel 已实现并归 test_image_ops_convolution.cpp）抛
 //    std::invalid_argument；
 // 2) crop：像素级 golden（4×3 逐像素唯一，crop(1,1,2,2)）；全图裁切恒等；输入带
 //    padding stride 时逐行 memcpy 正确且输出紧凑（stride = width×4，不继承输入
@@ -28,7 +29,7 @@
 // 4) 图集成（自建 source/crop/downscale 三类型小目录，schema 照抄设计文档 §6）：
 //    source→crop→downscale 链（注入 4×4 已知帧，crop(1,1,2,2) 中间产物与最终
 //    1×1 逐字节 golden）；图执行中 crop 越界 → runNodeGraph 原样抛
-//    std::invalid_argument；目录含未实现类型（gaussian_blur）时 buildNodeGraph
+//    std::invalid_argument；目录含未实现类型（grayify）时 buildNodeGraph
 //    显式失败（validation.ok == false，issues 含 BadParam，graph 为 null）。
 //
 // golden 独立性说明：两组以上小图 golden 以字面字节向量写出，附手推过程注释
@@ -140,7 +141,8 @@ NodeDescriptor makeDownscaleDescriptor() {
     return d;
 }
 
-// §6 的 grayify / gaussian_blur 声明（仅用于"工厂未实现该类型"与图准入路径）。
+// §6 的 grayify / gaussian_blur 声明（grayify 仅用于"工厂未实现该类型"与图准入
+// 路径；gaussian_blur 自 M4-04 起已实现，此处仅作 1c 实现签名见证）。
 NodeDescriptor makeGrayifyDescriptor() {
     NodeDescriptor d;
     d.typeId = "grayify";
@@ -387,20 +389,24 @@ int main() {
         RIN_CHECK(downscale != nullptr && downscale->descriptor().typeId == "downscale");
     }
 
-    // --- 1c) 其他 typeId 抛 std::invalid_argument（目录声明与工厂能力偏差显式暴露）---
+    // --- 1c) 实现签名见证扩展与未实现类型抛 std::invalid_argument（目录声明与
+    //     工厂能力偏差显式暴露）：M4-04 起 gaussian_blur/conv_kernel 已实现
+    //     （golden 归 test_image_ops_convolution.cpp）；"未实现类型抛异常"见证
+    //     保留 grayify 与未知 typeId 两例 ---
     {
         const NodeDescriptor gaussian = makeGaussianBlurDescriptor();
-        RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(gaussian, makeInstance(1, "gaussian_blur"));
-        }));
+        const std::unique_ptr<IImageNode> blur =
+            rin::makeDefaultImageNode(gaussian, makeInstance(1, "gaussian_blur"));
+        RIN_CHECK(blur != nullptr);
+        RIN_CHECK(blur != nullptr && blur->descriptor().typeId == "gaussian_blur");
         const NodeDescriptor grayify = makeGrayifyDescriptor();
         RIN_CHECK(throwsAs<std::invalid_argument>([&] {
             (void)rin::makeDefaultImageNode(grayify, makeInstance(1, "grayify"));
         }));
         NodeDescriptor ghost;
-        ghost.typeId = "gaussian_blur_nonexistent";
+        ghost.typeId = "grayify_nonexistent";
         RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(ghost, makeInstance(1, "gaussian_blur_nonexistent"));
+            (void)rin::makeDefaultImageNode(ghost, makeInstance(1, "grayify_nonexistent"));
         }));
     }
 
@@ -1074,15 +1080,15 @@ int main() {
         }
     }
 
-    // --- 4c) 目录含未实现类型（gaussian_blur）：buildNodeGraph 显式失败（BadParam）---
+    // --- 4c) 目录含未实现类型（grayify）：buildNodeGraph 显式失败（BadParam）---
+    // （M4-04 起 gaussian_blur/conv_kernel 已实现，见证链改用 source→grayify。）
     {
         NodeCatalog catalog;
-        catalog.nodes = {sourceDescriptor, makeGrayifyDescriptor(), makeGaussianBlurDescriptor()};
+        catalog.nodes = {sourceDescriptor, makeGrayifyDescriptor()};
 
         WorkflowGraph graph;
-        graph.nodes = {makeInstance(1, "source"), makeInstance(2, "grayify"),
-                       makeInstance(3, "gaussian_blur")};
-        graph.connections = {conn(1, 0, 2, 0), conn(2, 0, 3, 0)};
+        graph.nodes = {makeInstance(1, "source"), makeInstance(2, "grayify")};
+        graph.connections = {conn(1, 0, 2, 0)};
 
         const ImageNodeFactory factory = [](const NodeDescriptor& descriptor,
                                             const NodeInstance& instance) {

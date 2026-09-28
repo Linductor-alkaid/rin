@@ -239,5 +239,86 @@ int main() {
         sourceInstance.typeId = "source";
         RIN_CHECK(rin::makeDefaultImageNode(source, sourceInstance) == nullptr);
     }
+
+    // M4-04 卷积算子工厂（仅公开头可见性 + 最小实例化，RULE-01）：gaussian_blur /
+    // conv_kernel 声明完整 schema（§6 表格）后经 makeDefaultImageNode 返回实现且
+    // typeId 一致（数值 golden 归 test_image_ops_convolution.cpp；构造期参数缺失
+    // 抛 std::invalid_argument 是冻结契约，此处声明完整 schema 不触发）。
+    {
+        rin::NodeDescriptor blur;
+        blur.typeId = "gaussian_blur";
+        blur.displayName = "高斯模糊";
+        blur.inputs = {rin::PortType::Gray8};
+        blur.outputs = {rin::PortType::Gray8};
+        {
+            rin::ParamDescriptor radius;
+            radius.id = "radius";
+            radius.label = "radius";
+            radius.kind = rin::ParamKind::Integer;
+            radius.defaultValue = static_cast<std::int64_t>(3);
+            radius.hasRange = true;
+            radius.minValue = 1.0;
+            radius.maxValue = 10.0;
+            blur.params.push_back(std::move(radius));
+        }
+        {
+            rin::ParamDescriptor sigma;
+            sigma.id = "sigma";
+            sigma.label = "sigma";
+            sigma.kind = rin::ParamKind::Real;
+            sigma.defaultValue = 1.5;
+            sigma.hasRange = true;
+            sigma.minValue = 0.0;
+            sigma.maxValue = 10.0;
+            blur.params.push_back(std::move(sigma));
+        }
+        rin::NodeInstance blurInstance;
+        blurInstance.id = 1;
+        blurInstance.typeId = "gaussian_blur";
+        const std::unique_ptr<rin::IImageNode> blurNode =
+            rin::makeDefaultImageNode(blur, blurInstance);
+        RIN_CHECK(blurNode != nullptr);
+        RIN_CHECK(blurNode != nullptr && blurNode->descriptor().typeId == "gaussian_blur");
+
+        rin::NodeDescriptor conv;
+        conv.typeId = "conv_kernel";
+        conv.displayName = "自定义卷积";
+        conv.inputs = {rin::PortType::Gray8};
+        conv.outputs = {rin::PortType::Gray8};
+        {
+            rin::ParamDescriptor size;
+            size.id = "size";
+            size.label = "size";
+            size.kind = rin::ParamKind::Enumeration;
+            size.defaultValue = std::string("3");
+            size.enumOptions = {"1", "3", "5"};
+            conv.params.push_back(std::move(size));
+        }
+        {
+            rin::ParamDescriptor kernel;
+            kernel.id = "kernel";
+            kernel.label = "kernel";
+            kernel.kind = rin::ParamKind::RealArray;
+            kernel.defaultValue =
+                std::vector<double>{0, 0, 0, 0, 1, 0, 0, 0, 0};  // 3×3 单位核（行主序）
+            conv.params.push_back(std::move(kernel));
+        }
+        {
+            rin::ParamDescriptor border;
+            border.id = "border";
+            border.label = "border";
+            border.kind = rin::ParamKind::Enumeration;
+            border.defaultValue = std::string("clamp");
+            border.enumOptions = {"clamp", "reflect", "zero"};
+            conv.params.push_back(std::move(border));
+        }
+        rin::NodeInstance convInstance;
+        convInstance.id = 2;
+        convInstance.typeId = "conv_kernel";
+        const std::unique_ptr<rin::IImageNode> convNode =
+            rin::makeDefaultImageNode(conv, convInstance);
+        RIN_CHECK(convNode != nullptr);
+        RIN_CHECK(convNode != nullptr && convNode->descriptor().typeId == "conv_kernel");
+    }
     return rin_test::exitStatus();
 }

@@ -292,3 +292,26 @@ target_link_libraries(test_image_ops_geometry PRIVATE rin::core)
 target_include_directories(test_image_ops_geometry PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME image_ops_geometry COMMAND test_image_ops_geometry)
 set_tests_properties(image_ops_geometry PROPERTIES LABELS "unit")
+
+# M4-04 卷积算子节点 golden 数值测试（Core 纯逻辑，image_workflow_design.md §7 冻结
+# 数值语义）：工厂 makeDefaultImageNode（gaussian_blur/conv_kernel 实现签名一致、
+# 未实现类型 grayify/hist_eq/fft_* 抛 invalid_argument 且错误消息冻结为 M4-05..06）；
+# conv_kernel 构造期拒绝全分支（size 非法枚举/种类错位、kernel 缺失/种类错位/长度
+# ≠K²/系数非有限、border 非法枚举/种类错位）、默认参数生效、单位核恒等（K=1/3/5 ×
+# 三边界策略）、已知核响应 golden（非对称核 1..9 在 4×4 图全 16 字节手推、单点移位
+# 核 clamp/reflect/zero 逐策略 golden、2× 核饱和/负响应截 0/x.5 round-half-up/
+# Laplacian 和=0）、1×N/N×1 窄图 K=5 reflect-101 折返（含 n=1 图）、37×23 噪声图与
+# 测试内独立 double 参考交叉验证（dyadic 核逐字节）、padding stride 输入、防御路径、
+# 图集成（source→conv_kernel golden、kernel 长度不符 buildNodeGraph 显式 BadParam）；
+# gaussian_blur 构造期拒绝（radius/sigma 越界/种类错位/声明缺失）、默认参数生效、
+# sigma=0 δ 核恒等、常值图、核系数 golden（[0.274068619, 0.451862761,
+# 0.274068619]）、角点脉冲与列阶梯逐字节手推 golden（质量守恒 255 自检）、可分离 vs
+# 直接 2D 参考 9 组 radius×sigma 交叉验证（|diff| ≤ 1）、stride 紧凑/padding、防御
+# 路径、图集成（sigma=0 恒等链）。golden 期望由 §7 冻结公式独立手推/测试内参考实现
+# 推导，不参考实现代码。单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 并发矩阵不
+# 适用，见文件头）。
+add_executable(test_image_ops_convolution test_image_ops_convolution.cpp)
+target_link_libraries(test_image_ops_convolution PRIVATE rin::core)
+target_include_directories(test_image_ops_convolution PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME image_ops_convolution COMMAND test_image_ops_convolution)
+set_tests_properties(image_ops_convolution PROPERTIES LABELS "unit")
