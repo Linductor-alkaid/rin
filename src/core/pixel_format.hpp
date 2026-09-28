@@ -19,7 +19,8 @@ bool convertRgb8ToRgba8(const std::uint8_t* src,
 /// depthScaleMeters：每单位原始值对应的米数；区间 [nearMeters, farMeters] 线性归一后
 /// 经 scheme 对应的 ramp 映射，区间外截断；0（无效深度）输出不透明黑。
 /// AdaptiveGrayscale 不使用 depthScaleMeters/near/far（比例对尺度不变），改为按
-/// 帧内最大有效原始值归一化，参数校验与其它配色保持一致。
+/// 帧内有效深度的 99 分位归一化（频闪防护：孤立远近噪声无法移动基准），超过
+/// 分位的像素截断为纯白；参数校验与其它配色保持一致。
 bool convertDepth16ToRgba8(const std::uint16_t* src,
                            std::uint32_t width,
                            std::uint32_t height,
@@ -46,8 +47,8 @@ void jetColor(float t, std::uint8_t out[4]) noexcept;
 /// 灰度映射纯函数（DEC-007）：t=0（近）白、t=1（远）黑，R=G=B，A=255。
 void grayscaleColor(float t, std::uint8_t out[4]) noexcept;
 
-/// 自适应灰度映射纯函数（DEC-007 扩展）：t=raw/frameMax。t=0（近）黑、t=1
-/// （帧内最远有效像素）白，R=G=B，A=255。
+/// 自适应灰度映射纯函数（DEC-007 扩展）：t=raw/frameQuantile。t=0（近）黑、
+/// t=1（分位深度）白，超出截断为白，R=G=B，A=255。
 void adaptiveGrayscaleColor(float t, std::uint8_t out[4]) noexcept;
 
 }  // namespace rin
