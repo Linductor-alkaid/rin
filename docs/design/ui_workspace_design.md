@@ -1,7 +1,7 @@
 # 工作台 UI 设计：信息架构与节点编辑器
 
 > 状态：Active
-> 更新日期：2026-09-24
+> 更新日期：2026-09-28
 > 依据：[DEC-014](../decisions/DEC-014-workbench-information-architecture.md)、
 > [DEC-015](../decisions/DEC-015-node-editor-implementation-path.md)、
 > [DEC-005](../decisions/DEC-005-viewer-visual-design.md)、
@@ -46,11 +46,15 @@ AppShell（单窗口，EUI-NEO DslAppConfig）
 
 ## 3. 导航模型
 
-- 导航控件首选 EUI-NEO `sidebar`（DEC-014）；原型受限时退化 `tabs`/
-  `segmented`，信息架构不变。当前页高亮用 brand/弱强调底（DEC-005 语义，
-  不新增装饰色）。
+- 导航控件：设计首选 EUI-NEO `sidebar`，`M5-02` 原型验证结论为右锚定模态
+  抽屉（非左侧常驻形态），`tabs`/`segmented` 为横向选择器，`navbar` 未列入
+  上游组件文档且绑定组件库自有主题度量体系（与 DEC-005 唯一令牌层冲突）——
+  按 [EUI-20260928-001](../dependency_feedback/eui-neo/ledger.md) 以 `rect`/
+  `text` 原语 + viewer 令牌自绘左窄边导航栏（`navigation.hpp`），信息架构
+  不变（DEC-014 允许的控件退化路径，台账登记后实施）。
 - 页面切换保持各页 UI 状态（工作流页的视图变换、面板开合、选中态是
-  `ui.state` 会话状态，不因导航丢失）。
+  `ui.state` 会话状态，不因导航丢失；导航模型只拥有当前页，不拥有页面内
+  状态——`navigation.hpp` `NavigationState`）。
 - 切离工作流页时引擎继续运行（引擎侧承载，`RULE-07`）；返回时经契约
   `tryLoadStats`/`tryLoadNodeOutput`/`tryLoadEvent` 最新态语义重新消费，
   以 `sequence` 推进刷新，禁止以 stale 快照恢复活动状态。页面不驻留
@@ -58,7 +62,8 @@ AppShell（单窗口，EUI-NEO DslAppConfig）
   校验、取快照与提交）。
 - 键盘导航：沿用 DEC-005 keyboard-first 原则；画布快捷键（`F` 帧全图、
   `Del` 删除选中）依赖 EUI-NEO 键盘事件暴露，`M5-03` 原型确认，不足时按
-  台账流程登记（DEC-015 风险条目）；每个快捷键必须有鼠标等价路径。
+  台账流程登记（DEC-015 风险条目）；每个快捷键必须有鼠标等价路径。M1 的
+  数字键分辨率速选随壳收窄到预览页（控件所在页）。
 
 ## 4. 状态与空态
 
@@ -176,7 +181,7 @@ UI 状态（DEC-014 决策 5：不入契约）。平移=拖空白处；缩放=�
 | UI 元素 | 原语/组件 | 纪律与已知风险 |
 | --- | --- | --- |
 | 页面骨架/五区布局 | `ui.column`/`ui.row` stack 组合 | 绘制顺序即层叠（zIndex 不跨父容器） |
-| 全局导航 | `sidebar`（退化 `tabs`/`segmented`） | M5-02 原型验证开合/选中能力 |
+| 全局导航 | 自绘窄边导航栏（`navigation.hpp`，`rect`/`text` + viewer 令牌；选型结论见台账 EUI-20260928-001，`M5-02` 已实施） | sidebar 原型受限（右锚定抽屉）；条目受控渲染，选中态由 `NavigationState` 驱动 |
 | 画布视口 | `clip` 容器 + `ui.state`（视图变换） | 平移缩放只改变换，不重建子树 |
 | 节点框 | `rect`（圆角 `kRadiusMd/Lg` 层级） | 选中/错误态描边用语义令牌 |
 | 端口 | `rect` + `mousearea` | 命中区大于视觉尺寸 |

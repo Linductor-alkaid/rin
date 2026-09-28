@@ -4,6 +4,9 @@ add_executable(rin app.cpp)
 
 target_link_libraries(rin PRIVATE rin::realsense_adapter OpenGL::GL)
 
+# 设置页"关于"展示的版本号（根 project(Rin VERSION ...)）。
+target_compile_definitions(rin PRIVATE RIN_VERSION="${Rin_VERSION}")
+
 eui_neo_configure_app(rin)
 
 # EUI-NEO 对 app 目标统一施加 -fno-exceptions/-fno-rtti（非 Debug 配置，框架宿主策略）；

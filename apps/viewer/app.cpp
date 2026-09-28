@@ -1,16 +1,23 @@
-// rin：EUI-NEO 前端。Executor 生命周期 owner 为 viewer::Context（DEC-002）：
-// dslAppConfig() 首调点惰性启动，DslAppConfig::onShutdown（主线程、GPU 销毁前）关闭。
-// 视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局代码不出现一次性
-// 颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机连接，运行中经设备
-// 目录自动识别，多设备时用户选择、唯一设备自动选择。3D 位姿视图（M3-06，DEC-011）
-// 由 pose_view.hpp 承载：Core 投影纯逻辑 + polygon 有界组装，姿态经 tryLoadPose()
-// 最新态消费；IMU 状态面板（M3-07，imu_panel.hpp）消费同一份快照呈现源频率与
-// 姿态数值；onShutdown 在服务停止后排空 UI 侧姿态状态（关闭顺序回归 M3-07）。
+// rin：EUI-NEO 前端（工作台壳，M5-02）。Executor 生命周期 owner 为 viewer::Context
+// （DEC-002）：dslAppConfig() 首调点惰性启动，DslAppConfig::onShutdown（主线程、
+// GPU 销毁前）关闭。信息架构按 DEC-014：单窗口四页导航（预览 / 位姿 / 图像工作
+// 流 / 设置），左窄边导航栏见 navigation.hpp（控件选型结论见台账 EUI-20260928-001）；
+// 页面切换只推进 NavigationState，各页 UI 状态由 ViewerContext 持有（切页保持），
+// 相机服务运行态全局共享（pump 不分页）。工作流页五区骨架见 workflow_shell.hpp
+// （M5-03 起逐区填充）。视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：
+// 布局代码不出现一次性颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖
+// 相机连接，运行中经设备目录自动识别，多设备时用户选择、唯一设备自动选择。
+// 3D 位姿视图（M3-06，DEC-011）由 pose_view.hpp 承载：Core 投影纯逻辑 + polygon
+// 有界组装，姿态经 tryLoadPose() 最新态消费；IMU 状态面板（M3-07，imu_panel.hpp）
+// 消费同一份快照呈现源频率与姿态数值；onShutdown 在服务停止后排空 UI 侧姿态状态
+// （关闭顺序回归 M3-07）。
 
 #include "gpu_frame_view.hpp"
 #include "imu_panel.hpp"
+#include "navigation.hpp"
 #include "pose_view.hpp"
 #include "viewer_theme.hpp"
+#include "workflow_shell.hpp"
 
 #include <eui_neo.h>
 
@@ -87,6 +94,10 @@ struct ViewerContext {
     std::string startError;
     std::string rgbMeta;
     std::string depthMeta;
+
+    /// 工作台导航状态（M5-02）：四页模型与当前页；页面 UI 状态由本上下文各字段
+    /// 持有，导航不触碰（页面切换状态保持，navigation.hpp）。
+    NavigationState nav;
 
     bool started = false;
     bool shutdownDone = false;
@@ -366,10 +377,11 @@ void ViewerContext::shutdown() {
     }
 }
 
-/// 头部：标题（base/semibold）+ 状态点 + 状态文本（语义色）+ 事件消息（次级）。
-void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float width) {
+/// 头部（全局，跨页共享相机运行态）：标题（base/semibold）+ 状态点 + 状态文本
+/// （语义色）+ 事件消息（次级）。
+void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float x, float y, float width) {
     ui.row("header")
-        .position(kSpace4, kSpace4)
+        .position(x, y)
         .size(width, 24.0f)
         .gap(kSpace2)
         .content([&] {
@@ -459,13 +471,15 @@ void composeViewCard(eui::Ui& ui, const char* id, float width, float height, con
         .build();
 }
 
-/// 控制行标签与提示（下拉触发器本体由 overlay 层最后合成，保证弹层浮顶）。
-/// narrow（逻辑宽 < 640）时右锚定组会贴靠 Device 选择器，标签/长提示让位隐藏，
-/// 选择器取值文本自描述；paletteX/resolutionX 由 compose() 统一计算传入。
-void composeControls(eui::Ui& ui, const ViewerContext& ctx, bool narrow,
-                     float paletteX, float resolutionX) {
+/// 预览页控制行标签与提示（下拉触发器本体由 overlay 层最后合成，保证弹层浮顶）。
+/// 深度配色选择已按 DEC-014 收纳至设置页。narrow（内容宽 < 640）时右锚定的
+/// Resolution 会贴靠 Device 选择器，标签/长提示让位隐藏，选择器取值文本自描述；
+/// ox 为内容左缘，resolutionX 由 composePreviewPage 统一计算传入。
+void composeControls(eui::Ui& ui, const ViewerContext& ctx, float ox, bool narrow,
+                     float resolutionX, float rowY) {
+    const float labelY = rowY + 13.0f;
     ui.text("controls.device.label")
-        .position(kSpace4, 65.0f)
+        .position(ox, labelY)
         .text("Device")
         .fontSize(kFontSm)
         .fontWeight(kWeightMedium)
@@ -474,18 +488,9 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, bool narrow,
     if (narrow) {
         return;  // 右锚定组已贴靠，标签/提示与选择器重叠，让位。
     }
-    // 分辨率与深度配色两组控件右对齐（响应式：随窗口宽度变化不溢出）；
-    // 标签贴在各自选择器左侧，与 Device 选择器（76..286）保持间距不重叠。
     ui.text("controls.resolution.label")
-        .position(resolutionX - 98.0f, 65.0f)
+        .position(resolutionX - 98.0f, labelY)
         .text("Resolution")
-        .fontSize(kFontSm)
-        .fontWeight(kWeightMedium)
-        .color(dark().fgSubtle)
-        .build();
-    ui.text("controls.palette.label")
-        .position(paletteX - 98.0f, 65.0f)
-        .text("Palette")
         .fontSize(kFontSm)
         .fontWeight(kWeightMedium)
         .color(dark().fgSubtle)
@@ -493,7 +498,7 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, bool narrow,
     if (ctx.hasCatalog && ctx.catalog.activeSerial.empty() &&
         ctx.catalog.devices.size() > 1) {
         ui.text("controls.hint")
-            .position(298.0f, 65.0f)
+            .position(ox + 282.0f, labelY)
             .text("multiple devices, select one")
             .fontSize(kFontXs)
             .color(dark().warning)
@@ -501,21 +506,21 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, bool narrow,
     } else if (ctx.hasCatalog && !ctx.catalog.activeSerial.empty() &&
                ctx.catalog.activeIsAuto && ctx.catalog.devices.size() > 1) {
         ui.text("controls.hint")
-            .position(298.0f, 65.0f)
+            .position(ox + 282.0f, labelY)
             .text("auto-selected, click Device to change")
             .fontSize(kFontXs)
             .color(dark().fgSubtlest)
             .build();
     } else if (!ctx.deviceOptions.empty() && ctx.catalog.activeSerial.empty()) {
         ui.text("controls.hint")
-            .position(kSpace4 + 120.0f, 65.0f)
+            .position(ox + 60.0f + 210.0f + kSpace3, labelY)
             .text("select device")
             .fontSize(kFontXs)
             .color(dark().warning)
             .build();
     } else if (ctx.hasCatalog && ctx.catalog.devices.empty()) {
         ui.text("controls.hint")
-            .position(kSpace4 + 120.0f, 65.0f)
+            .position(ox + 60.0f + 210.0f + kSpace3, labelY)
             .text("no camera connected - plug in and it appears here")
             .fontSize(kFontXs)
             .color(dark().fgSubtlest)
@@ -668,99 +673,231 @@ void composeIntrinsicsCard(eui::Ui& ui, const ViewerContext& ctx, float width, f
         .build();
 }
 
+// --- 页面（DEC-014 四页；选择控件本体由 compose() overlay 层最后合成） ---
+
+/// 预览页：设备/分辨率控制行 + RGB/Depth 画面卡 + 内参卡（DEC-014 决策 3：沿用
+/// 现有卡片式组织；深度配色已按决策收纳至设置页）。
+void composePreviewPage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, float width,
+                        float height) {
+    const float controlsHeight = 38.0f;
+    const float panelHeight = 136.0f;
+    const float viewsTop = y + controlsHeight + kSpace3;
+    const float viewsHeight =
+        std::max(160.0f, height - controlsHeight - kSpace3 * 2.0f - panelHeight);
+    const float viewWidth = (width - kSpace3) / 2.0f;
+    const float resolutionX = ox + width - 180.0f;
+    const bool narrowControls = width < 640.0f;
+
+    composeControls(ui, ctx, ox, narrowControls, resolutionX, y);
+    ui.row("views")
+        .position(ox, viewsTop)
+        .size(width, viewsHeight)
+        .gap(kSpace3)
+        .content([&] {
+            composeViewCard(ui, "view.rgb", viewWidth, viewsHeight, "RGB", ctx.rgbMeta,
+                            ctx.rgbView);
+            composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth",
+                            ctx.depthMeta, ctx.depthView);
+        })
+        .build();
+    composeIntrinsicsCard(ui, ctx, width, panelHeight, ox, y + height - panelHeight);
+}
+
+/// 位姿页：3D 位姿视图卡 + IMU 状态面板（M3-07 卡片对迁移为独立页面，DEC-014
+/// 决策 3）。位姿卡占满页面高；IMU 面板固定信息行高度（内容自适应，余下留白）。
+void composePosePage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, float width,
+                     float height) {
+    const float imuPanelWidth = std::clamp(width * 0.38f, 320.0f, 480.0f);
+    const float poseWidth = width - imuPanelWidth - kSpace3;
+    composePoseViewCard(ui, ctx.poseView,
+                        ctx.hasIntrinsics ? &ctx.intrinsics : nullptr, poseWidth, height,
+                        ox, y);
+    composeImuPanelCard(ui, ctx.poseView, imuPanelWidth, std::min(height, 160.0f),
+                        ox + poseWidth + kSpace3, y);
+}
+
+/// 设置页：深度配色切换（DEC-007 命令通道；DEC-014 决策 3 收纳至设置页）+
+/// 关于/版本信息。选择控件本体在 overlay 层合成（composeSelect，见 compose()）。
+void composeSettingsPage(eui::Ui& ui, float ox, float y, float width) {
+    const theme::ThemeTokens& tokens = dark();
+    const float pad = kSpace3;
+    const float titleHeight = kFontSm + kSpace1;
+    const float preferencesHeight = 132.0f;
+    const float aboutHeight = 150.0f;
+
+    ui.stack("settings.preferences")
+        .position(ox, y)
+        .size(width, preferencesHeight)
+        .content([&] {
+            ui.rect("settings.preferences.card")
+                .size(width, preferencesHeight)
+                .radius(kRadiusXl)
+                .color(tokens.card)
+                .border(kBorderHairline, tokens.cardBorder)
+                .build();
+            ui.text("settings.preferences.title")
+                .position(pad, pad)
+                .size(width - pad * 2.0f, titleHeight)
+                .text("Preferences")
+                .fontSize(kFontSm)
+                .fontWeight(kWeightSemibold)
+                .color(tokens.fgSubtle)
+                .build();
+            ui.text("settings.preferences.paletteLabel")
+                .position(pad, 48.0f)
+                .size(150.0f, 38.0f)
+                .text("Depth palette")
+                .fontSize(kFontBase)
+                .color(tokens.fg)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
+            ui.text("settings.preferences.paletteHint")
+                .position(pad, 96.0f)
+                .size(width - pad * 2.0f, kFontSm + kSpace1)
+                .text("color scheme for the depth preview - applies to the live stream")
+                .fontSize(kFontSm)
+                .color(tokens.fgSubtlest)
+                .build();
+        })
+        .build();
+
+    ui.stack("settings.about")
+        .position(ox, y + preferencesHeight + kSpace3)
+        .size(width, aboutHeight)
+        .content([&] {
+            ui.rect("settings.about.card")
+                .size(width, aboutHeight)
+                .radius(kRadiusXl)
+                .color(tokens.card)
+                .border(kBorderHairline, tokens.cardBorder)
+                .build();
+            ui.text("settings.about.title")
+                .position(pad, pad)
+                .size(width - pad * 2.0f, titleHeight)
+                .text("About")
+                .fontSize(kFontSm)
+                .fontWeight(kWeightSemibold)
+                .color(tokens.fgSubtle)
+                .build();
+            ui.text("settings.about.name")
+                .position(pad, 46.0f)
+                .size(width - pad * 2.0f, kFontLg + kSpace2)
+#ifdef RIN_VERSION
+                .text("Rin v" RIN_VERSION)
+#else
+                .text("Rin")
+#endif
+                .fontSize(kFontLg)
+                .fontWeight(kWeightSemibold)
+                .color(tokens.fg)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
+            ui.text("settings.about.description")
+                .position(pad, 78.0f)
+                .size(width - pad * 2.0f, kFontSm + kSpace1)
+                .text("RealSense depth-camera preview and image workflow workbench")
+                .fontSize(kFontSm)
+                .color(tokens.fgSubtle)
+                .build();
+            ui.text("settings.about.stack")
+                .position(pad, 100.0f)
+                .size(width - pad * 2.0f, kFontXs + kSpace1)
+                .text("librealsense2 · EUI-NEO · executor")
+                .fontSize(kFontXs)
+                .color(tokens.fgSubtlest)
+                .build();
+        })
+        .build();
+}
+
 void compose(eui::Ui& ui, const eui::Screen& screen) {
     ViewerContext& ctx = context();
     ctx.pump();
 
-    const float pad = kSpace4;  // 16px：标准卡/面板内边距
-    const float contentWidth = screen.width - pad * 2.0f;
-    // 固定预算：头部 + 控制行 + 底部信息卡（内参 + IMU）+ 间隙（紧凑操作型布局，
-    // 宁密勿松）。底部行高覆盖 IMU 面板 4 行（Gyro/Accel/R·P·Y/Quat）。
+    const float pad = kSpace4;                // 16px：标准卡/面板内边距
+    const float ox = kNavRailWidth + pad;     // 内容左缘（导航栏右移一个内边距）
+    const float contentWidth = screen.width - kNavRailWidth - pad * 2.0f;
     const float headerHeight = 24.0f;
-    const float controlsHeight = 38.0f;
-    const float panelHeight = 136.0f;
-    const float viewsTop = pad + headerHeight + kSpace3 + controlsHeight + kSpace3;
-    const float viewsHeight = std::max(160.0f, screen.height - viewsTop - kSpace3 -
-                                                   panelHeight - pad);
-    // 三卡并列：RGB / Depth / Pose 3D（M3-07 定稿卡位）；底部行左内参右 IMU
-    // 状态面板（源频率 + 姿态数值），IMU 面板宽度响应式收敛（320..480）。
-    const float viewWidth = (contentWidth - kSpace3 * 2.0f) / 3.0f;
-    const float imuPanelWidth =
-        std::clamp(contentWidth * 0.38f, 320.0f, 480.0f);
-    const float intrinsicsWidth = contentWidth - imuPanelWidth - kSpace3;
-    const float panelY = screen.height - pad - panelHeight;
-    // 右锚定控件组（响应式收敛）：Palette/Resolution 期望右对齐，空间不足时依次
-    // 贴靠 Device 选择器（右缘 286 + 12 间距），逻辑宽 < 640 为 narrow（标签让位）。
-    const float paletteX = std::max(298.0f, contentWidth - 342.0f);
-    const float resolutionX = std::max(paletteX + 162.0f, contentWidth - 180.0f);
-    const bool narrowControls = contentWidth < 640.0f;
+    const float pageTop = pad + headerHeight + kSpace3;
+    const float pageHeight = std::max(160.0f, screen.height - pageTop - pad);
+    // 预览页 overlay 选择器几何（与 composePreviewPage/composeControls 共享；
+    // 分辨率严格右锚定于内容区，标签让位由 narrow 分支处理）。
+    const float deviceFieldX = ox + 60.0f;
+    const float resolutionFieldX = ox + contentWidth - 180.0f;
 
-    // 根用 stack 绝对布局：下拉触发器必须晚于视图/内参卡合成（绘制顺序即层叠顺序，
-    // EUI 的 zIndex 不跨父容器），否则弹层被后绘制的兄弟卡片覆盖。
+    // 根用 stack 绝对布局：overlay 选择器必须晚于页面卡片合成（绘制顺序即层叠
+    // 顺序，EUI 的 zIndex 不跨父容器），否则弹层被后绘制的兄弟卡片覆盖。
     ui.stack("root")
         .size(screen.width, screen.height)
         .onFrame([](float) { context().pump(); })
         .content([&] {
-            composeHeader(ui, ctx, contentWidth);
-            composeControls(ui, ctx, narrowControls, paletteX, resolutionX);
-            ui.row("views")
-                .position(pad, viewsTop)
-                .size(contentWidth, viewsHeight)
-                .gap(kSpace3)
-                .content([&] {
-                    composeViewCard(ui, "view.rgb", viewWidth, viewsHeight, "RGB", ctx.rgbMeta,
-                                    ctx.rgbView);
-                    composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth",
-                                    ctx.depthMeta, ctx.depthView);
-                    composePoseViewCard(ui, ctx.poseView,
-                                        ctx.hasIntrinsics ? &ctx.intrinsics : nullptr,
-                                        viewWidth, viewsHeight);
-                })
-                .build();
-            composeIntrinsicsCard(ui, ctx, intrinsicsWidth, panelHeight, pad, panelY);
-            composeImuPanelCard(ui, ctx.poseView, imuPanelWidth, panelHeight,
-                                pad + intrinsicsWidth + kSpace3, panelY);
+            composeNavRail(ui, ctx.nav, screen.height,
+                           [&ctx](WorkbenchPage page) { ctx.nav.switchTo(page); });
+            composeHeader(ui, ctx, ox, pad, contentWidth);
 
-            // overlay 层（最后合成 = 浮于卡片之上）：设备选择 + 深度配色 + 分辨率。
-            std::vector<std::string> deviceLabels;
-            deviceLabels.reserve(ctx.deviceOptions.size());
-            for (const DeviceUiOption& option : ctx.deviceOptions) {
-                deviceLabels.push_back(option.label);
+            switch (ctx.nav.current) {
+                case WorkbenchPage::Preview:
+                    composePreviewPage(ui, ctx, ox, pageTop, contentWidth, pageHeight);
+                    break;
+                case WorkbenchPage::Pose:
+                    composePosePage(ui, ctx, ox, pageTop, contentWidth, pageHeight);
+                    break;
+                case WorkbenchPage::Workflow:
+                    composeWorkflowShell(ui, ox, pageTop, contentWidth, pageHeight);
+                    break;
+                case WorkbenchPage::Settings:
+                    composeSettingsPage(ui, ox, pageTop, contentWidth);
+                    break;
             }
-            if (!deviceLabels.empty()) {
-                composeSelect(ui, "controls.device", 76.0f, 52.0f, 210.0f,
-                              "select device", deviceLabels, ctx.deviceIndex.get(),
-                              ctx.deviceOpen.get(), [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
-                              [&ctx](int index) {
-                                  ctx.deviceOpen.set(false);
-                                  ctx.deviceIndex.set(index);
-                                  ctx.applyDeviceChoice(index);
-                              });
-            }
-            // 深度配色（DEC-007）：不依赖设备目录，Waiting 态可预设。
-            composeSelect(ui, "controls.palette", paletteX, 52.0f, 150.0f,
-                          "select", {"Jet", "Grayscale"}, ctx.paletteIndex.get(),
-                          ctx.paletteOpen.get(),
-                          [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
-                          [&ctx](int index) {
-                              ctx.paletteOpen.set(false);
-                              ctx.paletteIndex.set(index);
-                              ctx.applyPaletteChoice(index);
-                          });
-            if (!ctx.resolutionOptions.empty()) {
-                std::vector<std::string> resolutionLabels;
-                resolutionLabels.reserve(ctx.resolutionOptions.size());
-                for (const ResolutionUiOption& option : ctx.resolutionOptions) {
-                    resolutionLabels.push_back(option.label);
+
+            // overlay 层（最后合成 = 浮于卡片之上）：当前页的选择控件。
+            if (ctx.nav.current == WorkbenchPage::Preview) {
+                std::vector<std::string> deviceLabels;
+                deviceLabels.reserve(ctx.deviceOptions.size());
+                for (const DeviceUiOption& option : ctx.deviceOptions) {
+                    deviceLabels.push_back(option.label);
                 }
-                composeSelect(ui, "controls.resolution", resolutionX, 52.0f, 180.0f,
-                              "select", resolutionLabels, ctx.resolutionIndex.get(),
-                              ctx.resolutionOpen.get(),
-                              [&] { ctx.resolutionOpen.set(!ctx.resolutionOpen.get()); },
+                if (!deviceLabels.empty()) {
+                    composeSelect(ui, "controls.device", deviceFieldX, pageTop, 210.0f,
+                                  "select device", deviceLabels, ctx.deviceIndex.get(),
+                                  ctx.deviceOpen.get(),
+                                  [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
+                                  [&ctx](int index) {
+                                      ctx.deviceOpen.set(false);
+                                      ctx.deviceIndex.set(index);
+                                      ctx.applyDeviceChoice(index);
+                                  });
+                }
+                if (!ctx.resolutionOptions.empty()) {
+                    std::vector<std::string> resolutionLabels;
+                    resolutionLabels.reserve(ctx.resolutionOptions.size());
+                    for (const ResolutionUiOption& option : ctx.resolutionOptions) {
+                        resolutionLabels.push_back(option.label);
+                    }
+                    composeSelect(ui, "controls.resolution", resolutionFieldX, pageTop,
+                                  180.0f, "select", resolutionLabels,
+                                  ctx.resolutionIndex.get(), ctx.resolutionOpen.get(),
+                                  [&] {
+                                      ctx.resolutionOpen.set(!ctx.resolutionOpen.get());
+                                  },
+                                  [&ctx](int index) {
+                                      ctx.resolutionOpen.set(false);
+                                      ctx.resolutionIndex.set(index);
+                                      ctx.applyResolutionChoice(index);
+                                  });
+                }
+            } else if (ctx.nav.current == WorkbenchPage::Settings) {
+                // 深度配色（DEC-007）：不依赖设备目录，Waiting 态可预设；与卡片
+                // 内 "Depth palette" 标签同行（标签行 y=48，见 composeSettingsPage）。
+                composeSelect(ui, "settings.preferences.palette",
+                              ox + 170.0f, pageTop + 48.0f, 170.0f, "select",
+                              {"Jet", "Grayscale"}, ctx.paletteIndex.get(),
+                              ctx.paletteOpen.get(),
+                              [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
                               [&ctx](int index) {
-                                  ctx.resolutionOpen.set(false);
-                                  ctx.resolutionIndex.set(index);
-                                  ctx.applyResolutionChoice(index);
+                                  ctx.paletteOpen.set(false);
+                                  ctx.paletteIndex.set(index);
+                                  ctx.applyPaletteChoice(index);
                               });
             }
         })
@@ -779,10 +916,19 @@ const DslAppConfig& dslAppConfig() {
             .title("Rin")
             .pageId("Rin")
             .clearColor(viewer::theme::dark().background)
-            .windowSize(1280, 860)
+            // 工作台壳默认版面（M5-02）：四页与工作流五区骨架（DEC-014）需要比
+            // M1 单页 viewer 更大的最小版面。注意 EUI 的 Screen 为逻辑尺寸（X11/
+            // XWayland 下 framebuffer 不随监视器缩放放大，逻辑视口 ≈ 窗口像素 /
+            // 监视器缩放），本机 2x 面板上为 960x600 逻辑——布局按逻辑视口自适应。
+            .windowSize(1920, 1200)
             .fps(60.0)
             .onKeyEvent([](const eui::KeyEvent& event) {
                 if (!event.isDown()) {
+                    return;
+                }
+                // 数字键 = 预览页分辨率档位速选（M1 快捷键；随工作台壳收窄到
+                // 预览页——分辨率控件位于预览页，其他页不响应）。
+                if (viewer::context().nav.current != viewer::WorkbenchPage::Preview) {
                     return;
                 }
                 const int digit =
