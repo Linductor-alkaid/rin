@@ -57,7 +57,7 @@
       通过。
 - [x] `M4-03` 几何算子节点：裁切（ROI 越界与退化区域拒绝）、降分辨率（最近邻 /
       双线性）。完成判据：golden 数值测试通过。
-- [ ] `M4-04` 卷积算子节点：自定义 KxK 卷积核（1/3/5，边界填充策略可配）、高斯
+- [x] `M4-04` 卷积算子节点：自定义 KxK 卷积核（1/3/5，边界填充策略可配）、高斯
       模糊（核尺寸 / sigma）。完成判据：数值测试（已知核响应、可分离高斯与直接
       卷积等价）通过。
 - [ ] `M4-05` 直方图均衡节点：Gray8 与 RGBA 亮度域。完成判据：已知直方图映射与
@@ -108,6 +108,48 @@
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-29：`M4-04` 完成关闭——卷积/高斯算子节点落地（`rin_core`，零第三方公开
+依赖，RULE-01）。`src/core/image_ops.cpp` 新增 `conv_kernel`（K ∈ {1,3,5} 自定义
+核 + clamp/reflect/zero 可配边界）与 `gaussian_blur`（radius→K=2·radius+1 +
+sigma，可分离两趟 + 固定 clamp 边界）实现，工厂同步扩展（未实现类型错误消息改指
+M4-05..06）。数值语义随本工作项在
+[design/image_workflow_design.md](../design/image_workflow_design.md) §6/§7 冻结：
+卷积执行为相关语义（核不翻转，系数矩阵与邻域逐点对应，与常见图像编辑器自定义
+卷积核及 OpenCV filter2D 一致，翻转语义由使用方翻转矩阵表达）、double 累加
+round-half-up 饱和量化、核不自动归一化；reflect 为 reflect-101（−1→1、n→n−2，
+周期 2(n−1)，n=1 一律取 0）、zero 越界按黑不补偿（暗边是策略语义）；高斯一维核
+归一化 Σ=1、sigma=0 为 δ 核恒等输出（极限语义），clamp 填充为线性饱和下标映射
+与滤波可交换，故可分离与直接 2D 卷积数学恒等、量化后逐像素差 ≤ 1（golden 容差）。
+目录 schema 演进随本工作项双向落盘：§6 冠以演进记录，`conv_kernel` 增加 `border`
+参数（Enumeration "clamp" [clamp,reflect,zero]），`M5-08` 假引擎目录同步扩展（未
+赋值参数取默认值，既有图不受影响；M5 调色板/参数面板经 schema 自动获得新控件）。
+测试（Independent-Verification-Agent 独立编写执行，两轮，实现文件对验证方只读以
+保证 golden 独立性）：新增 `tests/test_image_ops_convolution.cpp` 171 项（构造期
+拒绝全分支〔size 非法枚举/种类错位、kernel 缺失/长度≠K²/系数非有限、border 非法
+枚举〕、默认参数生效、单位核恒等 K=1/3/5×三边界、4×4 已知核响应逐字节 golden
+〔角点/边缘〕、单点移位核逐策略 golden + clamp≠reflect 见证、饱和/负响应截断/
+round-half-up 半值、Laplacian 和=0 核、1×N 窄图 K=5 reflect-101 折返与 n=1 图、
+37×23 噪声图与测试内独立 double 参考逐字节交叉验证、padding stride、防御路径、
+图集成 golden 与 kernel 长度不符 buildNodeGraph 显式 BadParam；gaussian_blur 构造
+期拒绝〔radius 0/11/负、sigma 负/NaN/±inf/越界、种类错位、声明缺失〕、默认参数
+逐字节、sigma=0 恒等〔K=7>图幅〕、常值图、核系数 golden、脉冲/阶梯角点逐字节
+golden + 质量守恒自检、可分离 vs 测试内直接 2D 参考 9 组 radius×sigma |diff|≤1、
+stride 紧凑、sigma=0 恒等图链）；`test_image_ops_geometry.cpp` 适配（gaussian_blur
+由"未实现类型"见证改为实现见证，未实现见证保留 grayify 与未知 typeId，166 项）；
+`test_public_boundary.cpp` 扩展 M4-04 两类型完整 schema 最小实例化（33→37 项）；
+`test_workflow_fake_engine.cpp` 默认目录断言扩展 conv_kernel size/kernel/border
+schema 同步（全套件 246 项）。golden 期望全部由 §7 冻结公式独立手推 + 独立
+Python 数值求值 + 测试内自写 double 参考推导，未参考实现代码；第一轮 2 项失败
+经全模拟取证均为测试侧手推错误（K=5 单点核 zero 边界列偏移恒越界、阶梯图邻域
+覆盖漏算 255 饱和列），实现未动复验 PASS。debug/asan/ubsan 三预设全量 ctest
+23/23（含 D435if 真机硬件冒烟，设备在位通过），asan/ubsan 零报告、编译零警告
+（-Wall -Wextra -Werror 口径复核 CLEAN）。环境：x86_64 Linux，GCC 13，CMake
+presets debug/asan/ubsan；tsan 未跑（本层单线程纯逻辑，DOD-02 并发矩阵归
+`M4-07` 引擎与 `M5-08` 契约套件，与 `M4-02`/`M4-03` 先例一致）。已知未验证风险：
+数值级跨平台 libm（exp）一致性未断言，golden 脉冲用例距 x.5 量化边界最小裕度
+0.12，常规平台差异不影响量化结果（验证方裕度分析）。`M4-05`（直方图均衡节点）
+为下一工作项。
 
 2026-09-29：`M4-03` 完成关闭——几何算子节点落地（`rin_core`，零第三方公开依赖，
 RULE-01）。新增 `include/rin/image_ops.hpp`（`makeDefaultImageNode` 默认工厂：

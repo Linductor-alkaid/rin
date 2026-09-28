@@ -15,8 +15,16 @@ namespace rin {
 ///   std::invalid_argument）；输出尺寸 floor(in×scale)，< 1 时 apply 抛
 ///   std::invalid_argument；nearest / bilinear 数值语义见
 ///   docs/design/image_workflow_design.md §7（M4-03 冻结公式）。
+/// - "gaussian_blur"：高斯模糊（M4-04）。Gray8；radius（Integer，[1,10]）与
+///   sigma（Real，[0,10]）构造期定型（越界构造抛 std::invalid_argument）；
+///   一维核 K = 2·radius+1 归一化，可分离两趟 + 固定 clamp 边界，sigma=0 为
+///   δ 核恒等输出；数值语义见设计文档 §7（M4-04 冻结公式）。
+/// - "conv_kernel"：自定义卷积（M4-04）。Gray8；size（Enumeration "1"|"3"|"5"）、
+///   kernel（RealArray 行主序 K² 个系数，长度不符构造抛 std::invalid_argument）、
+///   border（Enumeration clamp|reflect|zero）构造期定型；相关语义（核不翻转），
+///   double 累加 round-half-up 饱和量化；数值语义见设计文档 §7。
 /// - "source"：返回 nullptr（注入型源节点，执行时由引擎注入相机帧）。
-/// - 其他 typeId：抛 std::invalid_argument（M4-04..06 的卷积/直方图/FFT 族
+/// - 其他 typeId：抛 std::invalid_argument（M4-05..06 的灰度化/直方图/FFT 族
 ///   随对应工作项扩展；目录声明与工厂能力的偏差显式暴露，不静默）。
 ///
 /// 参数读取经 effectiveParamValue/param* 助手（未赋值取声明默认值）；运行期
