@@ -31,7 +31,7 @@
 //   不丢失，色彩编码才有意义）。
 //
 // 范围与限制（如实说明）：composeNavRail（navigation.hpp:95-176）与
-// composeWorkflowShell（workflow_shell.hpp）等 EUI-NEO 组装路径需要活动 EUI
+// composeWorkflowPage（node_canvas.hpp）等 EUI-NEO 组装路径需要活动 EUI
 // 运行时与窗口，无法 headless 单测——布局、选中态视觉、点击回调派发与图标
 // 字体渲染归真机回归（navigation.hpp:86 自述视觉验收归 M5-07）；本测试只覆盖
 // 其依赖的纯逻辑（页面模型、元数据、选中序号）与令牌取值。
