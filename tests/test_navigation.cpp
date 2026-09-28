@@ -284,7 +284,14 @@ int main() {
             }
         }
         PageStateWitness after;
-        RIN_CHECK(std::memcmp(&before, &after, sizeof(PageStateWitness)) == 0);
+        // 逐成员比较：整体 memcmp 会读到未初始化的尾部 padding（sizeof 56 vs
+        // 成员 52 字节），栈垃圾可致确定性误报；契约只约定数据成员不被触碰。
+        RIN_CHECK(std::memcmp(before.scroll, after.scroll,
+                              sizeof before.scroll) == 0);
+        RIN_CHECK(std::memcmp(before.counters, after.counters,
+                              sizeof before.counters) == 0);
+        RIN_CHECK(std::memcmp(before.dirty, after.dirty,
+                              sizeof before.dirty) == 0);
     }
 
     // --- 7) workflowStateColor：逐状态与 dark() 令牌逐字段一致、四结果互异 ---

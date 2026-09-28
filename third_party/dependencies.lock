@@ -6,3 +6,4 @@
 executor|https://github.com/Linductor-alkaid/executor.git|4731b16493ae996311a9e85f55bd137aee69418a|4731b16493ae996311a9e85f55bd137aee69418a|OFF|external
 eui-neo|https://github.com/sudoevolve/EUI-NEO.git|782c56993dc1890e0589e2100cfa74322bb0e0bf|782c56993dc1890e0589e2100cfa74322bb0e0bf|OFF|external
 realsense2|https://github.com/realsenseai/librealsense.git|7c3ee3fb7c640e9f315e663907208cb56c4febfd|7c3ee3fb7c640e9f315e663907208cb56c4febfd|OFF|external
+kissfft|https://github.com/mborgerding/kissfft.git|7bce4153c6bc8aba2db0e889e576f9d00505cbe1|7bce4153c6bc8aba2db0e889e576f9d00505cbe1|OFF|external
