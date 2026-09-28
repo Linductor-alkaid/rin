@@ -66,8 +66,14 @@ struct FakeWorkflowEngineConfig {
 ///   不自动恢复；
 /// - Idle（未运行）下 requestParamUpdate 直接同步改待运行图并发布 ParamUpdated。
 ///
-/// 生命周期：executor 必须已 initialize；实例必须先于 executor shutdown 停止
-/// 或析构（析构内幂等 stop）。
+/// 生命周期：executor 必须已 initialize；实例必须经本工厂以 shared_ptr 持有
+/// （引擎内部经 enable_shared_from_this 实现掉队 tick 的生命周期闭合：周期
+/// tick 闭包只持弱引用，执行入口提升强引用——在途 tick 存续期间对象必然存活，
+/// 析构与 tick 体互斥）。实例必须先于 executor shutdown 停止或析构（析构内
+/// 幂等 stop，仅为 owner 未显式停止时的 best-effort 防御）。在途 tick 可能
+/// 推迟析构完成时点；若最后一个引用由在途 tick 释放，析构在 executor worker
+/// 线程完成——owner 纪律路径（先 stop 再 reset）下该析构是 Idle 快路径，
+/// 不执行任何 executor 操作。
 [[nodiscard]] std::shared_ptr<IWorkflowEngine> createFakeWorkflowEngine(
     executor::Executor& executor, FakeWorkflowEngineConfig config = {});
 

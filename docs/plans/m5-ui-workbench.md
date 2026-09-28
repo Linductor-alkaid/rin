@@ -165,6 +165,24 @@ M4-07 接入时复用）与 tests/test_workflow_fake_engine.cpp（共用套件 +
 代理修复后复验通过，无实现缺陷。环境：x86_64 Linux，GCC 13，CMake presets
 debug/asan/ubsan/tsan。`M5-02`..`M5-05` 按计划仅依赖该假引擎开发。
 
+2026-09-28：`M5-08` 缺陷修复补记（随 `M5-02` MR 的 CI 修复提交入账）——CI
+（ubuntu runner / GCC 13 / asan）实报 `test_workflow_fake_engine` heap-use-after-free：
+`stop()` 持 `lifecycleMutex_` cancel timer 后，一个已被执行器派发的掉队 tick 阻塞在
+该锁上，`engine.reset()` 析构完成后 tick 被唤醒读已释放的 `state_`（本机时序快不
+复现）。根因是 tick 闭包裸捕获 `this` 的生命周期缺口，非 Executor 能力缺口（不涉
+台账）。修复：`FakeWorkflowEngine` 继承 `enable_shared_from_this`，tick 闭包只持
+`weak_ptr`，worker 侧 `lock()` 提升强引用后才触碰成员——提升失败安全退出、成功则
+对象存活至 tick 退出（同时闭合 worker 在提交点后被抢占的窗口）；头文件生命周期措辞
+同步。测试（Independent-Verification-Agent 独立验证，含修复方案两轮对照压测）：
+新增用例 11（25 轮 1ms tick 过载 + stop + reset 序列，预修复命中率 42%）；契约套件
+两处抗抖修正（契约中立：停止后断言改为可重复稳定性断言而非"必然有产物"；失败路径
+静默窗语义修正）；asan 累计 382 次运行 0 UAF（预修复同强度可命中），debug/asan/
+ubsan 全量 ctest 16/16，tsan 目标测试通过。**遗留缺陷（另行处理，不阻塞）**：验证
+过程发现 Running 下 `applyGraph` 的待生效图在 `drainBoundary` 中从不消费
+（LatestMailbox peek 语义），导致每帧重建 generation 并重发 `GraphApplied`（功能
+无害，代 churn 与事件刷屏）；涉及消费语义与事件频率决策，M4-07 真引擎对齐时一并
+处理（见 `M4-07` 对齐项）。
+
 2026-09-28：`M5-02` 完成关闭——工作台壳落地（DEC-014 四页 IA）：新增
 `apps/viewer/navigation.hpp`（`WorkbenchPage` 四页模型 + 元数据表 + `NavigationState`
 纯逻辑与 `composeNavRail` 左窄边导航栏组装；导航只拥有当前页，页面 UI 状态由
