@@ -17,7 +17,9 @@
 // 以校验标注呈现而非阻塞搭图；被拒绝的连线操作以反馈行显式说明（不静默）。
 //
 // 原语映射（ui_workspace_design.md §6）：画布视口 stack+clip、节点 rect、
-// 端口 rect、连线 polygon（贝塞尔采样）、右键创建菜单为自绘浮层（沿用
+// 端口 rect、连线 polygon（贝塞尔采样 + 法向偏移带状轮廓——polygon 为填充
+// 语义，开放点集会渲染成弦-曲线封闭区域，粗细一致曲线经 wireRibbon 构造）、
+// 右键创建菜单为自绘浮层（沿用
 // EUI-20260928-001 的 rect/text 退化先例，未用 components::contextMenu）、
 // 调色板过滤输入为 components::input（样式字段逐一取 viewer 令牌，不引入
 // 组件主题度量）。键盘路径（F/Del/Esc）在 app.cpp 的 DslAppConfig::onKeyEvent，
@@ -541,9 +543,11 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                 }
                 const CanvasPoint a = portPosition(fromNode->position, connection.from);
                 const CanvasPoint b = portPosition(toNode->position, connection.to);
+                // 贝塞尔带状轮廓（粗细一致曲线；polygon 为填充语义，开放点集
+                // 会渲染成弦-曲线封闭区域，见 canvas_model.hpp wireRibbon）。
                 std::vector<eui::Vec2> points;
-                points.reserve(25);
-                for (const CanvasPoint& p : sampleWire(a, b, 24)) {
+                points.reserve(50);
+                for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
                     const CanvasPoint screen = state.view.toScreen(p);
                     points.push_back({screen.x, screen.y});
                 }
@@ -564,19 +568,23 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                     fromNode != nullptr && draftType) {
                     const CanvasPoint a = portPosition(fromNode->position, from);
                     const CanvasPoint b = state.interaction.connectCurrent;
-                    std::vector<eui::Vec2> points;
-                    points.reserve(25);
-                    for (const CanvasPoint& p : sampleWire(a, b, 24)) {
-                        const CanvasPoint screen = state.view.toScreen(p);
-                        points.push_back({screen.x, screen.y});
+                    // 零长度守卫：光标停回发起端口时中心线因控制点下限外凸
+                    // 成小环（from==to 仅预览可达，已提交连线拒绝自连）。
+                    if (canvasDistance(a, b) >= 0.5f) {
+                        std::vector<eui::Vec2> points;
+                        points.reserve(50);
+                        for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
+                            const CanvasPoint screen = state.view.toScreen(p);
+                            points.push_back({screen.x, screen.y});
+                        }
+                        ui.polygon("workflow.canvas.wire.draft")
+                            .position(0.0f, 0.0f)
+                            .size(width, height)
+                            .points(std::move(points))
+                            .color(theme::portTypeColor(*draftType))
+                            .dirtyKey(dirty)
+                            .build();
                     }
-                    ui.polygon("workflow.canvas.wire.draft")
-                        .position(0.0f, 0.0f)
-                        .size(width, height)
-                        .points(std::move(points))
-                        .color(theme::portTypeColor(*draftType))
-                        .dirtyKey(dirty)
-                        .build();
                 }
             }
 

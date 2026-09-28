@@ -13,7 +13,10 @@
 //      selectedConnection 同步、命中检测 wireAt/portAt/nodeAt/nodesInRect）；
 //   4. 交互状态机 CanvasInteraction（框选与 Shift 加选、节点拖动、连线拖拽
 //      与取消、平移、右键删除/菜单、Alt 删线、deleteSelection）；
-//   5. 调色板模型 paletteGroups（分组归类、即输即筛、未知类型归 Other）。
+//   5. 调色板模型 paletteGroups（分组归类、即输即筛、未知类型归 Other）；
+//   6. 连线带状轮廓 wireRibbon（M5-04 连线渲染修复：粗细一致曲线的 ±width/2
+//      带状封闭轮廓，EUI polygon 填充语义下开放点集误渲染为"弦-曲线封闭
+//      区域"的真机缺陷回归守卫）。
 //
 // 目录构造为本文件私有的小型 rin::NodeCatalog（只链 rin::core，不引入
 // fake_engine）。测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），
@@ -1566,6 +1569,251 @@ void testDefectProbes() {
     }
 }
 
+// --- 15. 连线带状轮廓（wireRibbon，M5-04 连线渲染修复） ---
+//
+// 被测契约（canvas_model.hpp wireRibbon）：以 sampleWire 贝塞尔采样为中心线，
+// 逐点切线法向偏移 ±width/2，构造前向 + 逆向回程的带状封闭轮廓（修复 EUI
+// polygon 填充语义下开放曲线点集渲染成"弦-曲线封闭区域"的真机缺陷）；
+// 相邻采样重合（零切向）沿用上一法向；width 非有限或 ≤0、样本 <2 时原样返回
+// 中心线。命中检测 wireAt 仍用 sampleWire 折线（testHitTesting 覆盖，不在本区）。
+//
+// 法向取向（实现取向，探针实测后锁定）：画布坐标 y 向下，左→右水平线切向
+// (+1,0) 经 (-ty,tx) 旋转得 +法向 (0,+1)——leftSide 在屏幕下方、rightSide 在
+// 上方。
+//
+// 已知发散（探针实测，报告在案、按契约断言）：from==to 时中心线因 sampleWire
+// 控制点 40px 下限（"短连线也有可读弧度"）外凸约 10.4px，ribbon 点距 from 最
+// 远 ~11.61px > width/2+1e-3；ribbon 对"围绕中心线等宽"的自身契约仍严格成立
+// （距中心线最远 == width/2）。本区断言中心线有界性而非 from 有界性；零长
+// 连线是否收敛控制点偏移由主循环决策（UI 拒绝自连，实际不可达）。
+
+// 解析贝塞尔导数 B'(t)（独立推导：3u²(C0-P0) + 6ut(C1-C0) + 3t²(P1-C1)），
+// 用作"法向随切线旋转"的独立判据（避免与实现的中心差分切向同源互证）。
+[[nodiscard]] viewer::CanvasPoint bezierDerivative(const viewer::CanvasPoint& p0,
+                                                   const viewer::CanvasPoint& c0,
+                                                   const viewer::CanvasPoint& c1,
+                                                   const viewer::CanvasPoint& p1,
+                                                   const float t) {
+    const float u = 1.0f - t;
+    const float w1 = 3.0f * u * u;
+    const float w2 = 6.0f * u * t;
+    const float w3 = 3.0f * t * t;
+    return {w1 * (c0.x - p0.x) + w2 * (c1.x - c0.x) + w3 * (p1.x - c1.x),
+            w1 * (c0.y - p0.y) + w2 * (c1.y - c0.y) + w3 * (p1.y - c1.y)};
+}
+
+// 点到中心线折线最近距离（粗细一致回归守卫用）。
+[[nodiscard]] float distanceToCenterline(const viewer::CanvasPoint& p,
+                                         const std::vector<viewer::CanvasPoint>& center) {
+    float best = std::numeric_limits<float>::max();
+    for (std::size_t i = 1; i < center.size(); ++i) {
+        best = std::min(best, viewer::pointSegmentDistance(p, center[i - 1], center[i]));
+    }
+    if (center.size() == 1) {
+        best = viewer::canvasDistance(p, center[0]);
+    }
+    return best;
+}
+
+void testWireRibbon() {
+    const viewer::CanvasPoint from{100.0f, 100.0f};
+    const viewer::CanvasPoint to{500.0f, 200.0f};
+    constexpr int kSegments = 24;
+    constexpr float kWidth = viewer::kWireWidth;
+
+    const std::vector<viewer::CanvasPoint> center = viewer::sampleWire(from, to, kSegments);
+    const std::vector<viewer::CanvasPoint> ribbon =
+        viewer::wireRibbon(from, to, kSegments, kWidth);
+
+    // 形状：点数 = 2*(segments+1)；前 (segments+1) 点为 +法向侧，后段为
+    // -法向侧逆序（ribbon[i] 与 ribbon[2n-1-i] 配对，i = 0..n-1）。
+    RIN_CHECK_MSG(ribbon.size() == 2 * center.size(),
+                  "ribbon: point count is 2*(segments+1)");
+    RIN_CHECK_MSG(center.size() == static_cast<std::size_t>(kSegments) + 1,
+                  "ribbon: centerline is the sampleWire polyline");
+
+    // 配对几何：每对距离 == width（浮点容差）；中点 == 中心线采样点。
+    {
+        float maxPairErr = 0.0f;
+        float maxMidErr = 0.0f;
+        for (std::size_t i = 0; i < center.size(); ++i) {
+            const viewer::CanvasPoint& left = ribbon[i];
+            const viewer::CanvasPoint& right =
+                ribbon[2 * center.size() - 1 - i];
+            maxPairErr = std::max(maxPairErr,
+                                  std::fabs(viewer::canvasDistance(left, right) - kWidth));
+            const viewer::CanvasPoint mid{(left.x + right.x) * 0.5f,
+                                          (left.y + right.y) * 0.5f};
+            maxMidErr = std::max(maxMidErr, viewer::canvasDistance(mid, center[i]));
+        }
+        RIN_CHECK_MSG(maxPairErr <= 1e-3f,
+                      "ribbon: every paired side distance equals width");
+        RIN_CHECK_MSG(maxMidErr <= 1e-3f,
+                      "ribbon: every pair midpoint lands on the centerline sample");
+    }
+
+    // 水平直连线（from.y==to.y）：+法向 (0,+1)（画布 y 向下 = 屏幕下方），
+    // leftSide 在下、rightSide 在上，x 随中心采样不动。
+    {
+        const viewer::CanvasPoint hFrom{200.0f, 100.0f};
+        const viewer::CanvasPoint hTo{500.0f, 100.0f};
+        const std::vector<viewer::CanvasPoint> hCenter =
+            viewer::sampleWire(hFrom, hTo, kSegments);
+        const std::vector<viewer::CanvasPoint> hRibbon =
+            viewer::wireRibbon(hFrom, hTo, kSegments, kWidth);
+        RIN_CHECK_MSG(hRibbon.size() == 2 * hCenter.size(),
+                      "ribbon horizontal: point count preserved");
+        const float half = kWidth * 0.5f;
+        for (std::size_t i = 0; i < hCenter.size(); ++i) {
+            const viewer::CanvasPoint& left = hRibbon[i];
+            const viewer::CanvasPoint& right =
+                hRibbon[2 * hCenter.size() - 1 - i];
+            const bool sides = nearF(left.y, hCenter[i].y + half, 1e-3f) &&
+                               nearF(right.y, hCenter[i].y - half, 1e-3f) &&
+                               nearF(left.x, hCenter[i].x, 1e-3f) &&
+                               nearF(right.x, hCenter[i].x, 1e-3f);
+            if (!sides) {
+                std::printf("IVA-DIAG horizontal i=%zu left=(%.4f,%.4f) "
+                            "right=(%.4f,%.4f) center=(%.4f,%.4f)\n",
+                            i, left.x, left.y, right.x, right.y, hCenter[i].x,
+                            hCenter[i].y);
+            }
+            RIN_CHECK_MSG(sides,
+                          "ribbon horizontal: left below, right above, x unchanged");
+        }
+        // 端点精确值锁定取向（防实现取向翻转的回归守卫）。
+        RIN_CHECK_MSG(nearF(hRibbon.front().y, 101.25f, 1e-4f) &&
+                          nearF(hRibbon.front().x, 200.0f, 1e-4f),
+                      "ribbon horizontal: first left-side point at y+width/2");
+        RIN_CHECK_MSG(nearF(hRibbon.back().y, 98.75f, 1e-4f),
+                      "ribbon horizontal: last right-side point at y-width/2");
+    }
+
+    // 曲线法向随切线旋转：配对方向 d = leftSide[i]-rightSide[i] 应垂直于该点
+    // 解析切向 B'(t)（独立推导判据；|cos| 容差 0.01 覆盖中心差分与解析导数的
+    // 离散偏差，探针实测 0.0019），且取向全程一致（cross(d, B') 恒负）。
+    {
+        const float offset = viewer::wireControlOffset(from, to);
+        const viewer::CanvasPoint c0{from.x + offset, from.y};
+        const viewer::CanvasPoint c1{to.x - offset, to.y};
+        float maxAbsCos = 0.0f;
+        float maxCross = std::numeric_limits<float>::lowest();
+        for (std::size_t i = 0; i < center.size(); ++i) {
+            const viewer::CanvasPoint& left = ribbon[i];
+            const viewer::CanvasPoint& right =
+                ribbon[2 * center.size() - 1 - i];
+            const viewer::CanvasPoint d{left.x - right.x, left.y - right.y};
+            const float t =
+                static_cast<float>(i) / static_cast<float>(kSegments);
+            const viewer::CanvasPoint der = bezierDerivative(from, c0, c1, to, t);
+            const float dLen = viewer::canvasDistance({0.0f, 0.0f}, d);
+            const float derLen = viewer::canvasDistance({0.0f, 0.0f}, der);
+            if (dLen > 0.0f && derLen > 0.0f) {
+                const float cosv =
+                    std::fabs((d.x * der.x + d.y * der.y) / (dLen * derLen));
+                if (i > 0 && i + 1 < center.size()) {
+                    maxAbsCos = std::max(maxAbsCos, cosv);
+                }
+                maxCross = std::max(maxCross, d.x * der.y - d.y * der.x);
+            }
+        }
+        RIN_CHECK_MSG(maxAbsCos <= 0.01f,
+                      "ribbon: pair direction is perpendicular to the analytic "
+                      "tangent (|cos| <= 0.01 at interior samples)");
+        RIN_CHECK_MSG(maxCross < 0.0f,
+                      "ribbon: normal orientation is consistent along the curve "
+                      "(cross(d, tangent) stays negative)");
+    }
+
+    // 回归守卫（粗细一致的几何含义）：ribbon 任意点到中心线折线最近距离
+    // <= width/2 + 1e-3（曲线与水平两形态）。
+    {
+        float maxCurveDist = 0.0f;
+        for (const viewer::CanvasPoint& p : ribbon) {
+            maxCurveDist = std::max(maxCurveDist, distanceToCenterline(p, center));
+        }
+        RIN_CHECK_MSG(maxCurveDist <= kWidth * 0.5f + 1e-3f,
+                      "ribbon: every point stays within width/2 of the centerline "
+                      "(curve)");
+        const viewer::CanvasPoint hFrom{200.0f, 100.0f};
+        const viewer::CanvasPoint hTo{500.0f, 100.0f};
+        const std::vector<viewer::CanvasPoint> hCenter =
+            viewer::sampleWire(hFrom, hTo, kSegments);
+        const std::vector<viewer::CanvasPoint> hRibbon =
+            viewer::wireRibbon(hFrom, hTo, kSegments, kWidth);
+        float maxHorizontalDist = 0.0f;
+        for (const viewer::CanvasPoint& p : hRibbon) {
+            maxHorizontalDist =
+                std::max(maxHorizontalDist, distanceToCenterline(p, hCenter));
+        }
+        RIN_CHECK_MSG(maxHorizontalDist <= kWidth * 0.5f + 1e-3f,
+                      "ribbon: every point stays within width/2 of the centerline "
+                      "(horizontal)");
+    }
+
+    // 退化：width=0 / 负 / NaN 原样返回中心线（与 sampleWire 逐点相等）。
+    {
+        const std::vector<viewer::CanvasPoint> rZero =
+            viewer::wireRibbon(from, to, kSegments, 0.0f);
+        const std::vector<viewer::CanvasPoint> rNegative =
+            viewer::wireRibbon(from, to, kSegments, -2.0f);
+        const std::vector<viewer::CanvasPoint> rNaN =
+            viewer::wireRibbon(from, to, kSegments, std::nanf(""));
+        RIN_CHECK_MSG(rZero == center, "ribbon: width=0 returns the centerline");
+        RIN_CHECK_MSG(rNegative == center,
+                      "ribbon: negative width returns the centerline");
+        RIN_CHECK_MSG(rNaN == center, "ribbon: NaN width returns the centerline");
+    }
+
+    // 退化：segments=1 最小可用（4 点，两对覆盖首末中心采样）。
+    {
+        const std::vector<viewer::CanvasPoint> minimal =
+            viewer::wireRibbon(from, to, 1, kWidth);
+        const std::vector<viewer::CanvasPoint> minimalCenter =
+            viewer::sampleWire(from, to, 1);
+        RIN_CHECK_MSG(minimal.size() == 4,
+                      "ribbon: segments=1 yields 2*(1+1) points");
+        for (std::size_t i = 0; i < minimalCenter.size(); ++i) {
+            const viewer::CanvasPoint& left = minimal[i];
+            const viewer::CanvasPoint& right =
+                minimal[2 * minimalCenter.size() - 1 - i];
+            RIN_CHECK_MSG(nearF(viewer::canvasDistance(left, right), kWidth, 1e-3f),
+                          "ribbon: segments=1 pair width");
+            const viewer::CanvasPoint mid{(left.x + right.x) * 0.5f,
+                                          (left.y + right.y) * 0.5f};
+            RIN_CHECK_MSG(nearPoint(mid, minimalCenter[i], 1e-3f),
+                          "ribbon: segments=1 pair midpoint on the center sample");
+        }
+    }
+
+    // 退化：from==to 不崩溃，形状与配对契约仍成立；所有点距"中心线"有界。
+    // 距 from 的有界性见本区文件头"已知发散"——中心线本身因控制点 40px 下限
+    // 外凸（sampleWire 既有几何，与命中检测同源），不在此断言。
+    {
+        const viewer::CanvasPoint same{100.0f, 100.0f};
+        const std::vector<viewer::CanvasPoint> degenerate =
+            viewer::wireRibbon(same, same, kSegments, kWidth);
+        const std::vector<viewer::CanvasPoint> degenerateCenter =
+            viewer::sampleWire(same, same, kSegments);
+        RIN_CHECK_MSG(degenerate.size() == 2 * degenerateCenter.size(),
+                      "ribbon degenerate: from==to keeps the point count");
+        float maxCenterDist = 0.0f;
+        float maxFromDist = 0.0f;
+        for (const viewer::CanvasPoint& p : degenerate) {
+            maxCenterDist =
+                std::max(maxCenterDist, distanceToCenterline(p, degenerateCenter));
+            maxFromDist = std::max(maxFromDist, viewer::canvasDistance(p, same));
+        }
+        RIN_CHECK_MSG(maxCenterDist <= kWidth * 0.5f + 1e-3f,
+                      "ribbon degenerate: from==to stays within width/2 of the "
+                      "centerline");
+        // 信息性输出（非断言）：量化"距 from"发散，供报告与主循环决策。
+        std::printf("ribbon degenerate from==to: max distance to from = %.4f "
+                    "(requested bound width/2+1e-3 = %.4f; diverged as reported)\n",
+                    maxFromDist, kWidth * 0.5f + 1e-3f);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1590,5 +1838,6 @@ int main() {
     runSection("interaction_pan_delete_selection", testInteractionPanAndDeleteSelection);
     runSection("palette_groups", testPalette);
     runSection("iva_defect_probes", testDefectProbes);
+    runSection("wire_ribbon", testWireRibbon);
     return rin_test::exitStatus();
 }
