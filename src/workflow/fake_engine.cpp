@@ -257,7 +257,14 @@ NodeCatalog makeDefaultFakeCatalog() {
     kernel.kind = ParamKind::RealArray;
     // 3x3 单位核（行主序），中心为 1。
     kernel.defaultValue = std::vector<double>{0, 0, 0, 0, 1, 0, 0, 0, 0};
-    conv.params = {kernelSize, kernel};
+    // M4-04 冻结的边界填充策略（image_workflow_design.md §6/§7）。
+    ParamDescriptor border;
+    border.id = "border";
+    border.label = "边界";
+    border.kind = ParamKind::Enumeration;
+    border.defaultValue = std::string("clamp");
+    border.enumOptions = {"clamp", "reflect", "zero"};
+    conv.params = {kernelSize, kernel, border};
     catalog.nodes.push_back(std::move(conv));
 
     NodeDescriptor histEq;

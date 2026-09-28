@@ -49,6 +49,13 @@ const ImageU8& singleInput(const NodeDescriptor& descriptor,
     return image;
 }
 
+/// round-half-up 量化后饱和到 [0,255]（M4-03 bilinear 同款量化语义，M4-04 起为
+/// 卷积/高斯族共用助手）。
+std::uint8_t quantizeU8(double value) {
+    const double quantized = std::floor(value + 0.5);
+    return static_cast<std::uint8_t>(std::clamp(quantized, 0.0, 255.0));
+}
+
 /// 构造期参数读取：声明缺失或值种类错位（运行期直接构造的实例）显式失败，
 /// 由 buildNodeGraph 转为校验问题（BadParam）。
 std::int64_t requiredInteger(const NodeDescriptor& descriptor, const NodeInstance& instance,
@@ -249,6 +256,295 @@ private:
     double scale_ = 0.5;
 };
 
+/// 边界填充策略（M4-04 冻结语义，§7）。
+enum class ConvBorder {
+    Clamp,    /// 复制边缘像素（下标饱和到 [0,n−1]，默认；模糊类核无暗边）。
+    Reflect,  /// 镜像不重复边缘像素（reflect-101：−1→1、n→n−2）。
+    Zero,     /// 越界像素按 0（黑）计，对应系数项不贡献累加和。
+};
+
+/// Reflect-101 采样下标：周期 2(n−1) 折返（−1→1、n→n−2）；n=1 时一律取 0
+/// （零宽高在 ImageU8 层已被拒绝，此为防御）。
+std::int64_t reflectIndex(std::int64_t index, std::int64_t size) {
+    if (size <= 1) {
+        return 0;
+    }
+    const std::int64_t period = 2 * (size - 1);
+    std::int64_t folded = index % period;
+    if (folded < 0) {
+        folded += period;
+    }
+    if (folded >= size) {
+        folded = period - folded;
+    }
+    return folded;
+}
+
+/// 自定义卷积（M4-04）：Gray8 → Gray8，核尺寸/系数/边界策略构造期定型；输出
+/// 与输入同尺寸。执行为相关语义（核不翻转，系数矩阵与邻域逐点对应），double
+/// 累加后 round-half-up 饱和量化；数值语义见 image_workflow_design.md §7。
+class ConvKernelImageNode final : public IImageNode {
+public:
+    ConvKernelImageNode(const NodeDescriptor& descriptor, const NodeInstance& instance)
+        : descriptor_(descriptor) {
+        const std::optional<std::string> size = paramEnumeration(descriptor_, instance, "size");
+        if (!size) {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': parameter 'size'"
+                                        " is missing or has a mismatched kind");
+        }
+        if (*size == "1") {
+            kernelSize_ = 1;
+        } else if (*size == "3") {
+            kernelSize_ = 3;
+        } else if (*size == "5") {
+            kernelSize_ = 5;
+        } else {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': unknown size option '" +
+                                        *size + "'");
+        }
+        const std::optional<std::vector<double>> kernel =
+            paramRealArray(descriptor_, instance, "kernel");
+        if (!kernel) {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': parameter 'kernel'"
+                                        " is missing or has a mismatched kind");
+        }
+        if (kernel->size() != static_cast<std::size_t>(kernelSize_) * kernelSize_) {
+            throw std::invalid_argument(
+                "'" + descriptor_.typeId + "': kernel expects " +
+                std::to_string(kernelSize_ * kernelSize_) + " coefficients (row-major " +
+                std::to_string(kernelSize_) + "x" + std::to_string(kernelSize_) + "), got " +
+                std::to_string(kernel->size()));
+        }
+        for (const double coefficient : *kernel) {
+            if (!std::isfinite(coefficient)) {
+                throw std::invalid_argument("'" + descriptor_.typeId +
+                                            "': kernel coefficients must be finite");
+            }
+        }
+        kernel_ = *kernel;
+        border_ = requiredBorder(descriptor_, instance);
+    }
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
+        const ImageU8& source = singleInput(descriptor_, inputs);
+        const std::uint32_t width = source.width();
+        const std::uint32_t height = source.height();
+        const std::uint32_t es = elementSize(source.format());
+        const std::int64_t radius = kernelSize_ / 2;
+        // 采样下标预解析（每输出坐标 × K；Zero 策略越界为 -1 哨兵，跳过累加）。
+        std::vector<std::int64_t> sourceX(static_cast<std::size_t>(width) * kernelSize_);
+        for (std::uint32_t x = 0; x < width; ++x) {
+            for (std::int64_t j = 0; j < kernelSize_; ++j) {
+                sourceX[static_cast<std::size_t>(x) * kernelSize_ + j] =
+                    resolveBorder(static_cast<std::int64_t>(x) + j - radius, width);
+            }
+        }
+        std::vector<std::int64_t> sourceY(static_cast<std::size_t>(height) * kernelSize_);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            for (std::int64_t j = 0; j < kernelSize_; ++j) {
+                sourceY[static_cast<std::size_t>(y) * kernelSize_ + j] =
+                    resolveBorder(static_cast<std::int64_t>(y) + j - radius, height);
+            }
+        }
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * es * height);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const std::int64_t* offsetY = &sourceY[static_cast<std::size_t>(y) * kernelSize_];
+            std::uint8_t* dstRow = buffer.data() + static_cast<std::size_t>(y) * width * es;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const std::int64_t* offsetX = &sourceX[static_cast<std::size_t>(x) * kernelSize_];
+                std::uint8_t* dst = dstRow + static_cast<std::size_t>(x) * es;
+                for (std::uint32_t c = 0; c < es; ++c) {
+                    double accumulator = 0.0;
+                    for (std::int64_t ky = 0; ky < kernelSize_; ++ky) {
+                        if (offsetY[ky] < 0) {
+                            continue;  // Zero 策略越界：按黑计，不贡献。
+                        }
+                        const std::uint8_t* row = source.row(
+                            static_cast<std::uint32_t>(offsetY[ky]));
+                        for (std::int64_t kx = 0; kx < kernelSize_; ++kx) {
+                            if (offsetX[kx] < 0) {
+                                continue;
+                            }
+                            accumulator += kernel_[static_cast<std::size_t>(ky) * kernelSize_ +
+                                                   kx] *
+                                           row[static_cast<std::size_t>(offsetX[kx]) * es + c];
+                        }
+                    }
+                    dst[c] = quantizeU8(accumulator);
+                }
+            }
+        }
+        return {freezeImage(source.format(), width, height, std::move(buffer))};
+    }
+
+private:
+    /// 构造期边界策略读取（ Enumeration，默认 clamp 由目录声明给出；此处读取
+    /// 生效值并防御非法选项/种类错位）。
+    static ConvBorder requiredBorder(const NodeDescriptor& descriptor,
+                                     const NodeInstance& instance) {
+        const std::optional<std::string> border = paramEnumeration(descriptor, instance, "border");
+        if (!border) {
+            throw std::invalid_argument("'" + descriptor.typeId + "': parameter 'border'"
+                                        " is missing or has a mismatched kind");
+        }
+        if (*border == "clamp") {
+            return ConvBorder::Clamp;
+        }
+        if (*border == "reflect") {
+            return ConvBorder::Reflect;
+        }
+        if (*border == "zero") {
+            return ConvBorder::Zero;
+        }
+        throw std::invalid_argument("'" + descriptor.typeId + "': unknown border option '" +
+                                    *border + "'");
+    }
+
+    /// 采样下标解析：越界按策略映射；Zero 策略返回 -1 哨兵（按黑计）。
+    [[nodiscard]] std::int64_t resolveBorder(std::int64_t index, std::uint32_t size) const {
+        const std::int64_t bound = static_cast<std::int64_t>(size);
+        switch (border_) {
+        case ConvBorder::Clamp:
+            return std::clamp(index, std::int64_t{0}, bound - 1);
+        case ConvBorder::Reflect:
+            return reflectIndex(index, bound);
+        case ConvBorder::Zero:
+            return (index >= 0 && index < bound) ? index : std::int64_t{-1};
+        }
+        return 0;
+    }
+
+    NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
+    std::int64_t kernelSize_ = 3;
+    std::vector<double> kernel_{0, 0, 0, 0, 1, 0, 0, 0, 0};
+    ConvBorder border_ = ConvBorder::Clamp;
+};
+
+/// 高斯模糊（M4-04）：Gray8 → Gray8，半径（K = 2·radius+1）与 sigma 构造期定型；
+/// 可分离两趟（水平→垂直）+ 固定 clamp 边界 + double 中间结果一次量化。数值
+/// 语义见 image_workflow_design.md §7（sigma=0 为 δ 核恒等输出）。
+class GaussianBlurImageNode final : public IImageNode {
+public:
+    GaussianBlurImageNode(const NodeDescriptor& descriptor, const NodeInstance& instance)
+        : descriptor_(descriptor) {
+        const std::optional<std::int64_t> radius = paramInteger(descriptor_, instance, "radius");
+        if (!radius) {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': parameter 'radius'"
+                                        " is missing or has a mismatched kind");
+        }
+        // 图准入范围 [1,10]；构造期复核为防御运行期直接构造的实例。
+        if (*radius < 1 || *radius > 10) {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': radius must be in"
+                                        " [1, 10], got " + std::to_string(*radius));
+        }
+        radius_ = static_cast<int>(*radius);
+        const std::optional<double> sigma = paramReal(descriptor_, instance, "sigma");
+        if (!sigma) {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': parameter 'sigma'"
+                                        " is missing or has a mismatched kind");
+        }
+        if (!std::isfinite(*sigma) || *sigma < 0.0 || *sigma > 10.0) {
+            throw std::invalid_argument("'" + descriptor_.typeId + "': sigma must be finite"
+                                        " in [0, 10], got " + std::to_string(*sigma));
+        }
+        sigma_ = *sigma;
+    }
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
+        const ImageU8& source = singleInput(descriptor_, inputs);
+        const std::uint32_t width = source.width();
+        const std::uint32_t height = source.height();
+        const std::uint32_t es = elementSize(source.format());
+        const std::vector<double> kernel = gaussianKernel();
+        const int radius = radius_;
+        // 水平趟：行内 clamp 下标（逐行预解析源下标，double 中间结果不量化）。
+        std::vector<std::int64_t> offsetX(static_cast<std::size_t>(width) * kernel.size());
+        for (std::uint32_t x = 0; x < width; ++x) {
+            for (std::size_t j = 0; j < kernel.size(); ++j) {
+                offsetX[static_cast<std::size_t>(x) * kernel.size() + j] = std::clamp(
+                    static_cast<std::int64_t>(x) + static_cast<std::int64_t>(j) - radius,
+                    std::int64_t{0}, static_cast<std::int64_t>(width) - 1);
+            }
+        }
+        std::vector<double> intermediate(static_cast<std::size_t>(width) * es * height);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const std::uint8_t* srcRow = source.row(y);
+            double* dstRow = intermediate.data() + static_cast<std::size_t>(y) * width * es;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const std::int64_t* offsets =
+                    &offsetX[static_cast<std::size_t>(x) * kernel.size()];
+                double* dst = dstRow + static_cast<std::size_t>(x) * es;
+                for (std::uint32_t c = 0; c < es; ++c) {
+                    double accumulator = 0.0;
+                    for (std::size_t j = 0; j < kernel.size(); ++j) {
+                        accumulator +=
+                            kernel[j] * srcRow[static_cast<std::size_t>(offsets[j]) * es + c];
+                    }
+                    dst[c] = accumulator;
+                }
+            }
+        }
+        // 垂直趟：中间结果行下标 clamp，最终一次 round-half-up 饱和量化。
+        std::vector<const double*> rowOffsets(kernel.size());
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * es * height);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            std::uint8_t* dstRow = buffer.data() + static_cast<std::size_t>(y) * width * es;
+            for (std::size_t j = 0; j < kernel.size(); ++j) {
+                const std::int64_t sy = std::clamp(static_cast<std::int64_t>(y) +
+                                                       static_cast<std::int64_t>(j) - radius,
+                                                   std::int64_t{0},
+                                                   static_cast<std::int64_t>(height) - 1);
+                rowOffsets[j] = intermediate.data() + static_cast<std::size_t>(sy) * width * es;
+            }
+            for (std::uint32_t x = 0; x < width; ++x) {
+                std::uint8_t* dst = dstRow + static_cast<std::size_t>(x) * es;
+                for (std::uint32_t c = 0; c < es; ++c) {
+                    double accumulator = 0.0;
+                    for (std::size_t j = 0; j < kernel.size(); ++j) {
+                        accumulator += kernel[j] * rowOffsets[j][static_cast<std::size_t>(x) * es + c];
+                    }
+                    dst[c] = quantizeU8(accumulator);
+                }
+            }
+        }
+        return {freezeImage(source.format(), width, height, std::move(buffer))};
+    }
+
+private:
+    /// 一维高斯核：G[i] ∝ exp(−(i−r)²/(2σ²)) 归一化 Σ=1；sigma=0 为 δ 核
+    /// （极限语义，输出逐像素恒等）。二维核为该核与自身的外积（对称可分离）。
+    [[nodiscard]] std::vector<double> gaussianKernel() const {
+        const std::size_t size = static_cast<std::size_t>(2 * radius_ + 1);
+        std::vector<double> kernel(size, 0.0);
+        if (sigma_ == 0.0) {
+            kernel[static_cast<std::size_t>(radius_)] = 1.0;
+            return kernel;
+        }
+        double sum = 0.0;
+        for (std::size_t i = 0; i < size; ++i) {
+            const double delta = static_cast<double>(i) - static_cast<double>(radius_);
+            kernel[i] = std::exp(-(delta * delta) / (2.0 * sigma_ * sigma_));
+            sum += kernel[i];
+        }
+        for (double& value : kernel) {
+            value /= sum;
+        }
+        return kernel;
+    }
+
+    NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
+    int radius_ = 3;
+    double sigma_ = 1.5;
+};
+
 }  // namespace
 
 std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descriptor,
@@ -262,8 +558,14 @@ std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descripto
     if (descriptor.typeId == "downscale") {
         return std::make_unique<DownscaleImageNode>(descriptor, instance);
     }
+    if (descriptor.typeId == "gaussian_blur") {
+        return std::make_unique<GaussianBlurImageNode>(descriptor, instance);
+    }
+    if (descriptor.typeId == "conv_kernel") {
+        return std::make_unique<ConvKernelImageNode>(descriptor, instance);
+    }
     throw std::invalid_argument("no core implementation for node type '" + descriptor.typeId +
-                                "' (M4-04..06 operators are not implemented yet)");
+                                "' (M4-05..06 operators are not implemented yet)");
 }
 
 }  // namespace rin
