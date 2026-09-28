@@ -8,6 +8,10 @@
 // 5) convertDepth16ToRgba8 统一入口：Grayscale 路径参数校验、raw=0 黑色、端点/中点
 //    精确值（近白远黑）、区间外截断、随距离亮度单调不增、行 padding 等价、
 //    Jet 包装与统一入口逐字节一致（回归锁定）、Grayscale 与 Jet 输出存在差异。
+// 6) AdaptiveGrayscale（DEC-007 扩展）：adaptiveGrayscaleColor 端点/中点/超界
+//    clamp/通道恒等；转换按帧内最大有效值归一化（参照 level=round(raw*255/frameMax)
+//    逐像素核对）、raw=0 黑且不入 frameMax、全零帧、尺度与 near/far 不变性、
+//    参数校验、stride padding 不泄漏、与 Grayscale 差异、灰度单调不减。
 #include "test_util.hpp"
 
 #include <array>
@@ -35,6 +39,12 @@ Rgba jetAt(float t) {
 Rgba grayAt(float t) {
     Rgba c{};
     rin::grayscaleColor(t, c.data());
+    return c;
+}
+
+Rgba adaptiveAt(float t) {
+    Rgba c{};
+    rin::adaptiveGrayscaleColor(t, c.data());
     return c;
 }
 
@@ -431,6 +441,215 @@ int main() {
         // 差异应出现在非端点像素（raw=3350）：灰度 128 vs jet 绿峰 {128,255,128}。
         RIN_CHECK(sameColor(jet.data() + 4, 128, 255, 128, 255));
         RIN_CHECK(sameColor(gray.data() + 4, 128, 128, 128, 255));
+    }
+
+    // ============ AdaptiveGrayscale（DEC-007 扩展）============
+
+    // 22) adaptiveGrayscaleColor 端点精确值：t=0 纯黑、t=1 纯白。
+    {
+        RIN_CHECK(adaptiveAt(0.0f) == (Rgba{0, 0, 0, 255}));
+        RIN_CHECK(adaptiveAt(1.0f) == (Rgba{255, 255, 255, 255}));
+    }
+
+    // 23) 中点 t=0.5 -> 128（+0.5 取整）；超界 clamp；线性抽检；任意 t 下
+    //     R==G==B 恒成立且 A=255。
+    {
+        RIN_CHECK(adaptiveAt(0.5f) == (Rgba{128, 128, 128, 255}));
+        const Rgba a0 = adaptiveAt(0.0f);
+        const Rgba a1 = adaptiveAt(1.0f);
+        RIN_CHECK(adaptiveAt(-1.0f) == a0);
+        RIN_CHECK(adaptiveAt(-0.0001f) == a0);
+        RIN_CHECK(adaptiveAt(1.0001f) == a1);
+        RIN_CHECK(adaptiveAt(2.0f) == a1);
+        // level(0.25) = 0.25*255+0.5 = 64.25 -> 64。
+        RIN_CHECK(adaptiveAt(0.25f) == (Rgba{64, 64, 64, 255}));
+        // level(0.75) = 0.75*255+0.5 = 191.75 -> 191。
+        RIN_CHECK(adaptiveAt(0.75f) == (Rgba{191, 191, 191, 255}));
+        for (int i = -20; i <= 120; ++i) {  // 含超界样本 [-0.2, 1.2]
+            const float t = static_cast<float>(i) / 100.0f;
+            const Rgba c = adaptiveAt(t);
+            RIN_CHECK_EQ(c[0], c[1]);
+            RIN_CHECK_EQ(c[1], c[2]);
+            RIN_CHECK_EQ(c[3], std::uint8_t{255});
+        }
+    }
+
+    // 24) 转换语义（scale=0.001、near=0.2、far=6.5，与适配器常量一致）：帧内最大值
+    //     像素纯白；其余非零像素按参照 level=round(raw*255/frameMax) 逐像素核对；
+    //     raw=0 输出不透明黑且不参与 frameMax。
+    {
+        constexpr float kScale = 0.001f;
+        constexpr float kNear = 0.2f;
+        constexpr float kFar = 6.5f;
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        const std::uint16_t depth[6] = {0, 100, 500, 0, 250, 1000};  // frameMax=1000
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 6, 1, 6, kScale, kNear, kFar, scheme, rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{24});
+        // 参照 level（正值下与实现 +0.5 截断一致）：-1 表示 raw==0 应为不透明黑。
+        const int expectedLevel[6] = {-1, 26, 128, -1, 64, 255};
+        for (int p = 0; p < 6; ++p) {
+            const std::size_t offset = static_cast<std::size_t>(p) * 4;
+            if (expectedLevel[p] < 0) {
+                RIN_CHECK(sameColor(rgba.data() + offset, 0, 0, 0, 255));
+                continue;
+            }
+            RIN_CHECK_EQ(rgba[offset + 0], static_cast<std::uint8_t>(expectedLevel[p]));
+            RIN_CHECK_EQ(rgba[offset + 1], static_cast<std::uint8_t>(expectedLevel[p]));
+            RIN_CHECK_EQ(rgba[offset + 2], static_cast<std::uint8_t>(expectedLevel[p]));
+            RIN_CHECK_EQ(rgba[offset + 3], std::uint8_t{255});
+            // 双重参照：经纯函数 adaptiveGrayscaleColor 以同一 t=raw/frameMax 核对。
+            const Rgba ref =
+                adaptiveAt(static_cast<float>(depth[static_cast<std::size_t>(p)]) / 1000.0f);
+            RIN_CHECK(sameColor(rgba.data() + offset, ref[0], ref[1], ref[2], ref[3]));
+        }
+        RIN_CHECK(sameColor(rgba.data() + 20, 255, 255, 255, 255));  // 帧内最大 -> 纯白
+    }
+
+    // 25) 全帧 raw==0：整帧不透明黑（含 alpha==255），返回 true。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        std::vector<std::uint16_t> depth(6, 0);  // 3x2 全无效
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(), 3, 2, 3, 0.001f, 0.2f, 6.5f, scheme,
+                                             rgba));
+        RIN_CHECK_EQ(rgba.size(), std::size_t{24});
+        for (std::size_t offset = 0; offset + 3 < rgba.size(); offset += 4) {
+            RIN_CHECK(sameColor(rgba.data() + offset, 0, 0, 0, 255));
+        }
+    }
+
+    // 26) 尺度不变性：同一 raw 图，depthScale=0.001 与 0.002 输出逐字节一致。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        const std::uint16_t depth[5] = {0, 300, 700, 1200, 2500};
+        std::vector<std::uint8_t> outA;
+        std::vector<std::uint8_t> outB;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 5, 1, 5, 0.001f, 0.2f, 6.5f, scheme, outA));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 5, 1, 5, 0.002f, 0.2f, 6.5f, scheme, outB));
+        RIN_CHECK(outA == outB);
+    }
+
+    // 27) near/far 不影响输出（两组参数均合法，否则入口直接拒绝）：逐字节一致。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        const std::uint16_t depth[4] = {0, 400, 1600, 3200};
+        std::vector<std::uint8_t> outA;
+        std::vector<std::uint8_t> outB;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 4, 1, 4, 0.001f, 0.2f, 6.5f, scheme, outA));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 4, 1, 4, 0.001f, 1.0f, 3.0f, scheme, outB));
+        RIN_CHECK(outA == outB);
+    }
+
+    // 28) 参数校验在 AdaptiveGrayscale 下同样生效：返回 false 且 dst 不被写。
+    {
+        const std::uint16_t depth[4] = {100, 200, 300, 400};
+        std::vector<std::uint8_t> dst{0x5A, 0x5A};
+        const std::vector<std::uint8_t> sentinel = dst;
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        RIN_CHECK(!rin::convertDepth16ToRgba8(nullptr, 2, 1, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 0, 1, 0, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 0, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 3, 1, 2, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 1, 0.001f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, 0.0f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, -1.0f, 0.2f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, 0.001f, 6.5f, 6.5f, scheme, dst));
+        RIN_CHECK(!rin::convertDepth16ToRgba8(depth, 2, 1, 2, 0.001f, 6.5f, 0.2f, scheme, dst));
+        RIN_CHECK(dst == sentinel);
+    }
+
+    // 29) stride > width：padding 哨兵 0xFFFF 不参与 frameMax 也不出现在输出；
+    //     各像素取自正确行偏移（与紧凑输入逐字节一致 + 精确值抽检）。
+    {
+        constexpr std::uint32_t kWidth = 3;
+        constexpr std::uint32_t kHeight = 2;
+        constexpr std::uint32_t kStrideUnits = 5;
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        const std::uint16_t compact[6] = {1000, 2000, 4000, 4000, 2000, 1000};  // frameMax=4000
+        std::vector<std::uint16_t> padded(kStrideUnits * kHeight, 0xFFFF);
+        for (std::uint32_t row = 0; row < kHeight; ++row) {
+            for (std::uint32_t col = 0; col < kWidth; ++col) {
+                padded[row * kStrideUnits + col] = compact[row * kWidth + col];
+            }
+        }
+        std::vector<std::uint8_t> fromCompact;
+        std::vector<std::uint8_t> fromPadded;
+        RIN_CHECK(rin::convertDepth16ToRgba8(compact, kWidth, kHeight, kWidth, 0.001f, 0.2f,
+                                             6.5f, scheme, fromCompact));
+        RIN_CHECK(rin::convertDepth16ToRgba8(padded.data(), kWidth, kHeight, kStrideUnits,
+                                             0.001f, 0.2f, 6.5f, scheme, fromPadded));
+        RIN_CHECK(fromCompact == fromPadded);  // padding 单元不泄漏、行间不错位
+        RIN_CHECK_EQ(fromPadded.size(), std::size_t{kWidth * kHeight * 4});
+        // 精确值：raw=4000 -> 255、raw=2000 -> 128、raw=1000 -> 64。
+        // 行 1 首像素取自行 1（若错位到行 0 padding 0xFFFF 会导致 frameMax 异常）。
+        RIN_CHECK(sameColor(fromPadded.data() + 0, 64, 64, 64, 255));
+        RIN_CHECK(sameColor(fromPadded.data() + 8, 255, 255, 255, 255));
+        RIN_CHECK(sameColor(fromPadded.data() + 12, 255, 255, 255, 255));
+        RIN_CHECK(sameColor(fromPadded.data() + 20, 64, 64, 64, 255));
+        // 0xFFFF 若入 frameMax，raw=4000 只得 16；三态集合可区分该泄漏。
+        for (std::size_t offset = 0; offset + 3 < fromPadded.size(); offset += 4) {
+            const std::uint8_t level = fromPadded[offset];
+            RIN_CHECK(level == 64 || level == 128 || level == 255);
+            RIN_CHECK_EQ(fromPadded[offset + 3], std::uint8_t{255});
+        }
+    }
+
+    // 30) 同一输入下 AdaptiveGrayscale 与 Grayscale 存在差异，三态（近黑/中灰/远白
+    //     vs 近白/中灰/远黑）可区分。
+    {
+        const std::uint16_t depth[3] = {200, 3350, 6500};  // adaptive frameMax=6500
+        std::vector<std::uint8_t> gray;
+        std::vector<std::uint8_t> adaptive;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 3, 1, 3, 0.001f, 0.2f, 6.5f,
+                                             rin::DepthColorScheme::Grayscale, gray));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 3, 1, 3, 0.001f, 0.2f, 6.5f,
+                                             rin::DepthColorScheme::AdaptiveGrayscale, adaptive));
+        bool differs = false;
+        for (std::size_t i = 0; i < gray.size(); ++i) {
+            if (gray[i] != adaptive[i]) {
+                differs = true;
+            }
+        }
+        RIN_CHECK(differs);
+        // Grayscale：近白远黑（255/128/0）；Adaptive：近黑远白（8/131/255）。
+        RIN_CHECK(sameColor(gray.data() + 0, 255, 255, 255, 255));
+        RIN_CHECK(sameColor(gray.data() + 8, 0, 0, 0, 255));
+        RIN_CHECK(sameColor(adaptive.data() + 0, 8, 8, 8, 255));
+        RIN_CHECK(sameColor(adaptive.data() + 4, 131, 131, 131, 255));
+        RIN_CHECK(sameColor(adaptive.data() + 8, 255, 255, 255, 255));
+    }
+
+    // 31) 单调性：raw 递增（非零、不超过 frameMax）时输出灰度单调不减；
+    //     且任意样本 R==G==B（逐像素经 adaptiveGrayscaleColor 参照核对）。
+    {
+        const auto scheme = rin::DepthColorScheme::AdaptiveGrayscale;
+        constexpr int kSamples = 64;
+        std::vector<std::uint16_t> depth;
+        depth.reserve(kSamples);
+        for (int s = 0; s < kSamples; ++s) {
+            // 100..1000 递增铺满（frameMax=1000，全部非零且 <= frameMax）。
+            depth.push_back(
+                static_cast<std::uint16_t>(100 + (1000 - 100) * s / (kSamples - 1)));
+        }
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth.data(),
+                                             static_cast<std::uint32_t>(depth.size()), 1,
+                                             static_cast<std::uint32_t>(depth.size()), 0.001f,
+                                             0.2f, 6.5f, scheme, rgba));
+        for (int s = 0; s < kSamples; ++s) {
+            const std::size_t offset = static_cast<std::size_t>(s) * 4;
+            RIN_CHECK_EQ(rgba[offset + 0], rgba[offset + 1]);
+            RIN_CHECK_EQ(rgba[offset + 1], rgba[offset + 2]);
+            RIN_CHECK_EQ(rgba[offset + 3], std::uint8_t{255});
+            // 参照核对：经纯函数以同一 t=raw/frameMax 重算。
+            const Rgba ref =
+                adaptiveAt(static_cast<float>(depth[static_cast<std::size_t>(s)]) / 1000.0f);
+            RIN_CHECK(sameColor(rgba.data() + offset, ref[0], ref[1], ref[2], ref[3]));
+            if (s > 0) {
+                RIN_CHECK(rgba[offset] >= rgba[offset - 4]);  // 近黑远白：非减
+            }
+        }
     }
 
     return rin_test::exitStatus();
