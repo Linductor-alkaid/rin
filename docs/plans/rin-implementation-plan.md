@@ -1,7 +1,7 @@
 # Rin 实施总计划
 
 > 状态：In Progress
-> 最后更新：2026-09-28
+> 最后更新：2026-09-29
 > 负责人：Linductor-alkaid
 
 ## 当前整体状态
@@ -57,8 +57,13 @@ ctest 四预设 18/18；冒烟发现并修复 M5-03 调色板临时目录悬垂�
 产出（M4 节点目录表与逐算子 golden 测试项，DEC-012 FFT 2 幂填充约束 golden 化）；
 契约单测 image_contracts 133 项 + node_graph 148 项 + public_boundary 30 项
 debug/asan/ubsan 0 失败 [独立验证两轮，第一轮暴露 buildNodeGraph 拓扑组装缺陷
-修复后复验 PASS]，全量 ctest 三预设 21/21）。`M4-03`（几何算子节点）为下一
-工作项。
+修复后复验 PASS]，全量 ctest 三预设 21/21）。2026-09-29 `M4-03` 完成：几何算子
+节点落地（`makeDefaultImageNode` 默认工厂 + crop/downscale 实现，§7 冻结数值
+语义：crop ROI 退化/越界 apply 期显式拒绝、输出紧凑新缓冲；downscale 输出尺寸
+floor 公式、nearest 面积覆盖采样与 bilinear 中心对齐插值 round-half-up、scale=1
+恒等；golden 几何单测 165 项 + public_boundary 扩展 33 项 debug/asan/ubsan
+0 失败 [独立验证一轮 PASS]，全量 ctest 三预设 22/22）。`M4-04`（卷积算子节点）
+为下一工作项。
 
 ## 交付边界（SCOPE）
 

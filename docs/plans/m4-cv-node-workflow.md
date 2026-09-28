@@ -6,7 +6,7 @@
 > 前置：M1（与 M3 无代码耦合，可并行排期；建议 M3 后实施）；`M4-09` 视图契约
 > 按 DEC-016 先于 M5 骨架实施
 > 建议发布点：v0.4.0
-> 更新日期：2026-09-28
+> 更新日期：2026-09-29
 
 ## 目标
 
@@ -55,7 +55,7 @@
       界）、`IImageNode`（类型化参数模型 + `apply`）、端口类型系统、`NodeGraph`
       构建与校验（环、悬空输入、类型不匹配显式拒绝）。完成判据：契约与校验单测
       通过。
-- [ ] `M4-03` 几何算子节点：裁切（ROI 越界与退化区域拒绝）、降分辨率（最近邻 /
+- [x] `M4-03` 几何算子节点：裁切（ROI 越界与退化区域拒绝）、降分辨率（最近邻 /
       双线性）。完成判据：golden 数值测试通过。
 - [ ] `M4-04` 卷积算子节点：自定义 KxK 卷积核（1/3/5，边界填充策略可配）、高斯
       模糊（核尺寸 / sigma）。完成判据：数值测试（已知核响应、可分离高斯与直接
@@ -108,6 +108,41 @@
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-29：`M4-03` 完成关闭——几何算子节点落地（`rin_core`，零第三方公开依赖，
+RULE-01）。新增 `include/rin/image_ops.hpp`（`makeDefaultImageNode` 默认工厂：
+crop/downscale 返回实现、"source" 返回 nullptr 注入语义、未实现 M4 类型抛
+`std::invalid_argument` 显式暴露目录与工厂能力偏差，M4-04..06 扩展同口径）+
+`src/core/image_ops.cpp`（算子输出统一"先填后冻结"路径：mutable 缓冲填充后经
+`ImageU8::wrap` 以 const 共享，输出一律紧凑 stride = 宽×elementSize）。
+数值语义随本工作项在
+[design/image_workflow_design.md](../design/image_workflow_design.md) §7 冻结：
+crop ROI 退化（w/h ≤ 0）与越界（x+w > 输入宽等，uint64 运算，运行期直接构造的
+负值按无符号回绕自然落入越界拒绝）在 apply 期抛 `std::invalid_argument`（图像
+尺寸是运行期数据，构造期无法判定），输出为逐行 memcpy 的新紧凑缓冲、不共享源
+像素；downscale 输出尺寸 floor(in×scale)（< 1 退化输出显式拒绝）、scale ∈ (0,1]
+构造期复核（准入范围 [0.1,1.0] 之外的直接构造防御）、nearest 面积覆盖采样
+（src = min(floor((out+0.5)×ratio), in−1)）、bilinear 中心对齐（srcf =
+(out+0.5)×ratio − 0.5 饱和后插值，逐通道独立、不预乘 alpha、floor(v+0.5)
+round-half-up 量化）、scale=1.0 两种插值均逐像素恒等（公式自然给出，无特例
+快路径）。测试（Independent-Verification-Agent 独立编写执行，一轮 PASS，
+实现文件对验证方只读以保证 golden 独立性）：新增
+`tests/test_image_ops_geometry.cpp` 165 项（工厂三分支/参数构造期拒绝、crop
+像素级 golden/全图恒等/padding stride 输入/越界与退化全分支/默认参数 64×64、
+downscale nearest 与 bilinear 手推字节向量 golden〔含 round-half-up 半值
+锁定、逐通道独立 alpha 不预乘判别〕/floor 尺寸/scale=1 恒等/常值不变/线性
+渐变容差/37×23 独立 double 参考交叉验证/退化输出拒绝/构造期非法 scale 与
+未知插值拒绝、source→crop→downscale 图集成 golden、图内越界异常原样传播、
+未实现类型 buildNodeGraph 显式 BadParam）；`test_public_boundary.cpp` 扩展
+image_ops.hpp 包含与最小实例化（30→33 项）。debug/asan/ubsan 三预设全量
+ctest 22/22（含 D435if 真机硬件冒烟，设备在位通过），asan/ubsan 零报告、编译
+零警告。环境：x86_64 Linux，GCC 13，CMake presets debug/asan/ubsan；tsan 未跑
+（本层单线程纯逻辑，DOD-02 并发矩阵归 `M4-07` 引擎，与 `M4-02` 先例一致）。
+已知未测路径：nearest 下标 clamp 与 bilinear 饱和的上界分支数学上不可达
+（scale ≤ 1 时 (out+0.5)×ratio < in 恒成立），仅作浮点防御。第一轮验证中
+7 项中途失败经取证均为测试侧错误（期望缓冲尺寸误用、round-half-up 预测的
+数学展开错误、边界测试 descriptor 缺参数声明），实现与冻结语义逐项吻合；
+`M4-04`（卷积算子节点）为下一工作项。
 
 2026-09-28：`M4-02` 完成关闭——Core 图像与节点契约落地（`rin_core`，零第三方
 公开依赖，RULE-01）。新增 `include/rin/image_types.hpp`（`ImageU8`：Gray8/Rgba8、
