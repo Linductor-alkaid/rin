@@ -52,7 +52,10 @@
 - 状态：Reported（上游 issue sudoevolve/EUI-NEO#72；viewer 已按现语义接线：
   `resolutionOpen` 信号，行为正确）
 - 跟进：2026-09-23 登记；同日真机 UI 点击验证分辨率切换链路（848x480→640x360，
-  内参同步更新）并提交上游 issue #72。
+  内参同步更新）并提交上游 issue #72。2026-09-28 `M5-04` 参数面板 Enumeration
+  下拉按本条语义接线（`bindOpen` 外接开合 + 选项点击组件回调自动收起），行为
+  正确；弹层浮于后续参数行依赖同父容器 zIndex 抬升（DEC-005 层叠纪律），无新
+  缺口。
 
 ### EUI-20260923-003：动态纹理（`eui::ImageStream`）在当前 GL 栈渲染异常
 

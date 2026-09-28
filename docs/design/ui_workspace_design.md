@@ -155,6 +155,26 @@ UI 状态（DEC-014 决策 5：不入契约）。缩放=滚轮（以指针为锚
   图结构变更（增删节点/连线）在 Running 下走"待生效 → `GraphApplied` 已
   生效"状态条。
 
+> M5-04 实施补记（2026-09-28）：本节控件映射按如下方式落地——Boolean 为
+> `toggleSwitch`、Integer/Real 为 `slider`（hasRange 时归一化映射、Integer 取整、
+> 显示区间文本）+ `input`（即输即校验）、Enumeration 为 `dropdown`（`bindOpen`
+> 外接开合，台账 EUI-20260923-002；选中后组件自动收起弹层）、RealArray 为自研
+> 矩阵网格（行列步进 +R/-R/+C/-C 与单元文本输入，形状不入契约；初值形状按扁平
+> 数据完全平方数取 KxK、否则 1xN，重排尺寸行主序截断/零扩展）。组件接线纪律：
+> 颜色样式字段逐一取 viewer 令牌（SliderStyle/SwitchStyle/DropdownStyle/
+> InputStyle 显式赋值），组件几何度量（下拉标签字号/条目高度、开关行程）沿用
+> 组件默认——与 §6 调色板过滤框"显式字号/inset"并列的第三种纪实现场；阴影仅
+> 用于下拉弹层浮层。`slider`/`toggleSwitch`/`dropdown` 构建器无 position，统一
+> 包裹一层定位 stack；下拉弹层浮于后续参数行之上依赖同父容器 zIndex（展开时
+> 抬升包裹 stack，DEC-005"zIndex 不跨父容器"）。参数提交 = `requestParamUpdate`
+> 逐参数（同步拒绝就地报错）+ 引擎接受后记入画布模型（图结构变更时随
+> `applyGraph` 携带，图重建不丢参数）；**不经 `applyGraph`**——Running 下重复
+> 图重建触发事件刷屏（假引擎已知重建语义，M4-07 对齐项）。运行中滑条连续提交
+> 受参数命令队列容量约束，满时同步拒绝并就地报错（EXEC-07 显式呈现，不静默）。
+> 面板参数行超出参数区下限（底部缩略图块锚定）截断并以"+N more parameters"
+> 计数提示，不与缩略图重叠。控件回调按值捕获节点 id，不持有画布节点指针
+> （画布图变更会重排节点数组）。
+
 ### 5.6 中间结果查看
 
 - 选中节点 → 右面板底部显示该节点最近 `NodeOutputSnapshot` 缩略图
@@ -165,6 +185,16 @@ UI 状态（DEC-014 决策 5：不入契约）。缩放=滚轮（以指针为锚
   的主要用法（对应 Blender Viewer 节点语义的轻量替代）。
 - 上屏走 GpuFrameView 绕行路径（台账 EUI-20260923-003），缩略图降采样在
   提交侧完成（有界工作，`RULE-05`）。
+
+> M5-04 实施补记（2026-09-28）：缩略图路径落地为 `NodeOutputCache`（每节点仅
+> 最新一幅、容量 4 LRU 有界、引擎非 Running 整体排空——§4"停止/关闭排空"的
+> pump 边界实现）+ `thumbnailRgbaFromSnapshot`（最近邻降采样、只缩不放、最长
+> 边 ≤256，Gray8 复制为灰度 RGBA、Rgba8 处理 stride，sourceSequence 透传）+
+> GpuFrameView 上传；meta 显示"宽 x 高 · seq N"。节点执行失败（`NodeFailed`）
+> 经会话级失败标注呈现为画布节点 destructive 徽标 + 面板失败徽标（含最近失败
+> 消息）+ 底部事件列表条目；`Started`/`Stopped` 事件清空标注（新会话/会话结束）；
+> 事件通道为最新态语义，密集事件下可能漏读中间事件（契约允许），漏读只影响
+> 标注时效不影响引擎行为。
 
 ### 5.7 执行状态与性能面板
 
