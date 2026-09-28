@@ -234,3 +234,19 @@ target_include_directories(test_param_panel PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME param_panel COMMAND test_param_panel)
 set_tests_properties(param_panel PROPERTIES LABELS "unit")
+
+# M5-05 性能面板统计管道纯逻辑（apps/viewer/perf_model.hpp；ui_workspace_design.md
+# §5.7/§4/§7 测试清单）：统计数值文本（统一小数位 + 固定后缀的 DEC-005 mono 替代
+# 纪律）、WorkflowPerfState 统计管道（对契约假引擎的 sequence 推进消费、最新态
+# 快照合并、节点统计查找、停止/失败后末次值冻结与 live 标志切换、重启衔接、
+# clear 关闭排空后 stale 统计不复活）。单线程纯逻辑（消费走假引擎契约面，owner
+# 线程直接调用，无并发；DOD-02 矩阵不适用，见文件头说明）；compose 绘制路径
+# （工具栏状态徽标/节点耗时徽标/右面板总览）需活动 EUI 运行时，headless 不可测
+# （真机视觉验收归 M5-07）。
+add_executable(test_perf_panel test_perf_panel.cpp)
+target_link_libraries(test_perf_panel PRIVATE rin::workflow_fake)
+target_include_directories(test_perf_panel PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME perf_panel COMMAND test_perf_panel)
+set_tests_properties(perf_panel PROPERTIES LABELS "unit")
