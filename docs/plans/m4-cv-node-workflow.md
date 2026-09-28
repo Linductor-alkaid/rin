@@ -1,12 +1,12 @@
 # M4：图像处理节点库与工作流引擎
 
-> 状态：Planned
+> 状态：In Progress
 > 负责人：Linductor-alkaid（授权 Agent 按工程规范自治执行）
 > 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：M1（与 M3 无代码耦合，可并行排期；建议 M3 后实施）；`M4-09` 视图契约
 > 按 DEC-016 先于 M5 骨架实施
 > 建议发布点：v0.4.0
-> 更新日期：2026-09-24
+> 更新日期：2026-09-28
 
 ## 目标
 
@@ -46,7 +46,7 @@
 
 ## 工作项
 
-- [ ] `M4-01` 调研并冻结图像算子实现策略（`DEC-012`）：对比引入 OpenCV
+- [x] `M4-01` 调研并冻结图像算子实现策略（`DEC-012`）：对比引入 OpenCV
       （external pin）、自研算子 + 小型 FFT 第三方库（如 kissfft 类）、全自研 FFT
       的构建体积、CI 时长、许可证与性能（512² 与 848×480 灰度 FFT 实测）。
       完成判据：`DEC-012` `Accepted` + 基准数据；新依赖同步 lock/许可证/供应链
@@ -108,6 +108,60 @@
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-28：`M4-01` 完成关闭——[DEC-012](../decisions/DEC-012-image-operator-strategy.md)
+冻结（`Accepted`）：**基础算子自研 + pinned kissfft `131.2.0`（BSD-3-Clause）承载
+FFT 族，FFT 节点内部零填充到 2 幂**。取证方法：`tools/fft_bench/`（入库，方法/
+口径/复现命令见其 README；内置正确性交叉校验——三方往返误差 < 1e-3、与 OpenCV
+`DFT_COMPLEX_OUTPUT` 全复数谱幅值相对偏差 < 5e-3，任一失败退出码非 0）。三方
+对照（系统 OpenCV 4.6.0 CCS 实数路径 / kissfft `kiss_fftndr` float / 朴素自研
+radix-2；单线程 `-O2`；512×512、848×480、1024×512；每配置 300 次 × ≥3 轮，
+min 口径）：512² 正/逆 OpenCV 1.02/1.11、kissfft 1.58/1.38、自研 3.53/3.19 ms；
+848×480 原生 OpenCV 3.44/3.61，kissfft 8.85/8.91 ms（p50 常态 9-20，含大质
+因子 848=2⁴×53 走通用质数路径，往返 ≥17.8 ms 超预算不可用）；1024×512（填充
+目标）OpenCV 2.22/2.41、kissfft 3.62/3.10、自研 7.68/6.74 ms。裁决：填充后
+kissfft 往返 6.72 ms（+节点内填充/裁剪 ~1-2 ms）与 OpenCV 原生 7.05 ms 相当
+（帧预算 33.3 ms 的 21-26%），OpenCV 的唯一性能优势被填充策略消除，而其构建
+体积（裁剪 core-only 静态 8.94 MB vs 32 KB）、CI 时长（configure 83 s + build
+30.8 s @14 核 vs 合计 1.42 s；2 核 runner 估 +8-12 min/次 vs +2-5 s，估算已标注）
+与 deb 捆绑面（DEC-009）高数量级，否决；全自研往返 14.42 ms（43% 预算，低频
+状态 ~30 ms 贴帧）且需持续优化投入，否决。环境与限制：Intel Core Ultra 5 225H
+（14 核，powersave，无 root 调频），进程级约 2 倍频率双峰如实记录，全部轮次
+相对排序一致，决策不敏感；性能验收以 `M4-08` 真引擎实测为准。新依赖供应链
+同步：`third_party/dependencies.lock` 行 `kissfft|…|7bce4153…|OFF|external`、
+`cmake/Dependencies.cmake` 构建面裁剪（float 静态库，CMP0077 OLD 同款 cache
+FORCE+恢复）、[kissfft 台账](../dependency_feedback/kissfft/ledger.md)（含
+KIS-20260928-001：master `kiss_fftndr_alloc` 溢出预检对 float 2D 误报，锁定
+131.2.0 规避）、台账索引追加。接线验证：`cmake --preset debug` 按 pin 拉取
+（commit 校验通过）并产出 `libkissfft-float.a`；全量 ctest debug 19/19（含
+D435if 真机硬件冒烟）。独立复验（Independent-Verification-Agent，5 项全过）：
+按 README 自建基准 4 轮 CHECK 全 PASS、决策口径四个往返值与核心排序逐格复现
+（OpenCV 7.17 / kissfft 填充 10.31 / 自研 14.55 / kissfft 原生 ≥17.94 ms；
+kissfft 512f/512i/1024i 三格复验轮未采快态、min 为表值 2.14 倍而内部比例精确
+一致——双峰环境性偏差，DEC-012 已注明引用口径）；方法论评审通过（计时口径与
+README 声明吻合、SINK 防DCE、谱对照参考为真 OpenCV 全复数谱、kissfftndr 维序
+`dims[ndims-1]` 实证）；master 缺陷最小程序取证（master HEAD 三配置三路径全部
+返回 `(size_t)-1`/NULL，131.2.0 正常分配，机制数值 1070708/512/512→int 截断=4
+吻合台账）；全新目录配置拉取 pin + `libkissfft-float.a` float 静态产物 + 无
+测试/工具可执行产物 + Debug ctest 19/19 复现；文档一致性核对通过。**复验顺带
+发现并随本分支修复三个既有缺陷**（均以干净 HEAD 复现证明与 M4-01 改动无关）：
+① `tests/test_navigation.cpp` PageStateWitness 整体 `memcmp` 读到未初始化尾部
+padding（56 vs 成员 52 字节），默认（无 CMAKE_BUILD_TYPE）配置下确定性失败——
+改为逐成员 memcmp（契约语义即数据成员不被触碰，检查数 308→310）；②
+`cmake/Dependencies.cmake` 离线检查在 `FETCHCONTENT_FULLY_DISCONNECTED=ON` 时对
+已提供且校验通过的本地源仍无条件 FATAL（与文件头"离线构建"注释矛盾）——收窄为
+仅在未提供本地源时报错；③ 同文件 `FETCHCONTENT_SOURCE_DIR_${下划线大写名}` 与
+CMake FetchContent 约定（保留连字符，如 `EUI-NEO`）不符，eui-neo 本地源提示从未
+被认领（在线路径静默 re-clone 同 pinned commit、离线路径无源可用）——改为按
+原始大写名设置。三修复经 Independent-Verification-Agent 复验通过：① 无 build
+type 全新配置 10/10、debug 5/5（原确定性失败消除）；② 离线全本地源配置成功、
+在线全新目录配置不受影响、缺源/错源三例负向 FATAL 正确触发；③ 随 ② 的离线配置
+无需手工 override 即完成（`FETCHCONTENT_SOURCE_DIR_EUI-NEO` 被认领）。已知限制
+（低危不阻塞）：中止的 configure 可能在缓存遗留 realsense2 的
+`BUILD_SHARED_LIBS=ON` FORCE 值（保存/恢复模式在 FATAL 路径不恢复，同目录重配置
+需清空缓存）；完全离线配置仍需网络可达 github（librealsense 上游 json 拉取不受
+`FETCHCONTENT_FULLY_DISCONNECTED` 约束，LRS-20260923-002 既有登记）。
+`M4-02`（Core 图像与节点契约）为下一工作项。
 
 2026-09-24：`M4-09` 契约冻结（部分完成，工作项未关闭）——commit `f27020b`..`727c776`
 （分支 feat/core-workflow-view-contracts）：`include/rin/workflow_types.hpp`、
