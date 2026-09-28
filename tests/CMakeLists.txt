@@ -214,3 +214,23 @@ target_include_directories(test_node_canvas PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME node_canvas COMMAND test_node_canvas)
 set_tests_properties(node_canvas PROPERTIES LABELS "unit")
+
+# M5-04 参数面板与中间结果查看纯逻辑（apps/viewer/param_model.hpp 与
+# canvas_model.hpp 参数赋值变换，DEC-015 决策 2；ui_workspace_design.md
+# §5.5/§5.6/§7 测试清单）：控件-参数绑定（严格文本解析、值对声明校验——种类/
+# 范围闭区间/枚举选项/RealArray 有限性、滑条归一化映射与取整、生效值解析、
+# 控件初值文本）、RealArray 矩阵网格（扁平推断形状/重排尺寸保留数据）、节点
+# 产物有界缓存（对契约假引擎拉取、每节点最新一幅、容量驱逐、停止排空）、缩略
+# 图降采样（Gray8/Rgba8 按格式、最近邻只缩不放、stride 处理、有界幅面、
+# sourceSequence 透传）、节点失败标注事件语义（NodeFailed 置位、Started/Stopped
+# 清空）、画布 setParam（替换同 paramId/追加/toGraph 携带/无效赋值经校验标注）。
+# 单线程纯逻辑（缓存拉取走假引擎契约面，owner 线程直接调用，无并发；DOD-02
+# 矩阵不适用，见文件头说明）；compose 绘制路径需活动 EUI 运行时，headless
+# 不可测（真机视觉验收归 M5-07）。
+add_executable(test_param_panel test_param_panel.cpp)
+target_link_libraries(test_param_panel PRIVATE rin::workflow_fake)
+target_include_directories(test_param_panel PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME param_panel COMMAND test_param_panel)
+set_tests_properties(param_panel PROPERTIES LABELS "unit")
