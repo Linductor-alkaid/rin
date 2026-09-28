@@ -197,3 +197,20 @@ target_compile_definitions(test_navigation PRIVATE
     "$<TARGET_PROPERTY:eui_neo,INTERFACE_COMPILE_DEFINITIONS>")
 add_test(NAME navigation COMMAND test_navigation)
 set_tests_properties(navigation PROPERTIES LABELS "unit")
+
+# M5-03 节点编辑器画布纯逻辑（apps/viewer/canvas_model.hpp，DEC-015 交互几何
+# 下沉；ui_workspace_design.md §7 测试清单）：视图变换（screen↔canvas 往返、
+# 锚点缩放与上下限夹取、帧全图拟合、视图定心）、命中检测（节点顶层优先/端口
+# 扩大命中区/连线采样距离/框选集合）、画布图同步（创建/删除连带边/连线替换边/
+# 成环与类型不匹配拒绝——validateWorkflowGraph 唯一判据、悬空输入非阻塞、
+# 校验标注缓存）、交互状态机（平移/节点拖动/框选与 Shift 加选/连线拖拽与取消/
+# 右键删除/Alt 删线/Del 删选中）、调色板分组与即输即筛。单线程纯逻辑：无跨
+# 上下文状态/关闭路径（DOD-02 矩阵不适用，见文件头说明）；compose 绘制路径
+# 需活动 EUI 运行时，headless 不可测（真机视觉验收归 M5-07）。
+add_executable(test_node_canvas test_node_canvas.cpp)
+target_link_libraries(test_node_canvas PRIVATE rin::core)
+target_include_directories(test_node_canvas PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME node_canvas COMMAND test_node_canvas)
+set_tests_properties(node_canvas PROPERTIES LABELS "unit")
