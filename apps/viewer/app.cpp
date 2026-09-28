@@ -3,19 +3,21 @@
 // GPU 销毁前）关闭。信息架构按 DEC-014：单窗口四页导航（预览 / 位姿 / 图像工作
 // 流 / 设置），左窄边导航栏见 navigation.hpp（控件选型结论见台账 EUI-20260928-001）；
 // 页面切换只推进 NavigationState，各页 UI 状态由 ViewerContext 持有（切页保持），
-// 相机服务运行态全局共享（pump 不分页）。工作流页节点编辑器见 node_canvas.hpp
-// （M5-03，画布/调色板/校验列表对契约假引擎 M5-08 开发调试，DEC-016）。视觉层
-// 遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局代码不出现一次性颜色/
-// 字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机连接，运行中经设备目录
-// 自动识别，多设备时用户选择、唯一设备自动选择。3D 位姿视图（M3-06，DEC-011）
-// 由 pose_view.hpp 承载：Core 投影纯逻辑 + polygon 有界组装，姿态经 tryLoadPose()
-// 最新态消费；IMU 状态面板（M3-07，imu_panel.hpp）消费同一份快照呈现源频率与
-// 姿态数值；onShutdown 在服务停止后排空 UI 侧姿态状态（关闭顺序回归 M3-07）。
+// 相机服务运行态全局共享（pump 不分页）。工作流页节点编辑器见 node_canvas.hpp、
+// 参数面板与中间结果缩略图见 param_panel.hpp（M5-04，对契约假引擎 M5-08 开发
+// 调试，DEC-016）。视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局
+// 代码不出现一次性颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机
+// 连接，运行中经设备目录自动识别，多设备时用户选择、唯一设备自动选择。3D 位姿
+// 视图（M3-06，DEC-011）由 pose_view.hpp 承载：Core 投影纯逻辑 + polygon 有界
+// 组装，姿态经 tryLoadPose() 最新态消费；IMU 状态面板（M3-07，imu_panel.hpp）
+// 消费同一份快照呈现源频率与姿态数值；onShutdown 在服务停止后排空 UI 侧姿态
+// 状态（关闭顺序回归 M3-07）。
 
 #include "gpu_frame_view.hpp"
 #include "imu_panel.hpp"
 #include "navigation.hpp"
 #include "node_canvas.hpp"
+#include "param_panel.hpp"
 #include "pose_view.hpp"
 #include "viewer_theme.hpp"
 
@@ -104,6 +106,9 @@ struct ViewerContext {
     std::shared_ptr<rin::IWorkflowEngine> workflow;
     /// 工作流页画布会话状态（node_canvas.hpp；DEC-014 决策 4：切页保持）。
     WorkflowCanvasState workflowCanvas;
+    /// 工作流页参数面板会话状态（param_panel.hpp，M5-04：控件绑定/缩略图缓存；
+    /// 切页保持）。
+    WorkflowPanelState workflowPanel;
 
     /// 工作台导航状态（M5-02）：四页模型与当前页；页面 UI 状态由本上下文各字段
     /// 持有，导航不触碰（页面切换状态保持，navigation.hpp）。
@@ -354,9 +359,9 @@ void ViewerContext::pump() {
         statusMessage = event.message;
     }
 
-    // 工作流引擎事件（M5-03：底部事件行；契约 tryLoad* 非阻塞最新态语义，
-    // RULE-05 渲染线程只做有界消费）。Idle 骨架阶段 applyGraph 不产事件，
-    // M5-06 运行控制接入后成为活动数据源。
+    // 工作流引擎事件（底部事件行 + 节点失败标注；契约 tryLoad* 非阻塞最新态
+    // 语义，RULE-05 渲染线程只做有界消费）。NodeFailed 事件驱动画布/面板
+    // destructive 徽标（M5-04 §4），Started/Stopped 清空（会话级）。
     if (workflow != nullptr) {
         rin::WorkflowEvent workflowEvent;
         if (workflow->tryLoadEvent(workflowEvent)) {
@@ -365,6 +370,12 @@ void ViewerContext::pump() {
                 workflowCanvas.lastEvent = line;
                 app::requestUpdate();
             }
+            workflowCanvas.failures.applyEvent(workflowEvent);
+        }
+        // 中间结果消费（M5-04 §5.6）：Running 拉取单选节点最新产物上传缩略图；
+        // 非 Running 排空（§4 停止/关闭排空）。返回 true 需重绘。
+        if (pumpNodeOutput(workflowCanvas, workflowPanel, *workflow)) {
+            app::requestUpdate();
         }
     }
 
@@ -394,7 +405,8 @@ void ViewerContext::pump() {
 /// request_stop + worker 回收，返回后全部通道不再有新发布）→ 排空 UI 侧跨上下文
 /// 姿态状态（PoseViewState 回空态，陈旧快照不跨 shutdown 存活）→ 工作流引擎
 /// stop + 释放（假引擎生命周期纪律：实例先于 executor shutdown 停止或析构，
-/// fake_engine.hpp）→ GPU 设备销毁前释放导入引用 → executor.shutdown(true)。
+/// fake_engine.hpp）→ 工作流面板 UI 侧排空（M5-04 §4：缩略图清空、控件绑定与
+/// 失败标注复位）→ GPU 设备销毁前释放导入引用 → executor.shutdown(true)。
 /// 全部在主线程 onShutdown 内完成；幂等。
 void ViewerContext::shutdown() {
     if (shutdownDone) {
@@ -410,6 +422,13 @@ void ViewerContext::shutdown() {
         workflow->stop();  // 幂等；Idle 快路径。画布 UI 状态不跨 shutdown 复活
         workflow.reset();  // （契约 stop 排空语义：stale 数据不得恢复活动状态）。
     }
+    // 工作流面板 UI 侧排空（M5-04 §4）：快照缩略图清空、控件绑定复位、失败
+    // 标注清空——stale 产物与控件态不跨 shutdown 存活。
+    workflowPanel.outputs.clear();
+    workflowPanel.thumbnail.release();
+    workflowPanel.thumbMeta.clear();
+    workflowPanel.resetBindings();
+    workflowCanvas.failures.clear();
     rgbView.release();    // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
     depthView.release();
     if (started) {
@@ -883,8 +902,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     composePosePage(ui, ctx, ox, pageTop, contentWidth, pageHeight);
                     break;
                 case WorkbenchPage::Workflow:
-                    composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflow.get(), ox,
-                                        pageTop, contentWidth, pageHeight);
+                    composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflowPanel,
+                                        ctx.workflow.get(), ox, pageTop, contentWidth,
+                                        pageHeight);
                     break;
                 case WorkbenchPage::Settings:
                     composeSettingsPage(ui, ox, pageTop, contentWidth);
