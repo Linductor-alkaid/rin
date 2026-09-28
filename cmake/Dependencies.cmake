@@ -50,10 +50,14 @@ function(_rin_declare_external dep_name dep_url dep_commit)
         set(source_dir "${${local_var}}")
         _rin_verify_commit("${source_dir}" "${dep_commit}" "${dep_name}")
         message(STATUS "Rin deps: ${dep_name} 使用本地源 ${source_dir} (commit 校验通过)")
-        set("FETCHCONTENT_SOURCE_DIR_${dep_upper}" "${source_dir}")
+        # FetchContent 认领的提示变量名保留依赖名原始大写（连字符不转下划线，
+        # 如 FETCHCONTENT_SOURCE_DIR_EUI-NEO）；下划线版本 FetchContent 不认，
+        # 会导致"使用本地源"提示被静默忽略（在线重 clone、离线无源可用）。
+        string(TOUPPER "${dep_name}" dep_upper_raw)
+        set("FETCHCONTENT_SOURCE_DIR_${dep_upper_raw}" "${source_dir}")
     endif()
 
-    if(FETCHCONTENT_FULLY_DISCONNECTED)
+    if(FETCHCONTENT_FULLY_DISCONNECTED AND source_dir STREQUAL "")
         message(FATAL_ERROR
             "Rin deps: 离线构建要求 -D${local_var}=<pinned 源目录>（${dep_name}）")
     endif()
