@@ -49,7 +49,15 @@ struct ControlCommand {
 };
 
 const char* depthSchemeName(DepthColorScheme scheme) {
-    return scheme == DepthColorScheme::Grayscale ? "grayscale" : "jet";
+    switch (scheme) {
+    case DepthColorScheme::Grayscale:
+        return "grayscale";
+    case DepthColorScheme::AdaptiveGrayscale:
+        return "adaptive-grayscale";
+    case DepthColorScheme::Jet:
+        break;
+    }
+    return "jet";
 }
 
 /// IMU 速率档位去重收集（升序在 enumerateDevice 收尾统一排序）。
