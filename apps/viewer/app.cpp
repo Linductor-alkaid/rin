@@ -4,8 +4,9 @@
 // 流 / 设置），左窄边导航栏见 navigation.hpp（控件选型结论见台账 EUI-20260928-001）；
 // 页面切换只推进 NavigationState，各页 UI 状态由 ViewerContext 持有（切页保持），
 // 相机服务运行态全局共享（pump 不分页）。工作流页节点编辑器见 node_canvas.hpp、
-// 参数面板与中间结果缩略图见 param_panel.hpp（M5-04，对契约假引擎 M5-08 开发
-// 调试，DEC-016）。视觉层遵循 viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局
+// 参数面板与中间结果缩略图见 param_panel.hpp、性能面板统计管道见 perf_model.hpp
+// （M5-04/M5-05，对契约假引擎 M5-08 开发调试，DEC-016）。视觉层遵循
+// viewer_theme.hpp 的语义令牌翻译（DEC-005）：布局
 // 代码不出现一次性颜色/字号/圆角。热插拔与设备选择见 DEC-006：启动不依赖相机
 // 连接，运行中经设备目录自动识别，多设备时用户选择、唯一设备自动选择。3D 位姿
 // 视图（M3-06，DEC-011）由 pose_view.hpp 承载：Core 投影纯逻辑 + polygon 有界
@@ -377,6 +378,11 @@ void ViewerContext::pump() {
         if (pumpNodeOutput(workflowCanvas, workflowPanel, *workflow)) {
             app::requestUpdate();
         }
+        // 性能统计消费（M5-05 §5.7）：sequence 推进拉取最新快照 + 活动/冻结
+        // 标志同步（停止后末次值冻结呈现，§4）。返回 true 需重绘。
+        if (workflowCanvas.perf.consume(*workflow)) {
+            app::requestUpdate();
+        }
     }
 
     // 姿态通道（M3-06/07，EXEC-06 最新态语义）：Streaming/Restreaming 中消费最新
@@ -406,7 +412,8 @@ void ViewerContext::pump() {
 /// 姿态状态（PoseViewState 回空态，陈旧快照不跨 shutdown 存活）→ 工作流引擎
 /// stop + 释放（假引擎生命周期纪律：实例先于 executor shutdown 停止或析构，
 /// fake_engine.hpp）→ 工作流面板 UI 侧排空（M5-04 §4：缩略图清空、控件绑定与
-/// 失败标注复位）→ GPU 设备销毁前释放导入引用 → executor.shutdown(true)。
+/// 失败标注复位；M5-05：性能统计消费态清空）→ GPU 设备销毁前释放导入引用 →
+/// executor.shutdown(true)。
 /// 全部在主线程 onShutdown 内完成；幂等。
 void ViewerContext::shutdown() {
     if (shutdownDone) {
@@ -423,12 +430,14 @@ void ViewerContext::shutdown() {
         workflow.reset();  // （契约 stop 排空语义：stale 数据不得恢复活动状态）。
     }
     // 工作流面板 UI 侧排空（M5-04 §4）：快照缩略图清空、控件绑定复位、失败
-    // 标注清空——stale 产物与控件态不跨 shutdown 存活。
+    // 标注清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址
+    // 排空（M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
     workflowPanel.outputs.clear();
     workflowPanel.thumbnail.release();
     workflowPanel.thumbMeta.clear();
     workflowPanel.resetBindings();
     workflowCanvas.failures.clear();
+    workflowCanvas.perf.clear();
     rgbView.release();    // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
     depthView.release();
     if (started) {
