@@ -33,6 +33,9 @@ enum class DepthColorScheme {
     Jet,
     /// 灰度黑白：近处白、远处黑；无效深度（0）与 jet 一致输出不透明黑。
     Grayscale,
+    /// 自适应灰度（DEC-007 扩展）：按帧内最大有效深度归一化，近处黑、远处白，
+    /// 帧内最远有效像素恒为纯白；无效深度（0）输出不透明黑。
+    AdaptiveGrayscale,
 };
 
 /// 一次流配置请求：彩色与深度成对（M1 不支持单流）；`enableMotion` 请求附加

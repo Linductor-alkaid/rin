@@ -1,6 +1,7 @@
-# DEC-007：深度图配色运行时可选（jet / 灰度黑白）
+# DEC-007：深度图配色运行时可选（jet / 灰度黑白 / 自适应灰度）
 
-> 状态：Accepted（灰度极性"近白远黑"为暂定默认，随 DEC-003 视觉参数一同冻结）
+> 状态：Accepted（2026-09-28 扩展新增 AdaptiveGrayscale；灰度极性"近白远黑"为
+> 暂定默认，随 DEC-003 视觉参数一同冻结）
 > 日期：2026-09-23
 > 负责人：Linductor-alkaid
 > 冻结里程碑：M2
@@ -56,6 +57,31 @@ jet 伪彩不利于观察深度连续层次，需要提供灰度黑白（黑白�
   Restreaming、Info 消息精确匹配、切换后帧内容灰度性质（全帧 R==G==B）/切回后
   存在彩色像素、同值幂等、stop 后拒绝（144 → 176 checks）。
 - 真机 GUI：Palette 下拉切换即时生效（截图留档 m1 验证记录）。
+
+## 扩展（2026-09-28）：AdaptiveGrayscale 自适应灰度
+
+借鉴 roboparty 训练侧的深度可视化习惯（逐帧最大值归一化 + OpenCV 灰度直显），
+公共契约 `rin::DepthColorScheme` 尾部追加 `AdaptiveGrayscale`（既有枚举值序不变）：
+
+- 语义：两趟扫描取帧内最大有效原始值 frameMax，`t = raw / frameMax` 经新纯函数
+  `adaptiveGrayscaleColor` 映射；**近黑远白**，帧内最远有效像素恒为纯白。比例对
+  depthScale 不变，故不消费 `depthScaleMeters/nearMeters/farMeters`（统一入口
+  `convertDepth16ToRgba8` 的参数校验仍与其它配色一致）；无效深度（raw==0）与
+  全帧无效均输出不透明黑。
+- 与既有固定区间灰度（近白远黑，[nearMeters, farMeters] 截断）互补：自适应模式
+  帧内永远满对比度、不依赖量程假设，但同一物体跨帧亮度随 frameMax 跳变，不适合
+  绝对距离判读，定位为观察深度层次结构的辅助配色。
+- 通道与状态语义完全复用既有配色命令：`LatestMailbox<ControlCommand>` 消费、
+  不重流、粘性、Info 事件消息 `depth palette: adaptive-grayscale`；viewer 设置页
+  Palette 下拉第三项 "Adaptive"，Waiting 态可预设。
+- 备选否决：固定区间 + 动态 far 的混合模式——语义含混且 DEC-003 视觉区间尚未
+  冻结；viewer 读 Z16 自行渲染——破坏 Frame 契约（见上文备选方案）。
+- 验证（2026-09-28）：`tests/test_pixel_format.cpp` 新增第 22-31 号用例组（纯函数
+  端点/极性/clamp、frameMax 归一化逐像素参照、全帧无效、尺度不变性、near/far
+  不变性、参数校验一致性、stride 哨兵隔离、与固定区间灰度三态可区分、单调性；
+  700 → 1529 checks），debug 全量回归 16/16 通过，ASAN/UBSAN 下同套件 0 失败。
+  事件消息字符串与 viewer 下拉映射无单测可执行覆盖，真机 GUI 切换未专项执行
+  （通道/状态语义与既有配色完全复用同一代码路径）。
 
 ## 关联文档和工作项
 

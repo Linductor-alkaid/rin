@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <set>
 #include <string>
@@ -85,7 +86,8 @@ struct ViewerContext {
     std::string resolutionOptionsForSerial;
     eui::Signal<int> resolutionIndex{0};
     eui::Signal<bool> resolutionOpen{false};
-    /// 深度配色（DEC-007）：0 = Jet，1 = Grayscale；不依赖设备目录，Waiting 可预设。
+    /// 深度配色（DEC-007）：0 = Jet，1 = Grayscale，2 = AdaptiveGrayscale；
+    /// 不依赖设备目录，Waiting 可预设。
     eui::Signal<int> paletteIndex{0};
     eui::Signal<bool> paletteOpen{false};
 
@@ -272,13 +274,18 @@ void ViewerContext::applyDeviceChoice(int index) {
 }
 
 void ViewerContext::applyPaletteChoice(int index) {
-    if (service == nullptr || index < 0 || index > 1) {
+    // 下拉项与配色一一对应（DEC-007）：0=Jet、1=Grayscale、2=AdaptiveGrayscale。
+    static constexpr rin::DepthColorScheme kSchemes[] = {
+        rin::DepthColorScheme::Jet,
+        rin::DepthColorScheme::Grayscale,
+        rin::DepthColorScheme::AdaptiveGrayscale,
+    };
+    if (service == nullptr || index < 0 ||
+        index >= static_cast<int>(std::size(kSchemes))) {
         return;
     }
-    const auto scheme =
-        index == 1 ? rin::DepthColorScheme::Grayscale : rin::DepthColorScheme::Jet;
     std::string error;
-    if (!service->requestDepthColorScheme(scheme, &error)) {
+    if (!service->requestDepthColorScheme(kSchemes[index], &error)) {
         statusMessage = "palette rejected: " + error;
     }
 }
@@ -891,7 +898,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 // 内 "Depth palette" 标签同行（标签行 y=48，见 composeSettingsPage）。
                 composeSelect(ui, "settings.preferences.palette",
                               ox + 170.0f, pageTop + 48.0f, 170.0f, "select",
-                              {"Jet", "Grayscale"}, ctx.paletteIndex.get(),
+                              {"Jet", "Grayscale", "Adaptive"}, ctx.paletteIndex.get(),
                               ctx.paletteOpen.get(),
                               [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
                               [&ctx](int index) {

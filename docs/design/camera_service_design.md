@@ -31,8 +31,9 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
   Failed`（`Waiting` 为热插拔稳态，见 DEC-006）。
 - `StreamRequest`：彩色+深度的 width/height/fps（成对请求，M1 不支持单流）；
   `enableMotion` 请求附加 ACCEL/GYRO 运动流（M3，设备无 IMU 时运动通道保持空）。
-- `DepthColorScheme`：深度图输出配色 `Jet / Grayscale`（DEC-007；灰度近白远黑，
-  无效深度 0 输出不透明黑）。
+- `DepthColorScheme`：深度图输出配色 `Jet / Grayscale / AdaptiveGrayscale`
+  （DEC-007；固定区间灰度近白远黑，自适应灰度按帧内最大有效深度归一化、近黑远白，
+  无效深度 0 均输出不透明黑）。
 - `Frame`：`kind(Rgb|Depth)`、`width/height/stride`、`sequence`、`deviceTimestampMs`、
   像素缓冲（`std::shared_ptr<const std::vector<std::uint8_t>>`，RGBA8 打包）。
 - `IntrinsicsSnapshot`：彩色/深度各自的 `width/height/fx/fy/cx/cy` 与畸变系数/模型；
