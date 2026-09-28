@@ -64,6 +64,27 @@ function(_rin_declare_external dep_name dep_url dep_commit)
 
     message(STATUS "Rin deps: ${dep_name} 按 pinned commit 拉取 ${dep_commit}")
 
+    # kissfft 构建面（DEC-012，M4-06 FFT 节点族链接 kissfft::kissfft）：
+    # float 静态库，关闭测试/命令行工具/pkgconfig。同 librealsense：其
+    # cmake_minimum_required 为 3.10（CMP0077 OLD），必须写 cache FORCE，
+    # 配置后恢复（见上方与下方 realsense2 的保存/恢复说明）。
+    if(dep_name STREQUAL "kissfft")
+        foreach(_opt IN ITEMS KISSFFT_DATATYPE KISSFFT_STATIC KISSFFT_TEST
+                KISSFFT_TOOLS KISSFFT_PKGCONFIG)
+            if(DEFINED CACHE{${_opt}})
+                set("_rin_saved_${_opt}" "${${_opt}}")
+            else()
+                set("_rin_saved_${_opt}" "")
+                set("_rin_saved_${_opt}__undefined" TRUE)
+            endif()
+        endforeach()
+        set(KISSFFT_DATATYPE float CACHE STRING "" FORCE)
+        set(KISSFFT_STATIC ON CACHE BOOL "" FORCE)
+        set(KISSFFT_TEST OFF CACHE BOOL "" FORCE)
+        set(KISSFFT_TOOLS OFF CACHE BOOL "" FORCE)
+        set(KISSFFT_PKGCONFIG OFF CACHE BOOL "" FORCE)
+    endif()
+
     # librealsense2 源码构建裁剪（lrs_options.cmake 默认值面向完整上游发行）：
     # 只保留运行时库本体，禁用示例/工具/更新检查/录制与静态捆绑，控制构建面与体积。
     # 注意：librealsense 的 cmake_minimum_required 为 3.10（CMP0077 OLD），普通变量会被
@@ -118,6 +139,24 @@ function(_rin_declare_external dep_name dep_url dep_commit)
                 unset("${_opt}" CACHE)
             elseif(DEFINED "_rin_saved_${_opt}")
                 set("${_opt}" "${_rin_saved_${_opt}}" CACHE BOOL "" FORCE)
+            endif()
+            unset("_rin_saved_${_opt}")
+            unset("_rin_saved_${_opt}__undefined")
+        endforeach()
+    endif()
+
+    # 恢复 kissfft 构建面（见上方保存/恢复说明）。
+    if(dep_name STREQUAL "kissfft")
+        foreach(_opt IN ITEMS KISSFFT_DATATYPE KISSFFT_STATIC KISSFFT_TEST
+                KISSFFT_TOOLS KISSFFT_PKGCONFIG)
+            if("_rin_saved_${_opt}__undefined")
+                unset("${_opt}" CACHE)
+            elseif(DEFINED "_rin_saved_${_opt}")
+                if(_opt STREQUAL "KISSFFT_DATATYPE")
+                    set("${_opt}" "${_rin_saved_${_opt}}" CACHE STRING "" FORCE)
+                else()
+                    set("${_opt}" "${_rin_saved_${_opt}}" CACHE BOOL "" FORCE)
+                endif()
             endif()
             unset("_rin_saved_${_opt}")
             unset("_rin_saved_${_opt}__undefined")
