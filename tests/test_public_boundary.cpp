@@ -3,8 +3,13 @@
 #include "test_util.hpp"
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include <rin/camera_service.hpp>
+#include <rin/image_node.hpp>
+#include <rin/image_types.hpp>
+#include <rin/node_graph.hpp>
 #include <rin/workflow_engine.hpp>
 
 namespace {
@@ -51,6 +56,35 @@ public:
 
 private:
     rin::NodeCatalog catalog_;
+};
+
+}  // namespace
+
+// M4-02 Core 图像与节点契约最小实例化：IImageNode 桩 + ImageU8 + buildNodeGraph/
+// runNodeGraph 全部经公开头可用（RULE-01：三头不引入第三方类型，仅链 rin::core）。
+namespace {
+
+class PassThroughNode final : public rin::IImageNode {
+public:
+    explicit PassThroughNode(rin::NodeDescriptor descriptor)
+        : descriptor_(std::move(descriptor)) {}
+
+    const rin::NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
+    std::vector<rin::ImageU8> apply(const std::vector<rin::ImageU8>& inputs) const override
+    {
+        std::vector<rin::ImageU8> outputs;
+        for (rin::PortType type : descriptor_.outputs) {
+            outputs.push_back(inputs.empty() ? rin::ImageU8::make(type, 2, 1)
+                                             : rin::ImageU8::wrap(type, inputs.front().width(),
+                                                                  inputs.front().height(),
+                                                                  inputs.front().stride(),
+                                                                  inputs.front().pixels()));
+        }
+        return outputs;
+    }
+
+private:
+    rin::NodeDescriptor descriptor_;
 };
 
 }  // namespace
@@ -112,6 +146,60 @@ int main() {
         event.kind = rin::WorkflowEventKind::Started;
         RIN_CHECK(!engine->tryLoadEvent(event));
         RIN_CHECK_EQ(event.kind, rin::WorkflowEventKind::Started);
+    }
+
+    // M4-02 Core 图像与节点契约（最小实例化 + 一次编译/求值往返）：ImageU8 值对象、
+    // IImageNode 多态桩、ImageNodeFactory 工厂接缝、NodeGraph/NodeGraphBuild 与
+    // buildNodeGraph/runNodeGraph 公开入口全部可用。
+    {
+        rin::ImageU8 image = rin::ImageU8::make(rin::PortType::Gray8, 4, 2);
+        RIN_CHECK(image.valid());
+        RIN_CHECK_EQ(image.byteSize(), std::uint64_t{8});
+
+        rin::NodeCatalog catalog;
+        rin::NodeDescriptor source;
+        source.typeId = "source";
+        source.displayName = "源";
+        source.outputs = {rin::PortType::Rgba8};
+        rin::NodeDescriptor pass;
+        pass.typeId = "pass";
+        pass.displayName = "直通";
+        pass.inputs = {rin::PortType::Rgba8};
+        pass.outputs = {rin::PortType::Gray8};
+        catalog.nodes = {source, pass};
+
+        rin::WorkflowGraph graph;
+        rin::NodeInstance sourceInstance;
+        sourceInstance.id = 1;
+        sourceInstance.typeId = "source";
+        rin::NodeInstance passInstance;
+        passInstance.id = 2;
+        passInstance.typeId = "pass";
+        graph.nodes = {sourceInstance, passInstance};
+        rin::Connection connection;
+        connection.from = rin::PortRef{1, rin::PortDirection::Output, 0};
+        connection.to = rin::PortRef{2, rin::PortDirection::Input, 0};
+        graph.connections = {connection};
+
+        rin::ImageNodeFactory factory =
+            [](const rin::NodeDescriptor& descriptor,
+               const rin::NodeInstance&) -> std::unique_ptr<rin::IImageNode> {
+            if (descriptor.inputs.empty()) {
+                return nullptr;  // 注入型源节点。
+            }
+            return std::make_unique<PassThroughNode>(descriptor);
+        };
+        rin::NodeGraphBuild build = rin::buildNodeGraph(graph, catalog, factory);
+        RIN_CHECK(build.validation.ok);
+        RIN_CHECK(build.graph != nullptr);
+        RIN_CHECK_EQ(build.graph->size(), std::size_t{2});
+
+        const auto outputs = rin::runNodeGraph(
+            *build.graph,
+            [](const rin::NodeGraph::Node&) { return rin::ImageU8::make(rin::PortType::Rgba8, 2, 1); });
+        RIN_CHECK_EQ(outputs.size(), std::size_t{2});
+        RIN_CHECK(outputs[0][0].valid() && outputs[0][0].format() == rin::PortType::Rgba8);
+        RIN_CHECK(outputs[1][0].valid() && outputs[1][0].format() == rin::PortType::Gray8);
     }
     return rin_test::exitStatus();
 }

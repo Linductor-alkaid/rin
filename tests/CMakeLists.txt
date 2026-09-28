@@ -250,3 +250,27 @@ target_include_directories(test_perf_panel PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME perf_panel COMMAND test_perf_panel)
 set_tests_properties(perf_panel PROPERTIES LABELS "unit")
+
+# M4-02 Core 图像契约（仅公开头 + Core 纯逻辑，image_workflow_design.md §8 前两行）：
+# elementSize、ImageU8::make/wrap 正负例（零宽高/未知格式/stride 不足/缓冲过短/
+# 超预算）、64 位乘法回绕防护反例（width=2^30 Rgba8、stride×height ≥ 2^32）、
+# kMaxImageBytes 恰等/超界、row 越界与 padding 行距、拷贝共享像素与 const 不可变
+# 类型面、参数模型三态生效值与五种类型化读取（含运行期种类错位防御）。
+# 单线程纯逻辑值语义：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_image_contracts test_image_contracts.cpp)
+target_link_libraries(test_image_contracts PRIVATE rin::core)
+target_include_directories(test_image_contracts PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME image_contracts COMMAND test_image_contracts)
+set_tests_properties(image_contracts PROPERTIES LABELS "unit")
+
+# M4-02 Core 图编译与单帧求值（Core 纯逻辑，image_workflow_design.md §8 后两行）：
+# buildNodeGraph（校验透传/节点数准入含默认 64 边界/工厂异常与 typeId 不符显式化/
+# 稳定拓扑序：链式·分叉·菱形多轮/入边执行序下标与输出端口/空图/find/移动语义）与
+# runNodeGraph（注入语义全分支/防御性输出核对/异常原样传播含非 std 异常/像素共享
+# 零拷贝链与扇出/空图）。节点桩内联实现 IImageNode，自建小目录。单线程纯逻辑：
+# 无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_node_graph test_node_graph.cpp)
+target_link_libraries(test_node_graph PRIVATE rin::core)
+target_include_directories(test_node_graph PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME node_graph COMMAND test_node_graph)
+set_tests_properties(node_graph PROPERTIES LABELS "unit")
