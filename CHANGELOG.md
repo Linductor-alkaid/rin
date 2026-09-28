@@ -18,6 +18,13 @@
   新缓冲；降分辨率输出尺寸 floor(in×scale)，nearest 面积覆盖采样与 bilinear
   中心对齐插值（逐通道独立、round-half-up 量化），scale=1.0 逐像素恒等；
   数值语义冻结于 `docs/design/image_workflow_design.md` §7。
+- 卷积/高斯算子节点（M4，`M4-04`）：`rin::makeDefaultImageNode` 工厂扩展
+  `conv_kernel`（K ∈ {1,3,5} 自定义行主序核，clamp/reflect/zero 边界填充可配，
+  相关语义核不翻转，double 累加 round-half-up 饱和量化）与 `gaussian_blur`
+  （半径语义 K=2·radius+1、sigma ∈ [0,10]，可分离两趟 + 固定 clamp 边界，
+  sigma=0 为 δ 核恒等输出，与直接卷积量化后逐像素差 ≤ 1）；工作流目录 schema
+  为 `conv_kernel` 增加 `border` 参数（假引擎目录同步），数值语义冻结于
+  `docs/design/image_workflow_design.md` §7。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
