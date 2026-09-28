@@ -7,6 +7,9 @@ add_library(rin_core STATIC
     core/pose_math.cpp
     core/pixel_format.cpp
     core/workflow_types.cpp
+    core/image_types.cpp
+    core/image_node.cpp
+    core/node_graph.cpp
 )
 add_library(rin::core ALIAS rin_core)
 
