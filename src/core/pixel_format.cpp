@@ -27,10 +27,70 @@ void grayscaleColor(float t, std::uint8_t out[4]) noexcept {
     out[3] = 255;
 }
 
+void adaptiveGrayscaleColor(float t, std::uint8_t out[4]) noexcept {
+    t = std::clamp(t, 0.0f, 1.0f);
+    // 近黑远白：t = raw/frameMax，帧内最远有效像素恒为纯白（DEC-007 扩展）。
+    const std::uint8_t level = static_cast<std::uint8_t>(t * 255.0f + 0.5f);
+    out[0] = level;
+    out[1] = level;
+    out[2] = level;
+    out[3] = 255;
+}
+
 namespace {
 
 std::size_t requiredBytes(std::uint32_t width, std::uint32_t height) {
     return static_cast<std::size_t>(width) * 4u * height;
+}
+
+void fillOpaqueBlack(std::vector<std::uint8_t>& dst) {
+    for (std::size_t offset = 0; offset + 3u < dst.size(); offset += 4u) {
+        dst[offset] = 0;
+        dst[offset + 1u] = 0;
+        dst[offset + 2u] = 0;
+        dst[offset + 3u] = 255;
+    }
+}
+
+/// 自适应灰度（DEC-007 扩展）：两趟扫描——先取帧内最大有效原始值，再按
+/// t = raw / frameMax 经 adaptiveGrayscaleColor 映射。深度比例对缩放不变
+/// （raw/max 与 meters/maxMeters 相等），故不使用 depthScale/near/far。
+bool convertDepth16ToRgba8Adaptive(const std::uint16_t* src,
+                                   std::uint32_t width,
+                                   std::uint32_t height,
+                                   std::uint32_t srcStrideUnits,
+                                   std::vector<std::uint8_t>& dst) {
+    std::uint16_t maxRaw = 0;
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            maxRaw = std::max(maxRaw, srcRow[column]);
+        }
+    }
+    dst.resize(requiredBytes(width, height));
+    if (maxRaw == 0) {
+        // 全帧无效深度：与逐像素 raw==0 分支同语义，输出不透明黑。
+        fillOpaqueBlack(dst);
+        return true;
+    }
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        std::uint8_t* dstRow = dst.data() + static_cast<std::size_t>(row) * width * 4u;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw == 0) {
+                dstRow[column * 4u + 0] = 0;
+                dstRow[column * 4u + 1] = 0;
+                dstRow[column * 4u + 2] = 0;
+                dstRow[column * 4u + 3] = 255;
+                continue;
+            }
+            const float normalized =
+                static_cast<float>(raw) / static_cast<float>(maxRaw);
+            adaptiveGrayscaleColor(normalized, dstRow + column * 4u);
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -77,6 +137,10 @@ bool convertDepth16ToRgba8(const std::uint16_t* src,
     }
     if (!(depthScaleMeters > 0.0f) || !(farMeters > nearMeters)) {
         return false;
+    }
+    if (scheme == DepthColorScheme::AdaptiveGrayscale) {
+        // 参数校验与其它配色一致；adaptive 路径本身不消费 near/far/depthScale。
+        return convertDepth16ToRgba8Adaptive(src, width, height, srcStrideUnits, dst);
     }
     using Ramp = void (*)(float, std::uint8_t[4]);
     const Ramp ramp = scheme == DepthColorScheme::Grayscale ? grayscaleColor : jetColor;
