@@ -311,10 +311,15 @@ inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
                 .style(inputStyle)
                 .build();
 
+            // 目录引用必须两侧同为左值：`cond ? *catalog : NodeCatalog{}` 会因
+            // 左值/纯右值混合把左值分支拷贝成临时目录，语句结束时 items 里指向
+            // 其节点元素的指针全部悬垂（M5-04 冒烟实证的 M5-03 潜伏缺陷）。
+            static const rin::NodeCatalog kEmptyPaletteCatalog{};
+            const rin::NodeCatalog& paletteCatalog =
+                state.model.catalog != nullptr ? *state.model.catalog
+                                               : kEmptyPaletteCatalog;
             const std::vector<PaletteGroup> groups =
-                paletteGroups(state.model.catalog != nullptr ? *state.model.catalog
-                                                             : rin::NodeCatalog{},
-                              state.paletteFilter.get());
+                paletteGroups(paletteCatalog, state.paletteFilter.get());
             float rowY = pad + kFontSm + kSpace2 + inputHeight + kSpace2;
             for (const PaletteGroup& group : groups) {
                 ui.text("workflow.palette.group." + group.title)
