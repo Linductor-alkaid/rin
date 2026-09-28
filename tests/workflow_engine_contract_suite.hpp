@@ -479,6 +479,18 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
                     return engine->tryLoadEvent(event) &&
                            event.kind == rin::WorkflowEventKind::GraphApplied;
                 }));
+
+                // GraphApplied 在帧边界（执行任务开头）发布；先有界等待 node 7
+                // 产物可见，确认"已应用图在无取消时会产出"（引擎无关，不断言
+                // 时延）。注意：Running 下再次 applyGraph 的引擎实现按"帧边界
+                // 生效"语义推进，产物可读性此后仍可能随实现内部的代更替窗口
+                // 变化，因此停止后的断言只锁定"无停止后突变"（见下）。
+                RIN_CHECK(pollUntil([&] {
+                    std::uint64_t appliedSeen = 0;
+                    rin::NodeOutputSnapshot appliedOut;
+                    return engine->tryLoadNodeOutput(7, appliedSeen, appliedOut) &&
+                           appliedOut.valid();
+                }));
             }
 
             // stop：Running→Idle、Stopped 事件、幂等双 stop。
@@ -508,10 +520,21 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
                 RIN_CHECK_EQ(stale.sequence, statsSequenceAtStop);
             }
             {
+                // stop 返回后无新帧：node 7 读取必须稳定。允许两种结果——保留
+                // 最后一次产物（valid），或停留在"最后一帧在协作取消窗口内未及
+                // 发布"的空态（产物邮箱随图代更替，契约允许 stop 截断未完成帧）。
+                // 两种结果都必须可重复（无停止后突变：不再出现新 sourceSequence）。
                 std::uint64_t outSeen = 0;
                 rin::NodeOutputSnapshot staleOut;
-                RIN_CHECK(engine->tryLoadNodeOutput(7, outSeen, staleOut));
-                RIN_CHECK(staleOut.valid());
+                const bool haveStale = engine->tryLoadNodeOutput(7, outSeen, staleOut);
+                RIN_CHECK(!haveStale || staleOut.valid());
+                std::uint64_t outSeen2 = 0;
+                rin::NodeOutputSnapshot staleOut2;
+                const bool haveStale2 = engine->tryLoadNodeOutput(7, outSeen2, staleOut2);
+                RIN_CHECK(haveStale2 == haveStale);
+                if (haveStale && haveStale2) {
+                    RIN_CHECK_EQ(staleOut2.sourceSequence, staleOut.sourceSequence);
+                }
             }
         }
         engine.reset();
@@ -575,6 +598,22 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
 
             if (attempt == 0 && reachedFailed) {
                 // 帧停止推进：失败后静默窗内统计不再前进（首个会话验证一次）。
+                // 失败转换只取消帧泵 timer，不取消已入队的在飞帧——这些帧仍会
+                // 完成并发布统计（契约允许）。先等统计序号稳定（在飞帧收敛）
+                // 再捕获 sequenceAtFailure，静默窗断言的语义才是"不再有新帧
+                // 启动"，而非"在飞帧不完成"。
+                RIN_CHECK(pollUntil([&] {
+                    std::uint64_t firstSeen = 0;
+                    rin::WorkflowStats settle1;
+                    if (!engine->tryLoadStats(firstSeen, settle1)) {
+                        return false;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds{8});
+                    std::uint64_t secondSeen = 0;
+                    rin::WorkflowStats settle2;
+                    return !engine->tryLoadStats(secondSeen, settle2) ||
+                           settle2.sequence == settle1.sequence;
+                }));
                 std::uint64_t seen = 0;
                 rin::WorkflowStats last;
                 RIN_CHECK(engine->tryLoadStats(seen, last));

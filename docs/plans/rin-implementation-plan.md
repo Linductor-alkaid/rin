@@ -1,7 +1,7 @@
 # Rin 实施总计划
 
 > 状态：In Progress
-> 最后更新：2026-09-24
+> 最后更新：2026-09-28
 > 负责人：Linductor-alkaid
 
 ## 当前整体状态
@@ -22,7 +22,12 @@ Ubuntu 20.04 容器构建、focal 可用；见 [m2-linux-packaging.md](m2-linux-
 契约假引擎完成（`rin::workflow_fake` 库，`IWorkflowEngine` 仿真实现：Executor 周期
 tick + 有限任务有界在飞 + 显式丢弃 + 图/参数帧边界生效 + 节点失败/取消/关闭路径；
 与 M4-07 真引擎共用的契约测试套件入库，160 项检查 debug/asan/ubsan/tsan 四预设
-0 失败）；M5 骨架进入 `M5-02` 导航壳与页面框架。
+0 失败）；M5 骨架进入 `M5-02` 导航壳与页面框架。2026-09-28 `M5-02` 完成：工作台
+壳落地（DEC-014 四页导航 + 工作流页五区骨架 + 设置页收纳深度配色/关于；导航控件
+按 [EUI-20260928-001](../dependency_feedback/eui-neo/ledger.md) 自绘左窄边栏，
+`viewer_theme` 扩工作流状态色与端口类型色令牌；真机四页导航/切页状态保持/配色
+切换/关闭路径回归通过，导航状态单测 308 项检查 debug/asan/ubsan 0 失败，全量
+ctest 四预设 16/16）；`M5-03` 节点编辑器画布就绪开工。
 
 ## 交付边界（SCOPE）
 

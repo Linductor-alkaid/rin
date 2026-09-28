@@ -215,9 +215,11 @@ inline void composePoseScene(eui::Ui& ui, const rin::PoseMat3& camToWorld,
 /// 合成 3D 位姿视图卡片（与 RGB/Depth 画面卡同卡片语汇）。intrinsics 为当前
 /// 内参快照（可空）：携带有效 gyro→color 外参时把融合姿态（IMU 传感器系）换算
 /// 到彩色相机系（camera_types.hpp 外参契约用途），否则按传感器系直接显示。
+/// (x, y) 为卡片在父容器（root stack 绝对布局）中的位置；row 布局内使用时保持
+/// 默认 (0,0)。
 inline void composePoseViewCard(eui::Ui& ui, PoseViewState& state,
                                 const rin::IntrinsicsSnapshot* intrinsics, float width,
-                                float height) {
+                                float height, float x = 0.0f, float y = 0.0f) {
     using namespace viewer::theme;  // 语义令牌（DEC-005）；函数内引入，不泄漏头文件作用域
     const theme::ThemeTokens& tokens = theme::dark();
     const float pad = kSpace3;
@@ -228,6 +230,7 @@ inline void composePoseViewCard(eui::Ui& ui, PoseViewState& state,
     const bool hasPose = state.available && state.snapshot.valid();
 
     ui.stack("view.pose")
+        .position(x, y)
         .size(width, height)
         .clip()
         .content([&] {

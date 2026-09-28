@@ -158,6 +158,38 @@
 - 跟进：2026-09-24 登记；运行时取证完成，插桩已还原；同日绕行实施
   （`pose_view.hpp`，引用本编号）。
 
+### EUI-20260928-001：无左窄边常驻导航原语，全局导航控件按 viewer 令牌自绘
+
+- 级别：P3（形态缺口观察项；自绘绕行，非阻塞缺陷）
+- 现象/证据（2026-09-28，M5-02 导航控件选型原型验证，pinned `782c5699`）：
+  DEC-014 冻结的全局导航形态为"左侧窄边导航（图标+文字）"，设计文档 §6 首选
+  `sidebar`、退化 `tabs`/`segmented`。逐一核对：
+  - `components/sidebar.h`：右锚定模态抽屉——面板几何 `panelX = width -
+    panelWidth`（右缘贴靠）+ 全屏 scrim + 右滑入动画 + 关闭按钮，为临时浮层
+    语义，无左侧常驻/内联布局形态，不适用全局导航；
+  - `components/tabs.h` / `segmented.h`（上游《组件》文档 §segmented/tabs）：
+    横向选择器，形态与冻结 IA（左窄边）不符，仅可作信息架构降级；
+  - `components/navbar.h`：垂直导航栏、形态吻合，但未列入上游《组件》文档
+    （无能力/稳定性承诺），且颜色/字号/间距全部取自组件库自有
+    `theme::ThemeColorTokens`/`ThemeMetricTokens` 度量体系——引入即与
+    DEC-005"viewer_theme.hpp 唯一令牌层"纪律冲突，每条目自带描边与阴影的
+    视觉语汇也与 Rin 设计系统基准不符。
+- 影响：按映射表首选/退化项均无法实现冻结的左窄边导航形态。
+- 期望语义：上游提供文档化的左窄边导航原语（垂直 rail/侧边导航，接受外部
+  令牌与条目模板）。
+- 建议最小能力：`components` 增加文档化 navigation rail 组件，支持
+  items/selected/onChange 受控接线与主题令牌注入。
+- 绕行方案（单一边界内，符合台账纪律）：`apps/viewer/navigation.hpp`
+  `composeNavRail`——以 `rect`/`text` 原语 + viewer 令牌自绘四页导航栏
+  （沿用 composeSelect 对 dropdown 的自研先例，EUI-20260923-002/003 同类）；
+  条目受控渲染（选中态由 `NavigationState` 驱动，无组件内状态），图标为框架
+  捆绑 Font Awesome 7 Free Solid（codepoint 已对照字体 cmap 验证）。静态四
+  条目、无文本输入/滚动等复杂交互，风险有界。
+- 移除条件：上游提供文档化左窄边导航组件且支持外部令牌注入后，替换自绘实现
+  并做真机视觉回归。
+- 状态：Open（绕行已实施，M5-02 引用本编号）
+- 跟进：2026-09-28 登记。
+
 ## 跟进记录表
 
 | 编号 | 状态 | 优先级 | 跟进 |
@@ -167,3 +199,4 @@
 | EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 已绕行（GpuFrameView），上游修复后回归 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
+| EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <deque>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <stdexcept>
@@ -313,7 +314,10 @@ NodeCatalog makeDefaultFakeCatalog() {
     return catalog;
 }
 
-class FakeWorkflowEngine final : public IWorkflowEngine {
+// 工厂强约束：实例必须经 createFakeWorkflowEngine 以 shared_ptr 持有——tick 闭包
+// 经 enable_shared_from_this 提升弱引用实现掉队 tick 的生命周期闭合（见 start()）。
+class FakeWorkflowEngine final : public std::enable_shared_from_this<FakeWorkflowEngine>,
+                                 public IWorkflowEngine {
 public:
     FakeWorkflowEngine(executor::Executor& executor, FakeWorkflowEngineConfig config)
         : executor_(executor),
@@ -326,6 +330,9 @@ public:
 
     ~FakeWorkflowEngine() override {
         // 防御：owner 未显式停止时收敛在飞任务（实例必须先于 executor shutdown 消亡）。
+        // tick 闭包只持弱引用且体内提升强引用（见 start()），tick 体执行期间对象
+        // 必然存活（互斥由引用计数保证），析构无需也无法与 tick 并发——CI 曾实报
+        // 的掉队 tick use-after-free 由该生命周期闭合。
         stop();
     }
 
@@ -467,7 +474,16 @@ public:
         state_.store(WorkflowEngineState::Running, std::memory_order_relaxed);
         timerHandle_ = executor_.submit_periodic_cancellable_with_handle(
             static_cast<std::int64_t>(config_.frameInterval.count()),
-            [this](executor::StopToken tickToken) { tick(tickToken); });
+            // 掉队 tick 生命周期闭合：闭包只持弱引用。worker 在"接受任务之后、
+            // tick 体之前"被抢占时对象可能已析构——lock() 是第一个触碰动作且只
+            // 访问随闭包存活的 weak 控制块：提升失败 = 对象已析构，安全退出；
+            // 提升成功 = 强引用使对象存活至本 tick 退出，体内成员访问必然安全。
+            [weak = std::weak_ptr<FakeWorkflowEngine>(shared_from_this())](
+                executor::StopToken tickToken) {
+                if (std::shared_ptr<FakeWorkflowEngine> self = weak.lock()) {
+                    self->tick(tickToken);
+                }
+            });
         if (!timerHandle_.valid()) {
             // 帧泵准入失败：显式回滚，不进入 Running。
             state_.store(WorkflowEngineState::Idle, std::memory_order_relaxed);

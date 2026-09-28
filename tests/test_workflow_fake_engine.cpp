@@ -31,6 +31,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "fake_engine.hpp"
@@ -413,6 +414,40 @@ int main() {
         engine->stop();
         RIN_CHECK(engine->state() == WorkflowEngineState::Idle);
         engine.reset();
+        RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
+    }
+
+    // ---- 11) 掉队 tick 回归压测：1ms tick 过载会话的 stop + reset 循环 ----
+    //
+    // CI（ubuntu runner / GCC 13 / asan）曾实报 heap-use-after-free：stop() 持
+    // lifecycleMutex_ cancel timer 后，已被执行器派发、阻塞在该锁上的掉队 tick
+    // 在对象析构完成后才被唤醒读 state_（本机时序快，单序列难复现）。本用例把
+    // "1ms tick + 有界在飞过载 + stop + reset"序列循环多轮，成倍增大掉队 tick
+    // 命中率（慢机器/高负载下时序扰动更大）。生命周期不变量：tick 闭包只持弱
+    // 引用，执行入口提升强引用——掉队 tick 无论先于还是晚于 reset() 启动，要么
+    // 提升失败（对象已析构，安全退出），要么对象存活至本 tick 退出（析构与
+    // tick 体由强引用互斥）。断言全部为进程级安全性：每轮 stop 有界收敛 Idle，
+    // reset 与掉队 tick 竞态下无 sanitizer 报错、不悬挂，收尾 shutdown(true)
+    // 干净。过载丢弃语义本身由用例 4 覆盖。
+    {
+        executor::Executor executor;
+        executor::ExecutorConfig executorConfig;
+        RIN_CHECK(executor.initialize(executorConfig));
+        for (int round = 0; round < 25; ++round) {
+            FakeWorkflowEngineConfig config = smallConfig();
+            config.frameWidth = 256;
+            config.frameHeight = 256;
+            config.frameInterval = std::chrono::milliseconds{1};
+            config.maxInFlight = 1;
+            std::shared_ptr<IWorkflowEngine> engine =
+                createFakeWorkflowEngine(executor, std::move(config));
+            RIN_CHECK(engine->applyGraph(makeChain("grayify")).ok);
+            RIN_CHECK(engine->start().admitted);
+            std::this_thread::sleep_for(std::chrono::milliseconds{8});
+            engine->stop();  // cancel 只阻止后续调度；掉队 tick 此刻可能仍在途。
+            RIN_CHECK(engine->state() == WorkflowEngineState::Idle);
+            engine.reset();  // 与掉队 tick 竞态：本回归的核心窗口。
+        }
         RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
     }
 

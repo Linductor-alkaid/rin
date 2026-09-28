@@ -59,7 +59,7 @@
       [DEC-014](../decisions/DEC-014-workbench-information-architecture.md)/
       [DEC-015](../decisions/DEC-015-node-editor-implementation-path.md)
       `Accepted`。
-- [ ] `M5-02` 导航壳与页面框架：页面导航（预览 / 位姿 / 工作流 / 设置）、页面
+- [x] `M5-02` 导航壳与页面框架：页面导航（预览 / 位姿 / 工作流 / 设置）、页面
       切换状态保持、主题令牌扩展、现有预览功能回归。完成判据：导航状态单测 +
       预览回归记录。
 - [ ] `M5-03` 节点编辑器画布：节点框渲染 / 选中 / 拖动、端口连线创建与删除、
@@ -164,3 +164,52 @@ M4-07 接入时复用）与 tests/test_workflow_fake_engine.cpp（共用套件 +
 缺陷（最新态事件通道的中间事件单会话采样过度断言、会话复位阈值余量不足），由验证
 代理修复后复验通过，无实现缺陷。环境：x86_64 Linux，GCC 13，CMake presets
 debug/asan/ubsan/tsan。`M5-02`..`M5-05` 按计划仅依赖该假引擎开发。
+
+2026-09-28：`M5-08` 缺陷修复补记（随 `M5-02` MR 的 CI 修复提交入账）——CI
+（ubuntu runner / GCC 13 / asan）实报 `test_workflow_fake_engine` heap-use-after-free：
+`stop()` 持 `lifecycleMutex_` cancel timer 后，一个已被执行器派发的掉队 tick 阻塞在
+该锁上，`engine.reset()` 析构完成后 tick 被唤醒读已释放的 `state_`（本机时序快不
+复现）。根因是 tick 闭包裸捕获 `this` 的生命周期缺口，非 Executor 能力缺口（不涉
+台账）。修复：`FakeWorkflowEngine` 继承 `enable_shared_from_this`，tick 闭包只持
+`weak_ptr`，worker 侧 `lock()` 提升强引用后才触碰成员——提升失败安全退出、成功则
+对象存活至 tick 退出（同时闭合 worker 在提交点后被抢占的窗口）；头文件生命周期措辞
+同步。测试（Independent-Verification-Agent 独立验证，含修复方案两轮对照压测）：
+新增用例 11（25 轮 1ms tick 过载 + stop + reset 序列，预修复命中率 42%）；契约套件
+两处抗抖修正（契约中立：停止后断言改为可重复稳定性断言而非"必然有产物"；失败路径
+静默窗语义修正）；asan 累计 382 次运行 0 UAF（预修复同强度可命中），debug/asan/
+ubsan 全量 ctest 16/16，tsan 目标测试通过。**遗留缺陷（另行处理，不阻塞）**：验证
+过程发现 Running 下 `applyGraph` 的待生效图在 `drainBoundary` 中从不消费
+（LatestMailbox peek 语义），导致每帧重建 generation 并重发 `GraphApplied`（功能
+无害，代 churn 与事件刷屏）；涉及消费语义与事件频率决策，M4-07 真引擎对齐时一并
+处理（见 `M4-07` 对齐项）。
+
+2026-09-28：`M5-02` 完成关闭——工作台壳落地（DEC-014 四页 IA）：新增
+`apps/viewer/navigation.hpp`（`WorkbenchPage` 四页模型 + 元数据表 + `NavigationState`
+纯逻辑与 `composeNavRail` 左窄边导航栏组装；导航只拥有当前页，页面 UI 状态由
+`ViewerContext`/`ui.state` 持有实现切页保持，相机服务运行态全局共享）与
+`apps/viewer/workflow_shell.hpp`（五区骨架静态框架，空态文案按设计文档 §4，
+M5-03 起逐区替换）；`app.cpp` 重构为 rail + 全局状态头 + 四页 switch 布局；
+`viewer_theme.hpp` 扩令牌：`workflowStateColor`（§4 规格四态映射）与端口类型色
+`portTypes()`/`portTypeColor`（§5.3，M5-03 消费）；深度配色选择按 DEC-014 决策 3
+移入设置页（含关于/版本，`RIN_VERSION` 编译定义接 `project(Rin VERSION)`）；
+M1 数字键分辨率速选收窄到预览页（控件所在页）。导航控件选型按设计文档 §3/§6
+原型验证结论执行：`sidebar` 为右锚定模态抽屉、`tabs`/`segmented` 为横向选择器、
+`navbar` 未列入上游组件文档且绑定组件库自有主题度量体系（与 DEC-005 冲突），按
+[EUI-20260928-001](../dependency_feedback/eui-neo/ledger.md) 以 `rect`/`text` +
+viewer 令牌自绘导航栏（composeSelect 同类先例），设计文档 §3/§6 映射已同步；图标
+为框架捆绑 Font Awesome 7 Free Solid（codepoint 经字体 cmap 验证）。默认窗口
+1280x860 → 1920x1200（五区骨架最小版面；EUI `Screen` 为逻辑尺寸，XWayland 2x
+面板上逻辑视口为窗口一半，分辨率选择器改为内容区严格右锚定）。测试
+（Independent-Verification-Agent 独立编写执行）：新增 tests/test_navigation.cpp
+（元数据表完整性/索引归一/4x4 切换矩阵/同页 no-op/值语义/"导航不拥有页面状态"
+见证结构/static_assert 编译期锁定/主题映射逐字段一致），并应实现加固（switchTo
+范围外值经 `workbenchPageIndex` 归一、`workbenchPageId` 转 constexpr）补范围外
+归一契约用例，308 项检查 debug/asan/ubsan 三预设 0 失败；全量 ctest 四预设
+（tsan 按 `setarch -R` 既有纪律）16/16 通过（含 D435if 真机硬件冒烟）。真机回归
+（D435if 直连，截图存档 `screenshots/m5-02/`）：预览页实时 RGB/深度 jet 出流 +
+设备/分辨率选择 + 内参卡；位姿页 3D 位姿视图 + IMU 面板实时；工作流页五区骨架
+与空态；设置页配色切换 Jet→Grayscale 即时生效（DEC-007 命令通道，头部事件行
+同步）且跨页返回后设备/分辨率选择保持（切页状态保持）；经 WM_DELETE_WINDOW
+标准关闭路径干净退出（onShutdown 顺序闭合，EXEC-04）。环境：x86_64 Linux
+（GNOME/XWayland，3200x2000 @2x），GCC 13。`M5-03`..`M5-05` 依赖导航壳与假引擎
+（`M5-08`）继续。

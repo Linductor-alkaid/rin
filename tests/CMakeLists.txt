@@ -175,3 +175,25 @@ add_test(NAME workflow_fake_engine COMMAND test_workflow_fake_engine)
 set_tests_properties(workflow_fake_engine PROPERTIES
     LABELS "unit"
     TIMEOUT 300)  # 套件设计 <30s；挂看门狗兜底关闭/关停竞态检查不悬挂。
+
+# M5-02 工作台导航壳纯逻辑与主题令牌扩展（apps/viewer/navigation.hpp、
+# viewer_theme.hpp，DEC-014）：元数据表完整性（页数 4、表序=枚举声明序、四枚举
+# 双射、id/label/icon 非空唯一、id 稳定）、workbenchPageIndex 逐枚举与越界归 0
+# （编译期 static_assert + 运行期）、workbenchPageId 与表项一致、NavigationState
+# 初值/4x4 切换矩阵（异页 true、同页 no-op false 且状态不变）/往返/selectedIndex
+# 与表双向一致、值语义拷贝与"只拥有当前页"结构锁定（sizeof + 页面状态见证逐位
+# 不变），viewer_theme 的 workflowStateColor 逐状态令牌一致且四结果互异、
+# portTypes/portTypeColor 逐字段一致不透明且 Gray8/Rgba8 互异。compose 绘制路径
+# （composeNavRail/composeWorkflowShell）需活动 EUI 运行时，headless 不可测
+# （真机视觉验收归 M5-07，见文件头说明）；单线程纯逻辑值语义（DOD-02 矩阵
+# 不适用）。
+add_executable(test_navigation test_navigation.cpp)
+target_link_libraries(test_navigation PRIVATE rin::core)
+target_include_directories(test_navigation PRIVATE ${CMAKE_SOURCE_DIR}/apps/viewer)
+target_include_directories(test_navigation SYSTEM PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INCLUDE_DIRECTORIES>"
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_INCLUDE_DIRECTORIES>")
+target_compile_definitions(test_navigation PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_COMPILE_DEFINITIONS>")
+add_test(NAME navigation COMMAND test_navigation)
+set_tests_properties(navigation PROPERTIES LABELS "unit")

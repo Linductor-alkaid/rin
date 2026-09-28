@@ -11,6 +11,7 @@
 #include <eui_neo.h>
 
 #include <rin/camera_types.hpp>
+#include <rin/workflow_types.hpp>
 
 namespace viewer::theme {
 
@@ -104,6 +105,51 @@ inline eui::Color stateColor(const rin::CameraServiceState state) {
             return tokens.fgSubtle;
     }
     return tokens.fgSubtle;
+}
+
+/// 工作流引擎状态 → 语义色（M5-02 令牌扩展，ui_workspace_design.md §4 规格：
+/// Running=success、Stopping=warning、Failed=destructive、Idle=中性次级；色值
+/// 取自同一 dark() 令牌层，不新增装饰色）。
+inline eui::Color workflowStateColor(const rin::WorkflowEngineState state) {
+    const ThemeTokens& tokens = dark();
+    switch (state) {
+        case rin::WorkflowEngineState::Running:
+            return tokens.success;
+        case rin::WorkflowEngineState::Stopping:
+            return tokens.warning;
+        case rin::WorkflowEngineState::Failed:
+            return tokens.destructive;
+        case rin::WorkflowEngineState::Idle:
+            return tokens.fgSubtle;
+    }
+    return tokens.fgSubtle;
+}
+
+/// 端口类型色（M5-02 令牌扩展，ui_workspace_design.md §5.3：Gray8/Rgba8 各一枚，
+/// 供节点画布端口与连线拖拽类型反馈使用；M5-03 消费）。
+struct PortTypeTokens {
+    eui::Color gray8;   ///< Gray8 单色图像端口
+    eui::Color rgba8;   ///< Rgba8 彩色图像端口
+};
+
+inline const PortTypeTokens& portTypes() {
+    static const PortTypeTokens tokens{
+        .gray8 = {0.580f, 0.620f, 0.680f, 1.0f},
+        .rgba8 = {0.720f, 0.520f, 0.950f, 1.0f},
+    };
+    return tokens;
+}
+
+/// 端口类型 → 类型色。
+inline eui::Color portTypeColor(const rin::PortType type) {
+    const PortTypeTokens& tokens = portTypes();
+    switch (type) {
+        case rin::PortType::Gray8:
+            return tokens.gray8;
+        case rin::PortType::Rgba8:
+            return tokens.rgba8;
+    }
+    return tokens.gray8;
 }
 
 /// 3D 位姿视图场景令牌（M3-06，DEC-011）：固定世界系参考几何与相机指示的语义色。
