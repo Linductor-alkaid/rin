@@ -2,7 +2,9 @@
 
 add_executable(rin app.cpp)
 
-target_link_libraries(rin PRIVATE rin::realsense_adapter OpenGL::GL)
+# 工作流页对契约假引擎开发调试（M5-03..05，DEC-016）；M5-06 假换真集成后由
+# 真引擎目标替换。
+target_link_libraries(rin PRIVATE rin::realsense_adapter rin::workflow_fake OpenGL::GL)
 
 # 设置页"关于"展示的版本号（根 project(Rin VERSION ...)）。
 target_compile_definitions(rin PRIVATE RIN_VERSION="${Rin_VERSION}")
