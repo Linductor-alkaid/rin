@@ -368,3 +368,27 @@ target_link_libraries(test_image_ops_fft PRIVATE rin::core)
 target_include_directories(test_image_ops_fft PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME image_ops_fft COMMAND test_image_ops_fft)
 set_tests_properties(image_ops_fft PROPERTIES LABELS "unit")
+
+# M4-07 工作流真引擎独立验证（DEC-013 执行模型，Independent-Verification-Agent）：
+# 以真引擎 fixture 运行两引擎共用契约套件（workflow_engine_contract_suite.hpp，
+# DEC-016），加真引擎特有检查：工厂校验三分支抛 invalid_argument
+# （paramQueueCapacity==0 按 1 处理）、默认目录与 makeDefaultFakeCatalog 逐字段
+# 一致（单一事实源）、真实算子数值链（source→grayify BT.601 定点亮度逐像素
+# golden 手推）、参数"下一帧生效"（downscale scale 0.5→1.0 输出 64×48→128×96）、
+# EXEC-07 过载显式丢弃（maxInFlight=1 + 20ms 慢算子 → droppedFrames>0 且
+# processedFrames 增长且 inFlight≤1）、帧源空闲静默（门控关闭 300ms 无帧且保持
+# Running）、Running 图替换消费式语义（GraphApplied 不逐帧重发——假引擎 peek
+# 缺陷探针 + 参数真实生效 floor(128×0.9)=115）、sourceSequence 传播（同帧两节点
+# 相等 + 运行期非递减）、运行期算子失败归因（crop 越界 ROI → NodeFailed node=2
+# + Failed + lastError，多会话采样）、关停竞态防御（executor.shutdown(false) 后
+# stop 有界收敛）与会话复位（processedFrames 复位、统计通道序号实例内单调）。
+# tsan 预设复跑目标（跨上下文通道与关闭顺序）。
+add_executable(test_workflow_engine test_workflow_engine.cpp)
+target_link_libraries(test_workflow_engine PRIVATE rin::workflow rin::workflow_fake)
+target_include_directories(test_workflow_engine PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/workflow
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME workflow_engine COMMAND test_workflow_engine)
+set_tests_properties(workflow_engine PROPERTIES
+    LABELS "unit"
+    TIMEOUT 300)  # 套件 + 特有检查设计 <60s；挂看门狗兜底关停/关闭竞态检查不悬挂。

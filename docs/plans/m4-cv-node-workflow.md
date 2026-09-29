@@ -75,7 +75,7 @@
       bandpass lowCut ≥ highCut 构造期显式拒绝（空通带为参数矛盾），语义随本
       工作项在 [design/image_workflow_design.md](../design/image_workflow_design.md)
       §7 冻结。）
-- [ ] `M4-07` 工作流引擎（`EXEC-07`，按 `DEC-013`）：拓扑序执行、源节点（相机帧
+- [x] `M4-07` 工作流引擎（`EXEC-07`，按 `DEC-013`）：拓扑序执行、源节点（相机帧
       注入语义）、每节点耗时统计、中间产物有界保留（最近 N 张）、过载显式丢弃与
       计数、取消与排空、关闭幂等。完成判据：引擎测试（正常完成 / 节点异常 /
       取消 / 关闭 / 过载丢弃）+ debug/asan/ubsan 通过。对齐注记（2026-09-28，
@@ -84,6 +84,9 @@
       generation 并重发 `GraphApplied`）需在真引擎设计时一并裁决——真引擎不得
       复刻该缺陷，消费语义按 `M4-09` 契约"帧边界排空重建"语义明确；掉队 tick
       生命周期闭合模式（weak_ptr 闭包 + 入口提升）作为既有先例。
+      （"中间产物有界保留"按 `M4-09` 契约冻结语义实现：每节点最新一幅；
+      消费式图替换以图对象同一性判定——`LatestMailbox` 纯快照无消费操作，
+      同一性记录达成读取即消费语义。）
 - [ ] `M4-08` M4 测试矩阵与性能记录：全预设测试通过；848×480 典型工作流全链路
       吞吐实测记录（只记录实测值与方法，不宣称未验证的性能目标）。
 - [ ] `M4-09` 工作流视图契约冻结（[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)，
@@ -112,12 +115,64 @@
 - [ ] `ctest`（debug/asan/ubsan，涉及跨上下文时 tsan）全绿，新增：契约校验、
       逐算子 golden、FFT 数值、引擎状态路径测试。
 - [ ] `DEC-012`/`DEC-013` 记录生效并被实现引用。
-- [ ] 引擎过载 / 取消 / 关闭测试通过（`M4-07`）。
+- [x] 引擎过载 / 取消 / 关闭测试通过（`M4-07`）。
 - [ ] 性能实测记录落盘（`M4-08`），无未经验证的性能声明。
 - [ ] 文档同步：新增 `docs/design/image_workflow_design.md`、总计划 `SCOPE-08`、
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-29：`M4-07` 完成关闭——工作流真引擎落地（[DEC-013](../decisions/DEC-013-workflow-execution-model.md)
+随本工作项冻结 `Accepted`：帧泵采样 + 最新帧快照 + 有界在飞显式丢弃）。新增
+`rin_workflow` 静态库（`src/workflow/engine.hpp/.cpp`，PUBLIC 链接
+`rin::core` + `executor::executor`）：`createWorkflowEngine(executor, config)`
+按 `M4-09` 契约实现 `IWorkflowEngine`，与假引擎共用契约测试（DEC-016）。执行
+模型：帧泵为 Executor 允许抖动周期任务（tick 持生命周期互斥，与
+start/stop/applyGraph 串行化），逐 tick 回收在飞 → 帧边界排空 → 探测捕获帧源
+→ 覆盖检查 + 有界准入提交；引擎无自有线程（RULE-02），帧输入经
+`WorkflowFrameSource` 接缝（lastSeenSequence 同 `ICameraService::tryLoadFrame`
+"上次已见序号"语义，相机帧 → ImageU8 转换归适配/应用层，RULE-01），捕获即
+消费（快照语义，同一帧不被两个在飞任务重复消费）；无新帧不提交、在飞满载
+显式丢弃计数、提交拒绝显式化（丢弃 + Info 事件）。帧任务调
+`buildNodeGraph`（目录 + 可配置 `nodeFactory`，默认 `makeDefaultImageNode`）
++ `runNodeGraph` 同步求值真实算子；`runNodeGraph` 加性扩展第三参数
+`NodeExecutionObserver`（默认空，M4-02 契约不动破坏）：逐实现节点 `apply`
+实测耗时与失败异常副本（先观测后原样重传），引擎据此产出真实 `NodeStats`
+（滚动窗口 32）与 `NodeFailed` 节点归因；注入型源节点不经耗时观测、
+`executedFrames` 在注入点记账（两轮验证中 IVA 发现的首个缺陷即源节点
+executedFrames 恒 0，主循环以注入点 `recordNodeExecuted` 修复后复验闭合）。
+产物每节点最新一幅（LatestMailbox），`sourceSequence` 源节点透传注入帧序号、
+下游取生产者最小值；发布按帧提交序有序化（有界缓冲 ≤ maxInFlight，
+maxInFlight>1 乱序完成不回退）。Running 下图替换为消费式语义（图对象同一性
+判定，仅实际变化时换代并发布一次 `GraphApplied`，不复刻假引擎 peek 缺陷）；
+参数热更新受理期预编译校验（工厂期拒绝如 bandpass lowCut ≥ highCut 同步
+暴露）+ 帧边界重建生效；帧源抛出异常转引擎失败路径显式化（不让异常逃逸
+timer 任务体）。生命周期与假引擎同款：掉队 tick weak_ptr 闭包、stop 阻塞
+排空收敛 Idle（幂等）、Failed 终态 stop 后可重启、会话统计复位而统计通道
+序号实例内单调、析构防御 stop。M4 目录构建提取为两引擎共享单一事实源
+（`src/workflow/default_catalog.hpp`，假引擎 `makeDefaultFakeCatalog` 委托，
+`test_workflow_fake_engine` 四预设回归证明 schema 逐字段一致）；参数校验
+助手同理共享（`src/workflow/param_check.hpp`）。测试（Independent-
+Verification-Agent 独立编写执行，两轮——首轮 1 实现缺陷修复 + 复验闭合）：
+新增 `tests/test_workflow_engine.cpp` 431 项（契约套件 90 + 真引擎特有 341），
+覆盖：工厂校验、默认目录与假目录逐字段一致、真算子数值链（grayify BT.601
+独立手推 golden）、参数"下一帧生效"（downscale scale 热更新输出尺寸跟随）、
+过载显式丢弃（maxInFlight=1 + 慢算子 → droppedFrames 增长且 inFlight 有界）、
+帧源空闲与无效图像语义、GraphApplied 消费式缺陷探针（ParamUpdated 后静默窗
+不被翻转）、sourceSequence 传播与单调、运行期失败归因（crop 越界 ROI →
+NodeFailed 节点归因 + Failed）、关停竞态（shutdown(false) 后 stop 有界收敛）、
+owner 纪律 shutdown(true) Completed、会话复位与统计序号不回退、待生效图新源
+缺输入的安全不变量（不 Failed、不计丢弃、供帧后恢复）。debug/asan/ubsan/tsan
+四预设全量 ctest 26/26（既有 25 + 新增 workflow_engine；realsense_hardware
+真机冒烟设备不在位 SKIP 不计失败），零消毒器诊断，debug 连续 12 轮稳定，
+编译零警告（-Wall -Wextra -Werror 口径）。环境：x86_64 Linux，GCC 13，CMake
+presets debug/asan/ubsan/tsan；tsan 需 `setarch $(uname -m) -R`（本机内核
+7.0.0-34 的 TSAN ASLR 环境限制，既有测试同况）。已知未验证路径：提交被
+Executor 拒绝的 Info 事件需 Executor 故障注入面（与假引擎同处置，归 Executor
+设施，引擎侧 droppedFrames 显式化结果已断言）；DEC-013 §1.3 的换代时序语义
+（GraphApplied 发布先于新代首帧、换图至供帧窗口内统计冻结）经 IVA 观察项
+裁决后已修订入文（立即换代 + 覆盖门控提交，非字面"推迟换代"）。`M4-08`
+（M4 测试矩阵与性能记录）为下一工作项。
 
 2026-09-29：`M4-06` 完成关闭——FFT 滤波节点族落地（`rin_core`，kissfft 为实现
 私有链接、公开头零第三方类型，RULE-01/DEC-012）。`src/core/image_ops.cpp` 新增

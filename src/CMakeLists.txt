@@ -42,6 +42,22 @@ target_compile_features(rin_workflow_fake PUBLIC cxx_std_20)
 # executor 作为运行时契约 PUBLIC 传递（与 adapter 同纪律：引擎任务全部受 Executor 管理）。
 target_link_libraries(rin_workflow_fake PUBLIC rin::core executor::executor)
 
+# M4-07 工作流真引擎（DEC-013 执行模型）：按 M4-09 契约实现 IWorkflowEngine，
+# 帧泵采样 + 最新帧快照 + 有界在飞显式丢弃；经 runNodeGraph 求值真实算子。
+# 与 rin_workflow_fake 并列（DEC-016 假换真集成在 M5-06），零设备/窗口依赖。
+add_library(rin_workflow STATIC
+    workflow/engine.cpp
+)
+add_library(rin::workflow ALIAS rin_workflow)
+
+target_include_directories(rin_workflow
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/workflow>
+)
+target_compile_features(rin_workflow PUBLIC cxx_std_20)
+# executor 作为运行时契约 PUBLIC 传递（与假引擎同纪律：引擎任务全部受 Executor 管理）。
+target_link_libraries(rin_workflow PUBLIC rin::core executor::executor)
+
 add_library(rin_realsense_adapter STATIC
     adapters/realsense/realsense_camera_service.cpp
     adapters/realsense/imu_motion_ingest.cpp

@@ -62,8 +62,27 @@ debug/asan/ubsan 0 失败 [独立验证两轮，第一轮暴露 buildNodeGraph �
 语义：crop ROI 退化/越界 apply 期显式拒绝、输出紧凑新缓冲；downscale 输出尺寸
 floor 公式、nearest 面积覆盖采样与 bilinear 中心对齐插值 round-half-up、scale=1
 恒等；golden 几何单测 165 项 + public_boundary 扩展 33 项 debug/asan/ubsan
-0 失败 [独立验证一轮 PASS]，全量 ctest 三预设 22/22）。`M4-04`（卷积算子节点）
-为下一工作项。
+0 失败 [独立验证一轮 PASS]，全量 ctest 三预设 22/22）。2026-09-29 `M4-04`
+完成：卷积/高斯算子节点落地（`conv_kernel`/`gaussian_blur`，§7 冻结数值语义：
+相关语义核不翻转、clamp/reflect-101/zero 边界可配、可分离高斯与直接卷积数学
+恒等；目录 schema 为 conv_kernel 增加 border 参数；golden 单测 171 项 +
+public_boundary 扩展 37 项 debug/asan/ubsan 0 失败 [独立验证两轮]，全量 ctest
+三预设 23/23）。2026-09-29 `M4-05` 完成：直方图均衡与灰度化节点落地
+（`hist_eq` Gray8→Gray8 + `grayify` Rgba8→Gray8 BT.601 定点亮度桥接，§7 冻结
+数值语义；golden 单测 79 项 + 见证适配 debug/asan/ubsan 0 失败 [独立验证一轮
+PASS]，全量 ctest 三预设 24/24）。2026-09-29 `M4-06` 完成：FFT 滤波节点族
+落地（`fft_lowpass`/`fft_highpass`/`fft_bandpass`，理想锐截止 + 2 幂填充 +
+归一化频率掩膜，§7 冻结数值语义；kissfft 私有链接；FFT 单测 174 项 + 见证
+适配 debug/asan/ubsan 0 失败 [独立验证三轮]，全量 ctest 三预设 25/25）。
+2026-09-29 `M4-07` 完成：工作流真引擎落地（[DEC-013](../decisions/DEC-013-workflow-execution-model.md)
+冻结——帧泵采样 + 最新帧快照 + 有界在飞显式丢弃；`rin_workflow` 库按 `M4-09`
+契约实现 `IWorkflowEngine`，经 `buildNodeGraph`/`runNodeGraph` 求值真实算子，
+`runNodeGraph` 加性扩展逐节点观测接缝（耗时/失败归因）；消费式图替换（同一性
+判定，不复刻假引擎 peek 缺陷）、发布按提交序有序化、参数受理期预编译校验；
+M4 目录构建提取为两引擎共享单一事实源；引擎测试 431 项（契约套件 90 + 特有
+341）debug/asan/ubsan/tsan 四预设 0 失败 [独立验证两轮，首轮 1 实现缺陷
+（源节点 executedFrames）修复后复验闭合]，全量 ctest 四预设 26/26）。
+`M4-08`（M4 测试矩阵与性能记录）为下一工作项。
 
 ## 交付边界（SCOPE）
 
@@ -182,8 +201,13 @@ floor 公式、nearest 面积覆盖采样与 bilinear 中心对齐插值 round-h
   语义不变）；OpenCV external pin 与全自研 FFT 经基准否决（性能相当/更差而
   构建体积与 CI 代价高数量级/实现负担重）；证据与复现见 `tools/fft_bench` 与
   [DEC-012](../decisions/DEC-012-image-operator-strategy.md)。
-- `DEC-013`（暂定，M4 经 M4-07 实现冻结）工作流执行模型：暂定"最新帧驱动 +
-  有界在飞 + 显式丢弃 + comm 统计暴露"。
+- `DEC-013`（已记录，2026-09-29 经 `M4-07` 实现冻结）工作流执行模型：
+  帧泵采样 + 最新帧快照 + 有界在飞显式丢弃——帧泵为 Executor 允许抖动周期
+  tick（引擎无自有线程），帧输入经 `WorkflowFrameSource` 接缝捕获快照
+  （探测即消费），无新帧不提交、满载显式丢弃计数；逐节点耗时/失败归因经
+  `runNodeGraph` 观测接缝实测；相机 worker 推送驱动、任务期拉帧、容量 1
+  DropOldest 图通道与假引擎 peek 模式经论证否决；证据与语义见
+  [DEC-013](../decisions/DEC-013-workflow-execution-model.md)。
 - `DEC-014`（已记录）工作台信息架构：单窗口 + 左侧导航四页（预览 / 位姿 /
   图像工作流 / 设置）；工作流页五区骨架（工具栏 / 调色板 / 画布 / 右上下文
   面板 / 底校验与事件列表）；参数热更新"下一帧生效"明示，不引入 deploy

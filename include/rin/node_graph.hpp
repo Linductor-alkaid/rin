@@ -86,6 +86,14 @@ struct NodeGraphBuild {
 /// 合成帧。
 using SourceInjector = std::function<ImageU8(const NodeGraph::Node&)>;
 
+/// 逐节点执行观测（M4-07 引擎统计接缝，DEC-013 冻结；可选）。每个实现节点
+/// 的 apply 完成后回调一次——成功时 error 为空、costMs 为本次 apply 实测耗时
+/// （steady 时钟，不含输入收集与输出契约核对）；失败时 error 为节点抛出的
+/// 异常副本，回调返回后 runNodeGraph 原样重传该异常（传播语义不变）。回调
+/// 不得抛出异常；注入型源节点不经本观测（注入属引擎输入，非节点处理）。
+using NodeExecutionObserver = std::function<void(
+    const NodeGraph::Node& node, double costMs, const std::exception_ptr& error)>;
+
 /// 单帧同步求值（M4-02 契约语义）：按拓扑序执行整图，返回与 nodes() 执行序
 /// 对齐的逐节点输出（引擎据此做有界产物保留与快照发布，DEC-013 冻结保留策略；
 /// M4-07 引擎在 Executor 有限任务内调用本函数并承载统计/取消/有界在飞）。
@@ -96,8 +104,10 @@ using SourceInjector = std::function<ImageU8(const NodeGraph::Node&)>;
 ///   IImageNode::apply，并对返回值做防御性契约核对（数量 = 声明输出数、逐幅
 ///   valid 且格式 = 声明格式），违反抛 std::runtime_error（算子实现缺陷显式
 ///   暴露，不静默）；
-/// - 节点内部异常原样传播（引擎捕获 → NodeFailed → Failed，EXEC-07）。
-[[nodiscard]] std::vector<std::vector<ImageU8>> runNodeGraph(const NodeGraph& graph,
-                                                             const SourceInjector& injectFrame);
+/// - 节点内部异常原样传播（引擎捕获 → NodeFailed → Failed，EXEC-07）；观测器
+///   先于重传见到该异常（NodeExecutionObserver）。
+[[nodiscard]] std::vector<std::vector<ImageU8>> runNodeGraph(
+    const NodeGraph& graph, const SourceInjector& injectFrame,
+    const NodeExecutionObserver& observeNode = {});
 
 }  // namespace rin

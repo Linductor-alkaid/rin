@@ -1,6 +1,7 @@
 #include "rin/node_graph.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -133,7 +134,8 @@ NodeGraphBuild buildNodeGraph(const WorkflowGraph& graph, const NodeCatalog& cat
 }
 
 std::vector<std::vector<ImageU8>> runNodeGraph(const NodeGraph& graph,
-                                               const SourceInjector& injectFrame) {
+                                               const SourceInjector& injectFrame,
+                                               const NodeExecutionObserver& observeNode) {
     const std::vector<NodeGraph::Node>& nodes = graph.nodes();
     std::vector<std::vector<ImageU8>> outputs(nodes.size());
     for (std::size_t i = 0; i < nodes.size(); ++i) {
@@ -173,7 +175,28 @@ std::vector<std::vector<ImageU8>> runNodeGraph(const NodeGraph& graph,
         for (const NodeGraph::InputEdge& edge : node.inputs) {
             inputs.push_back(outputs[edge.producerIndex][edge.outputPort]);
         }
-        std::vector<ImageU8> result = node.impl->apply(inputs);
+        // 逐节点观测（DEC-013 统计接缝）：耗时只覆盖 apply 本体；失败先回调
+        // 异常副本再原样重传（传播语义不变）。
+        const auto applyStarted = std::chrono::steady_clock::now();
+        std::vector<ImageU8> result;
+        try {
+            result = node.impl->apply(inputs);
+        } catch (...) {
+            if (observeNode) {
+                const double costMs =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - applyStarted)
+                        .count();
+                observeNode(node, costMs, std::current_exception());
+            }
+            throw;
+        }
+        if (observeNode) {
+            const double costMs = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - applyStarted)
+                                      .count();
+            observeNode(node, costMs, nullptr);
+        }
         if (result.size() != declaredOutputs) {
             throw std::runtime_error("node " + std::to_string(node.id) + " ('" +
                                      node.descriptor->typeId + "') produced " +
