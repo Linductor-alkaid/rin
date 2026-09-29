@@ -161,7 +161,10 @@ set_tests_properties(realsense_hardware PROPERTIES
 # 单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
 add_executable(test_workflow_contracts test_workflow_contracts.cpp)
 target_link_libraries(test_workflow_contracts PRIVATE rin::core)
-target_include_directories(test_workflow_contracts PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_workflow_contracts PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    # M6 目录扩展检查（第 15 节）引用默认目录单一事实源（仅头文件，无 src 链接）。
+    ${CMAKE_SOURCE_DIR}/src/workflow)
 add_test(NAME workflow_contracts COMMAND test_workflow_contracts)
 set_tests_properties(workflow_contracts PROPERTIES LABELS "unit")
 
