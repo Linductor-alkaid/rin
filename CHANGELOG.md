@@ -2,7 +2,7 @@
 
 本项目的版本遵循语义化版本（工程规范 10.5）；tag 与里程碑"建议发布点"一一对应。
 
-## [Unreleased]
+## [0.5.0] - 2026-09-29（M4 图像工作流与 M5 工作台 UI；含 M6 输入扩展、M7 可用性）
 
 ### 新增
 
@@ -131,6 +131,21 @@
   `DslAppConfig::textFont/iconFont` 显式指定（开发布局不受影响，仍用 exe 旁
   assets）；[DEC-009](docs/decisions/DEC-009-self-contained-deb-distribution.md)
   同步增补。
+
+### 依赖
+
+- kissfft pinned `7bce4153c6bc8aba2db0e889e576f9d00505cbe1`（upstream
+  131.2.0，BSD-3-Clause，external 源码构建）：`rin_core` FFT 族节点私有
+  后端（DEC-012 基准裁决；master 溢出预检误报缺陷见
+  `docs/dependency_feedback/kissfft/ledger.md`）。
+
+### 已知限制
+
+- 六轴 IMU 位姿 yaw 长期漂移（无磁力计的传感器物理限制，界面与文档披露，
+  v0.3.0 起持续存在）。
+- tsan 插桩 × 真机硬件组合下 `realsense_hardware` 的 IMU 频率恢复断言对
+  宿主时序敏感（插桩侵蚀相机/IMU 交付速率，比值贴近断言下限；debug/asan/
+  ubsan 确定性通过，M5-05/M6 验证记录）。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
