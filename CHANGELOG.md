@@ -53,6 +53,21 @@
 - 图像工作流执行模型决策（M4，`M4-07`）：[DEC-013](docs/decisions/DEC-013-workflow-execution-model.md)
   冻结（帧泵采样 + 最新帧快照 + 有界在飞显式丢弃；相机 worker 推送驱动、
   任务期拉帧、容量 1 DropOldest 图通道与假引擎 peek 模式经论证否决）。
+- 工作流视图契约（M4，`M4-09`，[DEC-016](docs/decisions/DEC-016-contract-first-workbench-order.md)
+  契约先行）：`include/rin/workflow_types.hpp`（工作流图模型、节点目录与类型化
+  参数 schema、`validateWorkflowGraph` 结构校验、逐节点耗时与端到端统计、
+  产物快照与事件语义）与 `include/rin/workflow_engine.hpp`（`IWorkflowEngine`
+  运行控制 + 有界最新态数据通道）——UI 与引擎间的唯一契约面，公开头零第三方
+  类型；`M5-08` 假引擎与 `M4-07` 真引擎实现同一契约并共用契约测试套件，完成
+  判据随 `M4-08` 关闭全部满足。
+- M4 测试矩阵与吞吐实测记录（M4，`M4-08`）：`tools/workflow_bench` 实测工具
+  （Release 构建，`RIN_BUILD_TOOLS` 门控，不进 ctest）与记录
+  [docs/benchmarks/workflow-throughput-848x480.md](docs/benchmarks/workflow-throughput-848x480.md)
+  ——848×480 典型链（grayify→gaussian_blur→fft_lowpass→hist_eq）真引擎吞吐：
+  30 fps 相机速率三次独立运行 18 轮 29.94–30.04 fps、零丢弃（余量约 3.4 倍，
+  最强可复现结论）；标称频率态饱和 ≈102 fps，FFT 低通为链主导成本
+  （10.4–14.9 ms/帧）；降分辨率前置变体把 FFT 降至 1.8–4.3 ms/帧；只记录
+  实测值与方法，无性能目标声明；M4 全部工作项与退出条件闭合。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
