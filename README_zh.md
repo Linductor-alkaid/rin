@@ -1,3 +1,7 @@
+<div align="center">
+
+<img src="docs/rin.png" alt="Rin 图标" width="128"/>
+
 # Rin
 
 [![CI](https://github.com/Linductor-alkaid/rin/actions/workflows/ci.yml/badge.svg)](https://github.com/Linductor-alkaid/rin/actions/workflows/ci.yml)
@@ -8,6 +12,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](README.md) | 简体中文
+
+</div>
 
 **Rin** 是一个基于现代 C++ 的 Intel RealSense 实时工作台：RGB/深度实时预览、
 IMU 融合驱动的 3D 相机位姿视图，以及拖拽式节点编辑器承载的相机端图像处理——

@@ -1,3 +1,7 @@
+<div align="center">
+
+<img src="docs/rin.png" alt="Rin logo" width="128"/>
+
 # Rin
 
 [![CI](https://github.com/Linductor-alkaid/rin/actions/workflows/ci.yml/badge.svg)](https://github.com/Linductor-alkaid/rin/actions/workflows/ci.yml)
@@ -8,6 +12,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 English | [简体中文](README_zh.md)
+
+</div>
 
 **Rin** is a real-time Intel RealSense workbench built with modern C++: live RGB/depth
 preview, a 3D camera-pose view driven by IMU fusion, and a drag-and-drop node editor
