@@ -1271,16 +1271,25 @@ void testPumpNodeOutputDriverPull() {
 
     // Running 后 pump：panel.outputs 同时含选中节点（crop 16x12）与输入驱动
     // 节点（source 32x24）快照——驱动拉取即 ROI 联动约束的尺寸源。
+    // 谓词必须同时要求两节点快照到位：publishOutputs 按执行序先发布 source(1)
+    // 后发布 crop(2)，两次邮箱发布之间 UI 线程可插入 pump——只查 driver 的谓词
+    // 会在此窗口退出，紧随其后的 find(2) 断言偶发失败（CI ubuntu runner 实报；
+    // 生产行为正确：同一次 publishOutputs 两节点都发布，下一轮 pump 即齐）。
     WorkflowPanelState panel;
     std::uint64_t publishSeq = 0;
     RIN_CHECK_MSG(pollUntil([&] {
                       service->publish(makeFrame(++publishSeq, 32, 24));
                       (void)viewer::pumpNodeOutput(canvas, panel, *engine);
                       const rin::NodeOutputSnapshot* driver = panel.outputs.find(1);
+                      const rin::NodeOutputSnapshot* selected =
+                          panel.outputs.find(2);
                       return driver != nullptr && driver->valid() &&
-                             driver->width == 32 && driver->height == 24;
+                             driver->width == 32 && driver->height == 24 &&
+                             selected != nullptr && selected->valid() &&
+                             selected->width == 16 && selected->height == 12;
                   }),
-                  "pump: driver node output (input size source) is cached");
+                  "pump: driver (32x24) and selected (16x12) outputs are cached "
+                  "together");
     const rin::NodeOutputSnapshot* selected = panel.outputs.find(2);
     RIN_CHECK_MSG(selected != nullptr && selected->valid(),
                   "pump: selected node output cached alongside the driver");
@@ -1288,7 +1297,7 @@ void testPumpNodeOutputDriverPull() {
         RIN_CHECK_EQ(selected->width, 16u);
         RIN_CHECK_EQ(selected->height, 12u);
     }
-    RIN_CHECK(panel.outputs.size() >= 1);
+    RIN_CHECK(panel.outputs.size() >= 2);
 
     // 引擎回 Idle：pumpNodeOutput 整体排空（一次 true、幂等二次 false）。
     engine->stop();
