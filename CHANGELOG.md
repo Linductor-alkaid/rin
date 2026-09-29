@@ -77,6 +77,28 @@
   停止幂等有界排空；Stopping 全禁用、无暂停）与 Running 下图结构变更"待生效"
   标注（`GraphApplied` 帧边界应用后清除）；契约假引擎（`rin_workflow_fake`，
   `M5-08`）按既定计划随集成移除，`M4-09` 契约与共用测试套件由真引擎延续。
+- 工作台导航壳与页面框架（M5，`M5-02`，[DEC-014](docs/decisions/DEC-014-workbench-information-architecture.md)）：
+  单窗口四页导航（预览 / 位姿 / 图像工作流 / 设置；左窄边导航栏按台账
+  EUI-20260928-001 以 rect/text + viewer 令牌自绘）；页面切换保持各页 UI
+  状态，相机服务运行态全局共享；工作流页五区骨架；深度配色选择移入设置页
+  （DEC-014 决策 3）；M1 数字键分辨率速选收窄到预览页。
+- 节点编辑器画布（M5，`M5-03`，[DEC-015](docs/decisions/DEC-015-node-editor-implementation-path.md)）：
+  EUI-NEO 原语自研节点画布——调色板拖出创建（目录分组 + 即输即筛）与右键
+  搜索创建菜单、端口拖拽连线（即时类型过滤、悬空输入为搭图中间态只标注不
+  阻塞、目标输入已有入边时替换）、贝塞尔带状连线渲染、画布平移缩放（指针
+  锚点）与帧全图、框选 / 组拖动 / `Del` 删除 / `Alt+点击` 删线 / `Esc` 取消；
+  画布图经 `applyGraph` 与引擎同步（UI 预检与引擎准入共用 `validateWorkflowGraph`
+  唯一判据，拒绝原因显式反馈）；交互几何全部下沉为平台无关纯逻辑（单测对象）。
+- 参数面板与中间结果查看（M5，`M5-04`）：选中节点的类型化参数编辑
+  （Boolean→开关、Integer/Real→滑条+输入、Enumeration→下拉、RealArray→自研
+  矩阵网格），编辑经 `requestParamUpdate` 逐参数提交、同步拒绝就地报错
+  （"参数下一帧生效"常驻提示）；节点输出缩略图（每节点仅最新一幅、有界 LRU
+  缓存、降采样后 GpuFrameView 上屏，显示分辨率与源帧序号）；节点执行失败
+  可视化（`NodeFailed` → 画布/面板 destructive 徽标 + 事件列表条目）。
+- 性能面板（M5，`M5-05`）：工具栏引擎状态徽标（四态语义色）；节点框底部
+  耗时徽标（滚动窗口均值）；右面板工作流总览（端到端 FPS / 累计处理 / 丢弃 /
+  在飞，数值取自引擎与 `executor::comm` 统计；丢弃非零以 warning 行显式呈现，
+  禁止静默；停止/失败后末次值冻结呈现并标注 stopped）。
 - M4 测试矩阵与吞吐实测记录（M4，`M4-08`）：`tools/workflow_bench` 实测工具
   （Release 构建，`RIN_BUILD_TOOLS` 门控，不进 ctest）与记录
   [docs/benchmarks/workflow-throughput-848x480.md](docs/benchmarks/workflow-throughput-848x480.md)
