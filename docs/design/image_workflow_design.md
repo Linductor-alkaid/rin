@@ -320,7 +320,12 @@ M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默�
     量级。
   - 边界语义披露：零填充等价于按矩形截断的周期延拓假设，理想掩膜滤波在原图
     边界附近产生环状振铃（Gibbs）——这是 DEC-012 填充策略的既定语义，不属于
-    缺陷；使用建议（强振铃时先降分辨率或改用空间域算子）随 `M4-08` 实测记录。
+    缺陷；使用建议（强振铃时先降分辨率或改用空间域算子）随 `M4-08` 实测记录
+    （[workflow-throughput-848x480.md](../benchmarks/workflow-throughput-848x480.md)：
+    848×480 填充路径下 fft_lowpass 为链主导成本（10.4–13.5 ms/帧）；降分辨率
+    前置把 FFT 降至 2.9–4.3 ms/帧（填充目标 512×256）且链饱和吞吐
+    ≈102 → 160–190 fps；空间域参照链 ≈198 fps。2026-09-29 本机 Release
+    实测，无跨平台承诺）。
   - 有界性与生命周期：padW·padH ≤ 4×输入像素数（N ≤ kMaxImageBytes 预算 →
     ≤ 2²⁶）；float 实图缓冲与半谱合计约 8 B/填充像素 → 瞬时 ≤ 约 576 MiB
     上界，随帧释放；典型 848×480 填充路径约 4 MiB。kissfft 计划（twiddle 表）
@@ -353,7 +358,8 @@ M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默�
 ## 9. 关联文档和工作项
 
 - [M4 里程碑](../plans/m4-cv-node-workflow.md)：`M4-02`（本文）、`M4-03`..`M4-06`
-  （§6/§7 逐算子）、`M4-07`（§5.2 观测接缝、§5.3 对齐项）、`M4-08`（性能实测）。
+  （§6/§7 逐算子）、`M4-07`（§5.2 观测接缝、§5.3 对齐项）、`M4-08`
+  （性能实测：[benchmarks/workflow-throughput-848x480.md](../benchmarks/workflow-throughput-848x480.md)）。
 - [DEC-013](../decisions/DEC-013-workflow-execution-model.md)：工作流执行模型
   （帧泵采样 + 最新帧快照 + 有界在飞显式丢弃，`M4-07` 冻结）。
 - [DEC-012](../decisions/DEC-012-image-operator-strategy.md)：FFT 依赖选型与 2 幂
