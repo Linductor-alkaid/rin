@@ -25,6 +25,12 @@
   sigma=0 为 δ 核恒等输出，与直接卷积量化后逐像素差 ≤ 1）；工作流目录 schema
   为 `conv_kernel` 增加 `border` 参数（假引擎目录同步），数值语义冻结于
   `docs/design/image_workflow_design.md` §7。
+- 直方图均衡与灰度化节点（M4，`M4-05`）：`rin::makeDefaultImageNode` 工厂扩展
+  `hist_eq`（Gray8 直方图均衡：cdf_min 映射 + 整数 round-half-up，最大/最小出现
+  灰度精确映射 255/0，常值图恒等输出，全量程均匀直方图逐像素恒等）与 `grayify`
+  （Rgba8 → Gray8 BT.601 定点亮度 Y = (77·R + 150·G + 29·B + 128) >> 8，alpha
+  不参与）；目录 schema 无变更，数值语义冻结于
+  `docs/design/image_workflow_design.md` §7。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
