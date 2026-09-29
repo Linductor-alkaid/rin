@@ -54,6 +54,19 @@
   冻结（帧泵采样 + 最新帧快照 + 有界在飞显式丢弃；相机 worker 推送驱动、
   任务期拉帧、容量 1 DropOldest 图通道与假引擎 peek 模式经论证否决）。
 
+### 修复
+
+- deb 安装后 UI 字体丢失（2026-09-29）：deb 未随包携带 EUI-NEO 运行时字体，
+  安装后可执行文件旁无 `assets/`，UI 文本与图标退化为系统字体回退——中文
+  （JingNanJunJunTi）与 Font Awesome 图标码位在常见系统字体中无覆盖（本机
+  Ubuntu 24.04 桌面 strace 实证：仅 NotoSans/Symbols2/Emoji/DejaVu 被加载，
+  CJK 回退路径不匹配实际安装位置），精简系统上文字整体不渲染；字体亦无法经
+  shlibdeps 声明依赖。现 `cmake/Packaging.cmake` 随包安装两个运行时字体到
+  `/usr/share/rin/fonts/`，viewer 启动时探测该目录并经
+  `DslAppConfig::textFont/iconFont` 显式指定（开发布局不受影响，仍用 exe 旁
+  assets）；[DEC-009](docs/decisions/DEC-009-self-contained-deb-distribution.md)
+  同步增补。
+
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
 ### 新增

@@ -27,6 +27,14 @@
    - `/usr/lib/udev/rules.d/99-realsense-libusb.rules`：来自 pinned 源码的设备规则，
      postinst 中 `udevadm control --reload-rules && udevadm trigger`（失败不阻塞安装）；
    - `/usr/share/applications/rin.desktop` 与 hicolor 图标（`docs/rin.png`）；
+   - `/usr/share/rin/fonts/`：EUI-NEO 运行时字体随包捆绑（2026-09-29 增补）——
+     EUI 按"可执行文件旁 assets/"解析运行时字体，开发布局由
+     `eui_neo_configure_app` 拷贝命中，deb 布局 `/usr/bin` 旁无 assets，系统
+     回退不保证覆盖中文与 Font Awesome 图标码位（中文为豆腐、图标消失；
+     strace 实证见 M2 计划验证记录 2026-09-29），且字体无法经 shlibdeps 声明
+     依赖。随包安装 UI 文本字体（JingNanJunJunTi）与图标字体（Font Awesome 7
+     Solid），文件名与 EUI 默认字体一致，viewer 启动时探测该目录并经
+     `DslAppConfig::textFont/iconFont` 显式指定；
    - 依赖声明由 `dpkg-shlibdeps` 自动生成（libusb-1.0-0、libudev1、libcurl4、
      libopengl0、libx11-6 等），不硬编码。
 3. **组件隔离**：本项目安装规则全部归属 `rin` 组件；依赖（executor / eui-neo /
@@ -60,10 +68,15 @@
 
 - 干净构建目录：configure（无系统 librealsense2 也可）→ build → `cpack -G DEB`
   产出 `rin_0.2.0_amd64.deb`。
-- `dpkg-deb -c/-I`：内容为上述五类文件，Depends 无 librealsense2；解包后
+- `dpkg-deb -c/-I`：内容为上述六类文件，Depends 无 librealsense2；解包后
   `readelf -d` RUNPATH 为 `$ORIGIN/../lib/rin`，`ldd` 从私有目录解析捆绑库、
   无 `not found`。
 - `cmake --install --component rin` 暂存目录不含任何依赖文件（组件隔离负向验证）。
+- 字体回归（2026-09-29 增补）：解包 deb 至临时目录，`LD_LIBRARY_PATH` 指向私有
+  库目录后 strace 实跑，确认 `/usr/share/rin/fonts/` 下两个字体被 openat 成功
+  加载（此前仅系统回退字体），进程无崩溃；开发布局回归确认
+  `eui_neo_configure_app` 拷贝的 exe 旁 assets 仍生效（strace 打开 exeDir/assets
+  字体）。
 
 ## 关联文档和工作项
 
