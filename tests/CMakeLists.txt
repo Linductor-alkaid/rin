@@ -295,7 +295,8 @@ set_tests_properties(image_ops_geometry PROPERTIES LABELS "unit")
 
 # M4-04 卷积算子节点 golden 数值测试（Core 纯逻辑，image_workflow_design.md §7 冻结
 # 数值语义）：工厂 makeDefaultImageNode（gaussian_blur/conv_kernel 实现签名一致、
-# 未实现类型 grayify/hist_eq/fft_* 抛 invalid_argument 且错误消息冻结为 M4-05..06）；
+# 未实现类型 fft_* 抛 invalid_argument 且错误消息冻结为 M4-06 FFT；M4-05 起
+# grayify/hist_eq 已实现并归 test_image_ops_histogram.cpp）；
 # conv_kernel 构造期拒绝全分支（size 非法枚举/种类错位、kernel 缺失/种类错位/长度
 # ≠K²/系数非有限、border 非法枚举/种类错位）、默认参数生效、单位核恒等（K=1/3/5 ×
 # 三边界策略）、已知核响应 golden（非对称核 1..9 在 4×4 图全 16 字节手推、单点移位
@@ -315,3 +316,27 @@ target_link_libraries(test_image_ops_convolution PRIVATE rin::core)
 target_include_directories(test_image_ops_convolution PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME image_ops_convolution COMMAND test_image_ops_convolution)
 set_tests_properties(image_ops_convolution PROPERTIES LABELS "unit")
+
+# M4-05 直方图均衡与灰度化算子节点 golden 数值测试（Core 纯逻辑，image_workflow_design.md
+# §7 冻结数值语义）：工厂 makeDefaultImageNode（grayify/hist_eq 实现签名一致、无参数
+# 声明直接实例化、未实现类型 fft_lowpass 抛 invalid_argument 且错误消息冻结为 M4-06
+# FFT）；grayify 通道错位判别（R/G/B 单通道极值 1×1 → 77/149/29 手推，BGR 误读可判别）、
+# round-half-up 半值边界（S≡128 mod 256 → 18.5→19）、全黑/全白极值、4×2 混合小图全 8
+# 字节手推 golden、alpha 不参与（同 RGB 不同 alpha 输出相同）、行尾 padding 输入（输出
+# 紧凑 stride==宽、padding 不泄漏）、37×23 噪声图与测试内独立参考实现逐字节交叉验证、
+# 防御路径（数量 0/2、无效图、Gray8 喂 Rgba8 声明）、图集成（source→grayify == 直接
+# apply）；hist_eq 已知直方图 golden（6×4 hist{2:3,5:5,100:9,200:7}，cdf_min=3、
+# den=21，出现值 → 0/61/170/255 手推含 num/den 中间量，padding 变体）、极值映射
+# （v_min→0、v_max→255）、常值图恒等（全 7/全 255/全 0/1×1，非全白全黑，新紧凑缓冲）、
+# 全量程均匀直方图精确恒等（256×2 每级 2 次，out[v]=v）、子区间均匀线性重映射
+# （[40,47] 每级 3 次 → round-half-up(255j/7) 手推、[10,40] 半值锁 8.5→9 排除银行家
+# 舍入）、不共享源像素（共享指针与数据指针核对）、防御路径（Rgba8 喂 Gray8 声明）、
+# 亮度域一致性图集成（source→grayify→hist_eq 链路 == 参考亮度 Gray8 图直接经
+# hist_eq == 独立参考）、37×23 噪声图参考交叉验证。golden 期望由 §7 冻结公式独立
+# 手推/测试内参考实现推导，不参考实现代码。单线程纯逻辑：无跨上下文状态/关闭路径
+# （DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_image_ops_histogram test_image_ops_histogram.cpp)
+target_link_libraries(test_image_ops_histogram PRIVATE rin::core)
+target_include_directories(test_image_ops_histogram PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME image_ops_histogram COMMAND test_image_ops_histogram)
+set_tests_properties(image_ops_histogram PROPERTIES LABELS "unit")

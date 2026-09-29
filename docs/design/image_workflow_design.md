@@ -3,7 +3,8 @@
 > 状态：Active
 > 日期：2026-09-28（随 `M4-02` 产出）；2026-09-29 随 `M4-03` 冻结几何算子数值语义；
 > 2026-09-29 随 `M4-04` 冻结卷积/高斯数值语义（`conv_kernel` 目录 schema 增加
-> `border` 参数，假引擎目录同步扩展）
+> `border` 参数，假引擎目录同步扩展）；2026-09-29 随 `M4-05` 冻结直方图均衡与
+> 灰度化数值语义（目录 schema 不变）
 > 负责人：Linductor-alkaid
 > 关联：[M4 里程碑](../plans/m4-cv-node-workflow.md)、[DEC-012](../decisions/DEC-012-image-operator-strategy.md)、
 > [DEC-013（暂定，M4-07 冻结）](../plans/rin-implementation-plan.md)、
@@ -95,10 +96,10 @@ Executor 承载细节（`M4-07` 实现，执行模型经 DEC-013 冻结）。
 实例参数构造可执行节点；返回 nullptr 表示注入型源节点（typeId 无节点实现，执行
 时由引擎注入相机帧）；构造失败抛异常，由 `buildNodeGraph` 转为显式校验问题。
 M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默认工厂入口为
-`makeDefaultImageNode`（`include/rin/image_ops.hpp`，M4-03 起）："crop"/"downscale"
-返回对应实现、"source" 返回 nullptr、其余 M4 类型（卷积/直方图/FFT 族，随
-M4-04..06 扩展）抛 `std::invalid_argument`——目录声明与工厂能力的偏差显式暴露，
-不静默。
+`makeDefaultImageNode`（`include/rin/image_ops.hpp`，M4-03 起）："crop"/"downscale"/
+"gaussian_blur"/"conv_kernel"/"grayify"/"hist_eq" 返回对应实现、"source" 返回
+nullptr、其余 M4 类型（FFT 族，随 M4-06 扩展）抛 `std::invalid_argument`——目录
+声明与工厂能力的偏差显式暴露，不静默。
 
 ## 5. 图编译与执行语义
 
@@ -147,7 +148,8 @@ M4-04..06 扩展）抛 `std::invalid_argument`——目录声明与工厂能力�
 准（M5 调色板/参数面板按其开发）；真引擎目录提供同一组 typeId 与 schema，数值
 语义归 `M4-03`..`M4-06` 实现。schema 演进随算子工作项同步双向落盘（假引擎目录
 与本文表格同批更新）：`M4-04` 为 `conv_kernel` 增加 `border` 边界填充参数（§7
-冻结的三种策略），其余 schema 不变：
+冻结的三种策略）；`M4-05` 无 schema 变更（`grayify`/`hist_eq` 均无参数），其余
+schema 不变：
 
 | typeId | 显示名 | 输入 | 输出 | 参数（id: kind 默认 [范围]） |
 | --- | --- | --- | --- | --- |
@@ -232,8 +234,37 @@ M4-04..06 扩展）抛 `std::invalid_argument`——目录声明与工厂能力�
     像素 |可分离 − 直接| ≤ 1（golden 容差）。中间缓冲为 输入像素数×8 字节
     （有界：Gray8 输入 ≤ kMaxImageBytes 预算 → ≤ 128 MiB 临时，随帧释放）。
 - `hist_eq`（M4-05）：已知直方图映射 golden、均匀分布输入近似恒等（均匀性）、
-  RGBA 亮度域与 Gray8 路径一致。
-- `grayify`：亮度域公式 golden（与 hist_eq 的 RGBA 亮度域同公式）。
+  RGBA 亮度域与 Gray8 路径一致。数值语义（M4-05 冻结）：
+  - 目录签名 Gray8 → Gray8、无参数（§6）；节点不接收 RGBA——RGBA 相机帧经
+    `grayify` 桥接进入 Gray8 算子族。"RGBA 亮度域"的唯一公式定义随 `grayify`
+    （下条）；"亮度域与 Gray8 路径一致"由图集成 golden 覆盖：source→grayify→
+    hist_eq 链路输出与"对手推同一亮度 Gray8 图直接均衡"逐字节一致（grayify
+    输出即 Gray8，链路无二次变换）。
+  - 直方图 hist[v]（v ∈ [0,255]）覆盖全图 W×H 全部像素；cdf[v] = Σ_{u≤v} hist[u]；
+    N = W×H；cdf_min = cdf[v_min]（最小出现灰度 v_min 的累积计数，等于 hist[v_min]，
+    全图直方图先行统计一次，O(N + 256)）。
+  - 映射：out[v] = round-half-up(255·(cdf[v] − cdf_min)/(N − cdf_min))。整数精确
+    计算（无浮点/libm）：num = (cdf[v] − cdf_min)·255、den = N − cdf_min（均非负），
+    out[v] = floor((2·num + den)/(2·den))（uint64；N ≤ kMaxImageBytes ≤ 2²⁴ 无
+    溢出）。最大出现灰度精确映射 255（cdf[v_max] = N），最小出现灰度映射 0；输出
+    落在 [0,255] 无需饱和。先构建 256 级 LUT 再逐像素查表写出。
+  - 常值图（cdf_min = N）：分母为零，定义为恒等输出——同值图无对比度可拉伸，
+    逐像素保留原值（仍输出新紧凑缓冲，不共享源像素；不得把常值图拉成全白/全黑）。
+  - 均匀性（golden 依据）：全量程 [0,255] 均匀直方图（每级计数相等）→ 逐像素
+    恒等（公式精确给出，非近似）；子区间 [a,b] 均匀 → out[v] = round-half-up(
+    255·(v−a)/(b−a)) 线性重映射。
+  - 输出为与输入同尺寸的新紧凑缓冲（stride = 宽×1），不共享源像素；输入允许
+    stride padding（经 row(y) 读取）。
+- `grayify`（M4-05）：亮度域公式 golden——RGBA 亮度域的唯一冻结公式（BT.601
+  定点）：Y = (77·R + 150·G + 29·B + 128) >> 8。数值语义（M4-05 冻结）：
+  - 字节序按 Rgba8 声明序（byte0 = R、byte1 = G、byte2 = B、byte3 = A）；系数
+    77/150/29（Σ = 256）为 BT.601 加权定点化，+128 后右移 8 位即对 Y/256 的
+    round-half-up（与 M4-03/04 量化纪律一致），纯整数无浮点/libm，golden 逐字节
+    确定；Σ系数 = 256 保证 Y ∈ [0,255] 自然有界，无需饱和。
+  - alpha 不参与亮度计算与输出（Gray8 无 alpha 通道，与 downscale"不预乘 alpha"
+    先例一致）。
+  - 输出为 W×H Gray8 新紧凑缓冲（stride = 宽×1），不共享源像素；输入允许
+    stride padding。目录签名 Rgba8 → Gray8、无参数（§6）。
 - FFT 族（M4-06，DEC-012 节点级约束的 golden 化）：
   - 内部零填充到 2 幂（宽高各自向上取 2 幂；848×480 → 1024×512），掩膜按
     归一化频率在填充分辨率上构造，IFFT 后裁回原尺寸——填充/裁剪往返误差

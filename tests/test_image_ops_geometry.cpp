@@ -5,8 +5,9 @@
 //
 // 被测面与范围（对应设计文档 §7 crop/downscale golden 项）：
 // 1) 工厂 makeDefaultImageNode："source" → nullptr（注入型）；"crop"/"downscale"
-//    返回实现且 descriptor().typeId 与请求一致；未实现类型（grayify，M4-04 起
-//    gaussian_blur/conv_kernel 已实现并归 test_image_ops_convolution.cpp）抛
+//    返回实现且 descriptor().typeId 与请求一致；未实现类型（fft_lowpass，M4-04 起
+//    gaussian_blur/conv_kernel 已实现并归 test_image_ops_convolution.cpp；M4-05 起
+//    grayify/hist_eq 已实现并归 test_image_ops_histogram.cpp）抛
 //    std::invalid_argument；
 // 2) crop：像素级 golden（4×3 逐像素唯一，crop(1,1,2,2)）；全图裁切恒等；输入带
 //    padding stride 时逐行 memcpy 正确且输出紧凑（stride = width×4，不继承输入
@@ -29,7 +30,7 @@
 // 4) 图集成（自建 source/crop/downscale 三类型小目录，schema 照抄设计文档 §6）：
 //    source→crop→downscale 链（注入 4×4 已知帧，crop(1,1,2,2) 中间产物与最终
 //    1×1 逐字节 golden）；图执行中 crop 越界 → runNodeGraph 原样抛
-//    std::invalid_argument；目录含未实现类型（grayify）时 buildNodeGraph
+//    std::invalid_argument；目录含未实现类型（fft_lowpass）时 buildNodeGraph
 //    显式失败（validation.ok == false，issues 含 BadParam，graph 为 null）。
 //
 // golden 独立性说明：两组以上小图 golden 以字面字节向量写出，附手推过程注释
@@ -141,14 +142,33 @@ NodeDescriptor makeDownscaleDescriptor() {
     return d;
 }
 
-// §6 的 grayify / gaussian_blur 声明（grayify 仅用于"工厂未实现该类型"与图准入
-// 路径；gaussian_blur 自 M4-04 起已实现，此处仅作 1c 实现签名见证）。
-NodeDescriptor makeGrayifyDescriptor() {
+// §6 的 fft_lowpass / gaussian_blur 声明（fft_lowpass 仅用于"工厂未实现该类型"与
+// 图准入路径，M4-05 起 grayify/hist_eq 已实现归 test_image_ops_histogram.cpp；
+// gaussian_blur 自 M4-04 起已实现，此处仅作 1c 实现签名见证）。图准入见证需
+// Gray8 源（fft_lowpass 声明输入为 Gray8，Rgba8 源会在工厂前被 TypeMismatch 拒绝）。
+NodeDescriptor makeSourceGrayDescriptor() {
     NodeDescriptor d;
-    d.typeId = "grayify";
-    d.displayName = "灰度化";
-    d.inputs = {PortType::Rgba8};
+    d.typeId = "source";
+    d.displayName = "相机源";
     d.outputs = {PortType::Gray8};
+    return d;
+}
+
+NodeDescriptor makeFftLowpassDescriptor() {
+    NodeDescriptor d;
+    d.typeId = "fft_lowpass";
+    d.displayName = "FFT 低通";
+    d.inputs = {PortType::Gray8};
+    d.outputs = {PortType::Gray8};
+    ParamDescriptor cutoff;
+    cutoff.id = "cutoff";
+    cutoff.label = "cutoff";
+    cutoff.kind = ParamKind::Real;
+    cutoff.defaultValue = 0.2;
+    cutoff.hasRange = true;
+    cutoff.minValue = 0.0;
+    cutoff.maxValue = 1.0;
+    d.params.push_back(std::move(cutoff));
     return d;
 }
 
@@ -391,22 +411,23 @@ int main() {
 
     // --- 1c) 实现签名见证扩展与未实现类型抛 std::invalid_argument（目录声明与
     //     工厂能力偏差显式暴露）：M4-04 起 gaussian_blur/conv_kernel 已实现
-    //     （golden 归 test_image_ops_convolution.cpp）；"未实现类型抛异常"见证
-    //     保留 grayify 与未知 typeId 两例 ---
+    //     （golden 归 test_image_ops_convolution.cpp）；M4-05 起 grayify/hist_eq
+    //     已实现（golden 归 test_image_ops_histogram.cpp）；"未实现类型抛异常"
+    //     见证改用仍在 M4-06 的 fft_lowpass 与未知 typeId 两例 ---
     {
         const NodeDescriptor gaussian = makeGaussianBlurDescriptor();
         const std::unique_ptr<IImageNode> blur =
             rin::makeDefaultImageNode(gaussian, makeInstance(1, "gaussian_blur"));
         RIN_CHECK(blur != nullptr);
         RIN_CHECK(blur != nullptr && blur->descriptor().typeId == "gaussian_blur");
-        const NodeDescriptor grayify = makeGrayifyDescriptor();
+        const NodeDescriptor fftLowpass = makeFftLowpassDescriptor();
         RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(grayify, makeInstance(1, "grayify"));
+            (void)rin::makeDefaultImageNode(fftLowpass, makeInstance(1, "fft_lowpass"));
         }));
         NodeDescriptor ghost;
-        ghost.typeId = "grayify_nonexistent";
+        ghost.typeId = "fft_lowpass_nonexistent";
         RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(ghost, makeInstance(1, "grayify_nonexistent"));
+            (void)rin::makeDefaultImageNode(ghost, makeInstance(1, "fft_lowpass_nonexistent"));
         }));
     }
 
@@ -1080,14 +1101,15 @@ int main() {
         }
     }
 
-    // --- 4c) 目录含未实现类型（grayify）：buildNodeGraph 显式失败（BadParam）---
-    // （M4-04 起 gaussian_blur/conv_kernel 已实现，见证链改用 source→grayify。）
+    // --- 4c) 目录含未实现类型（fft_lowpass）：buildNodeGraph 显式失败（BadParam）---
+    // （M4-05 起 grayify/hist_eq 已实现，见证链改用仍在 M4-06 的 fft_lowpass；
+    // 源声明 Gray8 输出以通过端口类型核对、精确触达工厂异常路径。）
     {
         NodeCatalog catalog;
-        catalog.nodes = {sourceDescriptor, makeGrayifyDescriptor()};
+        catalog.nodes = {makeSourceGrayDescriptor(), makeFftLowpassDescriptor()};
 
         WorkflowGraph graph;
-        graph.nodes = {makeInstance(1, "source"), makeInstance(2, "grayify")};
+        graph.nodes = {makeInstance(1, "source"), makeInstance(2, "fft_lowpass")};
         graph.connections = {conn(1, 0, 2, 0)};
 
         const ImageNodeFactory factory = [](const NodeDescriptor& descriptor,

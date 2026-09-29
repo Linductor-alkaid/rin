@@ -60,8 +60,11 @@
 - [x] `M4-04` 卷积算子节点：自定义 KxK 卷积核（1/3/5，边界填充策略可配）、高斯
       模糊（核尺寸 / sigma）。完成判据：数值测试（已知核响应、可分离高斯与直接
       卷积等价）通过。
-- [ ] `M4-05` 直方图均衡节点：Gray8 与 RGBA 亮度域。完成判据：已知直方图映射与
-      均匀性测试通过。
+- [x] `M4-05` 直方图均衡节点：Gray8 与 RGBA 亮度域。完成判据：已知直方图映射与
+      均匀性测试通过。（"RGBA 亮度域"按冻结语义随本工作项一并交付：`grayify`
+      桥接节点实现 Rgba8 → Gray8 BT.601 定点亮度，亮度域唯一公式定义随 grayify；
+      `hist_eq` 目录签名 Gray8 → Gray8 冻结不变，RGBA 相机帧经 grayify 进入
+      Gray8 算子族，链路一致性由图集成 golden 覆盖。）
 - [ ] `M4-06` FFT 滤波节点族：Gray 频域变换、低通 / 高通 / 带通（截止与带宽可
       调、掩膜形状按 `DEC-012` 定）、IFFT 回 RGBA 显示。完成判据：正弦注入→单频
       滤除数值测试通过。
@@ -108,6 +111,48 @@
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-29：`M4-05` 完成关闭——直方图均衡与灰度化节点落地（`rin_core`，零第三方
+公开依赖，RULE-01）。工作项"Gray8 与 RGBA 亮度域"按冻结语义解释为随本工作项一并
+交付两个节点：`hist_eq`（Gray8 → Gray8，目录签名不变，RGBA 不直入——经 grayify
+桥接）与 `grayify`（Rgba8 → Gray8 桥接节点，§6 注记的 M4 真实现交付项）。数值语义
+随本工作项在 [design/image_workflow_design.md](../design/image_workflow_design.md)
+§7 冻结：grayify 为 RGBA 亮度域唯一冻结公式 BT.601 定点
+Y = (77·R + 150·G + 29·B + 128) >> 8（字节序按 Rgba8 声明序，+128 右移即
+round-half-up，Σ系数 = 256 保证 [0,255] 自然有界，纯整数无浮点/libm，alpha 不
+参与）；hist_eq 为 cdf_min 映射 out[v] = round-half-up(255·(cdf[v] − cdf_min)/
+(N − cdf_min))（整数精确 floor((2·num+den)/(2·den))，uint64 无溢出），最大/最小
+出现灰度精确映射 255/0，常值图（分母为零）定义为恒等输出（不拉成全白/全黑），
+全量程均匀直方图逐像素精确恒等、子区间均匀为 round-half-up 线性重映射；输出一律
+新紧凑缓冲（stride = 宽×1），输入允许 stride padding。目录 schema 无变更
+（`grayify`/`hist_eq` 均无参数，假引擎目录无需同步）。工厂扩展两类型后，未实现
+类型错误消息收敛为 "(M4-06 FFT operators are not implemented yet)"（FFT 族为
+唯一剩余未实现类型）。测试（Independent-Verification-Agent 独立编写执行，一轮
+PASS，实现文件对验证方只读以保证 golden 独立性）：新增
+`tests/test_image_ops_histogram.cpp` 78 项（grayify 公式 golden：R/G/B 单通道
+77/149/29 判别〔误读 BGR 即失败〕、全黑/全白、混合小图字面向量、半值边界
+round-half-up 锁定、alpha 不参与、stride padding、紧凑输出、37×23 伪随机图与
+测试内独立整数参考逐字节一致、单输入防御四分支、工厂签名、图集成；hist_eq：
+6×4 已知直方图全图 golden〔cdf/num/den 中间量核算〕、常值图恒等〔含 1×1、全 0/
+全 255〕、全量程均匀逐像素恒等、子区间均匀线性重映射含 8.5→9 半值锁定〔银行家
+舍入会得 8，判别力锁定〕、极值 0/255 映射、padding 变体、不共享源像素、防御、
+source→grayify→hist_eq 链路与"手推亮度 Gray8 图直接均衡"逐字节一致〔§7"RGBA
+亮度域与 Gray8 路径一致"golden 化〕、37×23 交叉验证）；适配既有测试过时见证
+（M4-04 先例）：`test_image_ops_geometry.cpp` 未实现见证 grayify → fft_lowpass
+（含 Gray8 源声明修正——原 Rgba8 源会被图校验 TypeMismatch 先行拒绝、触达不了
+工厂异常路径，166 项）、`test_image_ops_convolution.cpp` 冻结错误消息断言改为
+M4-06 口径（167 项）、`test_public_boundary.cpp` 扩展两类型工厂可见性与最小
+实例化（37→41 项）。golden 全部由 §7 冻结公式独立手推 + 独立 Python 重推导 +
+测试内自写整数参考，未抄实现；判别力经 4 个突变探针实证（BGR 字节序、截断量化、
+银行家舍入、padding 泄漏直方图），全部被捕获（0 逃逸），探针未入库。任务文中
+"G=255 → 150" 示例经验证方手推修正为 149（(150·255+128)>>8），公式与实现一致、
+非缺陷。debug/asan/ubsan 三预设全量 ctest 24/24（既有 23 + 新增
+image_ops_histogram；realsense_hardware 真机冒烟设备不在位 SKIP，不计失败），
+asan/ubsan 零诊断报告，编译零警告（-Wall -Wextra -Werror 口径）。环境：x86_64
+Linux，GCC 13，CMake presets debug/asan/ubsan；tsan 未跑（本层单线程纯逻辑，
+DOD-02 并发矩阵归 `M4-07` 引擎与 `M5-08` 契约套件，与 `M4-02`..`M4-04` 先例
+一致）。已知未断言路径：256 级映射表中 v < v_min 的空 bin 取值不可达无像素引用，
+契约未定义、仅断言实际出现值。`M4-06`（FFT 滤波节点族）为下一工作项。
 
 2026-09-29：`M4-04` 完成关闭——卷积/高斯算子节点落地（`rin_core`，零第三方公开
 依赖，RULE-01）。`src/core/image_ops.cpp` 新增 `conv_kernel`（K ∈ {1,3,5} 自定义

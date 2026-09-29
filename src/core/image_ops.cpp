@@ -545,6 +545,118 @@ private:
     double sigma_ = 1.5;
 };
 
+/// 灰度化（M4-05）：Rgba8 → Gray8，BT.601 定点亮度——RGBA 亮度域的唯一冻结
+/// 公式（image_workflow_design.md §7）：Y = (77·R + 150·G + 29·B + 128) >> 8
+/// （+128 右移即 round-half-up；Σ系数 = 256 保证 [0,255] 自然有界，纯整数无
+/// 浮点；alpha 不参与）。无参数节点，构造期无需读取参数。
+class GrayifyImageNode final : public IImageNode {
+public:
+    explicit GrayifyImageNode(NodeDescriptor descriptor) noexcept
+        : descriptor_(std::move(descriptor)) {}
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
+        const ImageU8& source = singleInput(descriptor_, inputs);
+        const std::uint32_t width = source.width();
+        const std::uint32_t height = source.height();
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const std::uint8_t* srcRow = source.row(y);
+            std::uint8_t* dstRow = buffer.data() + static_cast<std::size_t>(y) * width;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                // Rgba8 字节序：byte0 = R、byte1 = G、byte2 = B；byte3 = α 不参与。
+                const std::uint8_t* pixel = srcRow + static_cast<std::size_t>(x) * 4;
+                dstRow[x] = static_cast<std::uint8_t>(
+                    (77u * pixel[0] + 150u * pixel[1] + 29u * pixel[2] + 128u) >> 8);
+            }
+        }
+        return {freezeImage(PortType::Gray8, width, height, std::move(buffer))};
+    }
+
+private:
+    NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
+};
+
+/// 直方图均衡（M4-05）：Gray8 → Gray8，cdf_min 映射 + 整数 round-half-up
+/// （image_workflow_design.md §7）：out[v] = round-half-up(255·(cdf[v] − cdf_min)/
+/// (N − cdf_min))；最大出现灰度精确映射 255、最小出现灰度映射 0；常值图（分母
+/// 为零）定义为恒等输出。无参数节点。
+class HistEqImageNode final : public IImageNode {
+public:
+    explicit HistEqImageNode(NodeDescriptor descriptor) noexcept
+        : descriptor_(std::move(descriptor)) {}
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
+        const ImageU8& source = singleInput(descriptor_, inputs);
+        const std::uint32_t width = source.width();
+        const std::uint32_t height = source.height();
+        // 全图直方图（singleInput 已核对 Gray8，1 字节/像素）。
+        std::uint64_t histogram[256] = {};
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const std::uint8_t* srcRow = source.row(y);
+            for (std::uint32_t x = 0; x < width; ++x) {
+                ++histogram[srcRow[x]];
+            }
+        }
+        // cdf_min = 最小出现灰度的计数；常值图（cdf_min == N）恒等输出。
+        std::uint64_t cdfMin = 0;
+        for (std::uint32_t v = 0; v < 256; ++v) {
+            if (histogram[v] != 0) {
+                cdfMin = histogram[v];
+                break;
+            }
+        }
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height);
+        if (cdfMin == static_cast<std::uint64_t>(width) * height) {
+            // 常值图：无对比度可拉伸，逐像素保留原值（新紧凑缓冲，不共享源像素）。
+            for (std::uint32_t y = 0; y < height; ++y) {
+                std::copy_n(source.row(y), width,
+                            buffer.data() + static_cast<std::size_t>(y) * width);
+            }
+            return {freezeImage(PortType::Gray8, width, height, std::move(buffer))};
+        }
+        // 256 级映射表：整数精确 round-half-up out = floor((2·num + den)/(2·den))，
+        // num = (cdf[v] − cdf_min)·255、den = N − cdf_min（uint64：N ≤ kMaxImageBytes
+        // ≤ 2²⁴，无溢出）；v_min 之前的空 bin 无像素可达，取值不参与输出。
+        const std::uint64_t denominator =
+            static_cast<std::uint64_t>(width) * height - cdfMin;
+        std::uint8_t lut[256];
+        std::uint64_t cumulative = 0;
+        bool seenValue = false;
+        for (std::uint32_t v = 0; v < 256; ++v) {
+            cumulative += histogram[v];
+            if (!seenValue && histogram[v] != 0) {
+                seenValue = true;
+            }
+            if (!seenValue) {
+                lut[v] = 0;
+                continue;
+            }
+            const std::uint64_t numerator = (cumulative - cdfMin) * 255u;
+            lut[v] = static_cast<std::uint8_t>((2u * numerator + denominator) /
+                                               (2u * denominator));
+        }
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const std::uint8_t* srcRow = source.row(y);
+            std::uint8_t* dstRow = buffer.data() + static_cast<std::size_t>(y) * width;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                dstRow[x] = lut[srcRow[x]];
+            }
+        }
+        return {freezeImage(PortType::Gray8, width, height, std::move(buffer))};
+    }
+
+private:
+    NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
+};
+
 }  // namespace
 
 std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descriptor,
@@ -564,8 +676,14 @@ std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descripto
     if (descriptor.typeId == "conv_kernel") {
         return std::make_unique<ConvKernelImageNode>(descriptor, instance);
     }
+    if (descriptor.typeId == "grayify") {
+        return std::make_unique<GrayifyImageNode>(descriptor);
+    }
+    if (descriptor.typeId == "hist_eq") {
+        return std::make_unique<HistEqImageNode>(descriptor);
+    }
     throw std::invalid_argument("no core implementation for node type '" + descriptor.typeId +
-                                "' (M4-05..06 operators are not implemented yet)");
+                                "' (M4-06 FFT operators are not implemented yet)");
 }
 
 }  // namespace rin

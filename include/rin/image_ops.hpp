@@ -23,9 +23,14 @@ namespace rin {
 ///   kernel（RealArray 行主序 K² 个系数，长度不符构造抛 std::invalid_argument）、
 ///   border（Enumeration clamp|reflect|zero）构造期定型；相关语义（核不翻转），
 ///   double 累加 round-half-up 饱和量化；数值语义见设计文档 §7。
+/// - "grayify"：灰度化（M4-05）。Rgba8 → Gray8；BT.601 定点亮度（RGBA 亮度域
+///   唯一冻结公式）Y = (77·R + 150·G + 29·B + 128) >> 8，alpha 不参与；数值语义
+///   见设计文档 §7。
+/// - "hist_eq"：直方图均衡（M4-05）。Gray8；cdf_min 映射 + 整数 round-half-up，
+///   常值图恒等输出；数值语义见设计文档 §7。
 /// - "source"：返回 nullptr（注入型源节点，执行时由引擎注入相机帧）。
-/// - 其他 typeId：抛 std::invalid_argument（M4-05..06 的灰度化/直方图/FFT 族
-///   随对应工作项扩展；目录声明与工厂能力的偏差显式暴露，不静默）。
+/// - 其他 typeId：抛 std::invalid_argument（M4-06 的 FFT 族随对应工作项扩展；
+///   目录声明与工厂能力的偏差显式暴露，不静默）。
 ///
 /// 参数读取经 effectiveParamValue/param* 助手（未赋值取声明默认值）；运行期
 /// 直接构造的实例若参数缺失或种类与声明错位，构造抛 std::invalid_argument
