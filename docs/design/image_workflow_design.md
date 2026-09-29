@@ -8,7 +8,7 @@
 > 语义（目录 schema 不变）
 > 负责人：Linductor-alkaid
 > 关联：[M4 里程碑](../plans/m4-cv-node-workflow.md)、[DEC-012](../decisions/DEC-012-image-operator-strategy.md)、
-> [DEC-013（暂定，M4-07 冻结）](../plans/rin-implementation-plan.md)、
+> [DEC-013](../decisions/DEC-013-workflow-execution-model.md)、
 > [工作台 UI 设计](ui_workspace_design.md)（UI 消费方视角）
 
 ## 1. 定位与范围
@@ -131,19 +131,30 @@ M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默�
 - 实现节点：按入边收集生产者输出（像素共享零拷贝）→ `apply` → 防御性契约核对
   （数量/有效性/格式），违反抛 `std::runtime_error`。
 - 节点内部异常原样传播，不在此层包装（引擎区分节点失败与系统失败）。
+- 逐节点观测接缝（`M4-07` 加性扩展，[DEC-013](../decisions/DEC-013-workflow-execution-model.md)
+  冻结）：`runNodeGraph` 接受可选 `NodeExecutionObserver`——每个实现节点 `apply`
+  完成后回调一次，成功携 `apply` 实测耗时（steady 时钟，不含输入收集与输出契约
+  核对），失败携节点异常副本后原样重传（传播语义不变）；注入型源节点不经观测。
+  引擎据此采集逐节点耗时与失败归属（`NodeFailed` 事件携带节点 id）。
 - 与引擎的关系：`runNodeGraph` 不做统计、不做准入、不感知取消——M4-07 引擎在
   Executor 有限任务体内调用它并包络统计（每节点耗时/端到端 FPS/丢弃计数）、
-  有界在飞与协作取消（帧边界检查取消状态）。
+  有界在飞与协作取消（帧边界检查取消状态）。引擎执行模型（帧泵采样 + 最新帧
+  快照 + 有界在飞显式丢弃）在 DEC-013 冻结。
 
 ### 5.3 M4-07 真引擎对齐项（假引擎已知偏差，不得复刻）
 
 - Running 下 `applyGraph` 待生效图的消费：假引擎 `drainBoundary` 以 LatestMailbox
   peek 读取（不消费），导致每帧重建 generation 并重发 `GraphApplied`。真引擎按
   `M4-09` 契约"帧边界排空重建"语义消费（读取即消费），仅在图实际变化时重建并
-  发布事件。
+  发布事件。实现方式（DEC-013）：`LatestMailbox` 为纯快照语义、无消费操作，
+  引擎以图对象同一性（shared_ptr 指针）记录已应用的待生效图，仅实际变化时
+  重建换代并发布一次 `GraphApplied`。
 - 掉队 tick 生命周期闭合：假引擎的 `weak_ptr` 闭包 + 入口提升模式作为既有先例；
   真引擎的帧任务句柄与取消路径按 EXEC-07 组织。
 - 参数热更新在帧边界以新参数重建节点实例（§4.1），不修改运行中实例。
+- 产物发布按帧提交序有序化（DEC-013）：`maxInFlight > 1` 时帧任务可能乱序
+  完成，发布通道按序缓冲（有界 ≤ maxInFlight 帧）保证 `NodeOutputSnapshot`
+  的 `sourceSequence` 随轮询单调不减（M4-09 契约套件的可观察语义）。
 
 ## 6. M4 节点目录（调色板契约）
 
@@ -342,7 +353,9 @@ M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默�
 ## 9. 关联文档和工作项
 
 - [M4 里程碑](../plans/m4-cv-node-workflow.md)：`M4-02`（本文）、`M4-03`..`M4-06`
-  （§6/§7 逐算子）、`M4-07`（§5.3 对齐项）、`M4-08`（性能实测）。
+  （§6/§7 逐算子）、`M4-07`（§5.2 观测接缝、§5.3 对齐项）、`M4-08`（性能实测）。
+- [DEC-013](../decisions/DEC-013-workflow-execution-model.md)：工作流执行模型
+  （帧泵采样 + 最新帧快照 + 有界在飞显式丢弃，`M4-07` 冻结）。
 - [DEC-012](../decisions/DEC-012-image-operator-strategy.md)：FFT 依赖选型与 2 幂
   填充约束（§7 golden 化）。
 - [工作台 UI 设计](ui_workspace_design.md) §5：UI 对引擎契约的消费面（只消费不

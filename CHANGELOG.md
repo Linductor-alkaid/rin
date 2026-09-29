@@ -39,6 +39,20 @@
   量化；FFT 后端为 pinned kissfft 131.2.0 float，`rin_core` 私有链接、公开头
   零第三方类型）；目录 schema 无变更，数值语义冻结于
   `docs/design/image_workflow_design.md` §7。
+- 工作流真引擎（M4，`M4-07`，DEC-013 执行模型冻结）：`rin_workflow` 库的
+  `createWorkflowEngine` 按契约 `IWorkflowEngine` 实现——帧泵采样 + 最新帧
+  快照 + 有界在飞显式丢弃（帧泵为 Executor 周期 tick，引擎不拥有线程设施；
+  无新帧不提交；在飞满载显式丢弃计数），帧输入经 `WorkflowFrameSource` 接缝
+  （相机帧 → ImageU8 转换归适配/应用层），经 `buildNodeGraph`/`runNodeGraph`
+  求值真实算子，逐节点耗时与失败归属经 `runNodeGraph` 新增的逐节点观测接缝
+  实测（`NodeStats` 滚动窗口 32 帧），产物每节点最新一幅且发布按帧提交序
+  有序化；Running 下图替换为消费式语义（仅实际变化时换代并发布一次
+  `GraphApplied`，不复刻假引擎 peek 缺陷）、参数热更新受理期预编译校验 +
+  帧边界生效；M4 节点目录构建提取为两引擎共享单一事实源（假引擎委托），
+  `runNodeGraph` 扩展为加性默认参数（既有调用不受影响）。
+- 图像工作流执行模型决策（M4，`M4-07`）：[DEC-013](docs/decisions/DEC-013-workflow-execution-model.md)
+  冻结（帧泵采样 + 最新帧快照 + 有界在飞显式丢弃；相机 worker 推送驱动、
+  任务期拉帧、容量 1 DropOldest 图通道与假引擎 peek 模式经论证否决）。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
