@@ -28,9 +28,16 @@ namespace rin {
 ///   见设计文档 §7。
 /// - "hist_eq"：直方图均衡（M4-05）。Gray8；cdf_min 映射 + 整数 round-half-up，
 ///   常值图恒等输出；数值语义见设计文档 §7。
+/// - "fft_lowpass"/"fft_highpass"/"fft_bandpass"：FFT 滤波族（M4-06）。Gray8；
+///   cutoff / lowCut / highCut（Real，归一化频率 ∈ [0,1]，违者构造抛
+///   std::invalid_argument；带通 lowCut > highCut 同样构造拒绝）构造期定型；
+///   内部零填充到 2 幂（宽高各自、下界 2），理想锐截止掩膜按归一化频率在填充
+///   分辨率上构造（高通 = 低通补、带通 = 低通掩膜差），IFFT 显式 1/(padW·padH)
+///   归一化后裁回原尺寸、round-half-up 饱和量化；数值语义见设计文档 §7
+///   （DEC-012：FFT 后端为 pinned kissfft float，实现私有链接）。
 /// - "source"：返回 nullptr（注入型源节点，执行时由引擎注入相机帧）。
-/// - 其他 typeId：抛 std::invalid_argument（M4-06 的 FFT 族随对应工作项扩展；
-///   目录声明与工厂能力的偏差显式暴露，不静默）。
+/// - 其他 typeId：抛 std::invalid_argument（M4 目录类型已全部实现，此为未知
+///   类型的显式暴露路径，不静默）。
 ///
 /// 参数读取经 effectiveParamValue/param* 助手（未赋值取声明默认值）；运行期
 /// 直接构造的实例若参数缺失或种类与声明错位，构造抛 std::invalid_argument
