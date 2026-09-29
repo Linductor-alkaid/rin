@@ -13,19 +13,22 @@
 //   5. 生效值解析与控件初值文本：effectiveParamValue / paramValueText /
 //      paramRangeText；
 //   6. RealArrayGrid：fromFlat 形状推断、reshape 行主序截断/零扩展、at；
-//   7. NodeOutputCache（对契约假引擎）：Idle 无产物、Running 拉取与最新幅、
-//      每节点仅最新一幅、容量驱逐（find 触碰 LRU）、停止后无新产物、clear 排空；
+//   7. NodeOutputCache（对 M4-07 真引擎 + 合成帧源，M5-06 假换真）：Idle 无产物、
+//      Running 拉取与最新幅、每节点仅最新一幅、容量驱逐（find 触碰 LRU）、停止后
+//      无新产物、clear 排空；
 //   8. thumbnailRgbaFromSnapshot：无效快照/maxDim=0 拒绝、Gray8 灰度复制、
 //      Rgba8 stride 处理、最近邻降采样、只缩不放、floor 缩放、sequence 透传；
 //   9. NodeFailureMarks：NodeFailed 置位/覆盖、其他事件保留、Started/Stopped
 //      清空、clear；
-//  10. canvas_model 参数面（默认假目录描述符）：setParam 追加/替换/未知节点、
+//  10. canvas_model 参数面（默认目录描述符）：setParam 追加/替换/未知节点、
 //      toGraph 携带、越界赋值经校验标注（BadParam）、合法赋值保持校验通过、
 //      connect 预检携带参数（BadParam 非阻塞）、删除节点参数随节点消失。
 //
 // 测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），main 返回
-// rin_test::exitStatus()。NodeOutputCache 走假引擎契约面（owner 线程直接调用，
-// 产物到达用秒级死限的有界轮询等待）；其余分区单线程纯逻辑。
+// rin_test::exitStatus()。NodeOutputCache 走真引擎契约面（owner 线程直接调用，
+// 产物到达用秒级死限的有界轮询等待；帧输入为 32x24 Rgba8 合成图案的饱和帧源，
+// crop 节点显式携带合法 ROI 参数——默认 64x64 ROI 越出 32x24 帧会被真实 crop
+// 算子运行期拒绝）；其余分区单线程纯逻辑。
 // param_panel.hpp 的 EUI 组装与 pumpNodeOutput（GpuFrameView GL 上传）headless
 // 不可测，不在本文件范围（与 test_navigation/test_node_canvas 同纪律）。
 
@@ -51,7 +54,8 @@
 #include <thread>
 #include <vector>
 
-#include "fake_engine.hpp"
+#include "default_catalog.hpp"
+#include "engine.hpp"
 
 namespace {
 
@@ -665,7 +669,7 @@ void testRealArrayGrid() {
     }
 }
 
-// --- 7. 节点中间产物有界缓存（对契约假引擎） ---
+// --- 7. 节点中间产物有界缓存（对 M4-07 真引擎 + 合成帧源） ---
 
 void testNodeOutputCache() {
     executor::Executor executor;
@@ -675,21 +679,58 @@ void testNodeOutputCache() {
     if (!initialized) {
         return;
     }
-    rin::FakeWorkflowEngineConfig config;
-    config.frameWidth = 32;
-    config.frameHeight = 24;
-    config.frameInterval = std::chrono::milliseconds{2};
+
+    // 真引擎 fixture（M5-06 假换真）：32x24 Rgba8 确定性图案 + 饱和帧源（每次
+    // 探测交付新帧，workflow_bench saturatingSource 同款），2ms 泵保证有界轮询
+    // 快。帧源无状态（水位由引擎按节点传入的 lastSeen 驱动）。
+    constexpr std::uint32_t kFrameWidth = 32;
+    constexpr std::uint32_t kFrameHeight = 24;
+    static const std::shared_ptr<const std::vector<std::uint8_t>> kFixturePixels = [] {
+        auto buffer = std::make_shared<std::vector<std::uint8_t>>(
+            static_cast<std::size_t>(kFrameWidth) * kFrameHeight * 4);
+        for (std::uint32_t y = 0; y < kFrameHeight; ++y) {
+            for (std::uint32_t x = 0; x < kFrameWidth; ++x) {
+                const std::size_t offset =
+                    (static_cast<std::size_t>(y) * kFrameWidth + x) * 4;
+                (*buffer)[offset + 0] = static_cast<std::uint8_t>((x * 3 + y) & 0xFF);
+                (*buffer)[offset + 1] = static_cast<std::uint8_t>((x + y * 2) & 0xFF);
+                (*buffer)[offset + 2] = static_cast<std::uint8_t>((x * 7 + y * 5) & 0xFF);
+                (*buffer)[offset + 3] = 0xFF;
+            }
+        }
+        return buffer;
+    }();
+    rin::WorkflowEngineConfig config;
+    config.pumpInterval = std::chrono::milliseconds{2};
+    config.frameSource = [](rin::NodeId, std::uint64_t& lastSeen,
+                            rin::WorkflowFrameInput& out) {
+        out.sourceSequence = lastSeen + 1;
+        out.image = rin::ImageU8::wrap(rin::PortType::Rgba8, kFrameWidth, kFrameHeight,
+                                       kFrameWidth * 4, kFixturePixels);
+        lastSeen = out.sourceSequence;
+        return true;
+    };
     std::shared_ptr<rin::IWorkflowEngine> engine =
-        rin::createFakeWorkflowEngine(executor, std::move(config));
+        rin::createWorkflowEngine(executor, std::move(config));
 
     // 五节点链：source(Rgba8) -> crop -> downscale -> grayify(->Gray8) ->
-    // gaussian_blur；节点 1..5 每帧各发布一幅产物。
+    // gaussian_blur；节点 1..5 每帧各发布一幅产物。crop 显式携带合法 ROI
+    // （16x12 @ (0,0)）：真实 crop 算子对越界 ROI 运行期拒绝，默认 64x64 ROI
+    // 越出 32x24 帧（假引擎语义不含此校验，真引擎下必须显式给参）。
     rin::WorkflowGraph graph;
     const char* typeIds[5] = {"source", "crop", "downscale", "grayify", "gaussian_blur"};
     for (std::uint64_t i = 0; i < 5; ++i) {
         rin::NodeInstance instance;
         instance.id = i + 1;
         instance.typeId = typeIds[i];
+        if (instance.typeId == "crop") {
+            instance.params = {
+                {"x", rin::ParamValue{static_cast<std::int64_t>(0)}},
+                {"y", rin::ParamValue{static_cast<std::int64_t>(0)}},
+                {"width", rin::ParamValue{static_cast<std::int64_t>(16)}},
+                {"height", rin::ParamValue{static_cast<std::int64_t>(12)}},
+            };
+        }
         graph.nodes.push_back(instance);
     }
     for (std::uint64_t i = 0; i < 4; ++i) {
@@ -1004,12 +1045,15 @@ void testNodeFailureMarks() {
 
 // --- 10. canvas_model 参数面 ---
 
-// 图模型夹具：默认假目录（与引擎/调色板同一 schema 源）。
+// 图模型夹具：默认目录（与引擎/调色板同一 schema 源，M5-06 起为
+// makeDefaultImageNodeCatalog 单一事实源）。
 struct ParamGraphFixture {
     rin::NodeCatalog catalog;
     viewer::CanvasGraphModel model;
 
-    ParamGraphFixture() : catalog{rin::makeDefaultFakeCatalog()}, model{&catalog} {}
+    ParamGraphFixture()
+        : catalog{rin::workflow_catalog::makeDefaultImageNodeCatalog()},
+          model{&catalog} {}
 };
 
 void testCanvasParamSurface() {
@@ -1177,7 +1221,8 @@ void testCanvasParamWithConnectAndDelete() {
 
 int main() {
     runSection("catalog_sanity", [] {
-        const rin::NodeCatalog catalog = rin::makeDefaultFakeCatalog();
+        const rin::NodeCatalog catalog =
+            rin::workflow_catalog::makeDefaultImageNodeCatalog();
         RIN_CHECK(catalog.valid());
         // 本测试依赖的目录描述符存在且形态符合预期（radius 1..10、scale 0.1..1）。
         const rin::ParamDescriptor* radius =

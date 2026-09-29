@@ -165,16 +165,40 @@ target_include_directories(test_workflow_contracts PRIVATE ${CMAKE_SOURCE_DIR}/i
 add_test(NAME workflow_contracts COMMAND test_workflow_contracts)
 set_tests_properties(workflow_contracts PROPERTIES LABELS "unit")
 
-# M5-08 契约假引擎（DEC-016）：FakeWorkflowEngine 行为测试 + 与 M4-07 真引擎共用
-# 的契约套件（workflow_engine_contract_suite.hpp，以引擎工厂参数化）。覆盖 DOD-02
-# 并发矩阵（正常完成/任务异常/提交拒绝/执行中取消/shutdown）与关闭排空语义；
-# tsan 预设复跑目标（跨上下文通道与关闭顺序）。
-add_executable(test_workflow_fake_engine test_workflow_fake_engine.cpp)
-target_link_libraries(test_workflow_fake_engine PRIVATE rin::workflow_fake)
-add_test(NAME workflow_fake_engine COMMAND test_workflow_fake_engine)
-set_tests_properties(workflow_fake_engine PROPERTIES
+# M5-08 契约假引擎测试随假引擎移除（M5-06 假换真集成，DEC-016）：契约面由
+# test_workflow_engine 对真引擎继续运行共用套件（workflow_engine_contract_suite.hpp）。
+
+# M5-06 工作流运行控制 + 假换真集成测试（ui_workspace_design.md §5.8 / DEC-016，
+# Independent-Verification-Agent）：相机帧源接缝（workflow_frame_source.hpp 的
+# makeCameraFrameSource 对脚本化假 ICameraService：最新帧/零拷贝/多源独立水位/
+# 无效帧与空服务防御/帧种类绑定）、运行控制状态机（WorkflowCanvasState::
+# afterGraphChange 对真引擎：Idle 同步生效无待生效、Running 入队置 graphPending、
+# app.cpp pump 契约复刻清除、校验拒绝不置位、stop 清除与重启衔接）、引擎-UI
+# 端到端（假相机服务 → 帧源接缝 → 真引擎 → NodeOutputCache/WorkflowPerfState/
+# pumpNodeOutput 消费：格式与 sourceSequence 透传、参数热更新下一帧生效、stop
+# 排空语义、onShutdown 关闭顺序同构全序回归、Running 中直接 stop 数轮收敛）、
+# 关停竞态防御（executor.shutdown(false) 后 stop 有界收敛）。compose 绘制路径
+# （含工具栏按钮可用条件与待生效标注视觉）需活动 EUI 运行时，headless 不可测
+# （真机视觉验收归 M5-07，见文件头说明）。tsan 预设复跑目标（跨上下文通道与
+# 关闭顺序）。
+add_executable(test_run_control test_run_control.cpp)
+# eui_neo 本体仅满足 param_panel.hpp 内联组件函数引用的框架符号（剪贴板/文本
+# 度量/GPU 导入；headless 不调用，不触窗口系统初始化）；其 -fno-exceptions 为
+# PRIVATE 属性，不传播到本测试。
+target_link_libraries(test_run_control PRIVATE rin::workflow rin::core OpenGL::GL
+    eui_neo)
+target_include_directories(test_run_control PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(test_run_control SYSTEM PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INCLUDE_DIRECTORIES>"
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_INCLUDE_DIRECTORIES>")
+target_compile_definitions(test_run_control PRIVATE
+    "$<TARGET_PROPERTY:eui_neo,INTERFACE_COMPILE_DEFINITIONS>")
+add_test(NAME run_control COMMAND test_run_control)
+set_tests_properties(run_control PROPERTIES
     LABELS "unit"
-    TIMEOUT 300)  # 套件设计 <30s；挂看门狗兜底关闭/关停竞态检查不悬挂。
+    TIMEOUT 300)  # 有界轮询/静默窗设计 <60s；挂看门狗兜底关闭竞态检查不悬挂。
 
 # M5-02 工作台导航壳纯逻辑与主题令牌扩展（apps/viewer/navigation.hpp、
 # viewer_theme.hpp，DEC-014）：元数据表完整性（页数 4、表序=枚举声明序、四枚举
@@ -220,15 +244,15 @@ set_tests_properties(node_canvas PROPERTIES LABELS "unit")
 # §5.5/§5.6/§7 测试清单）：控件-参数绑定（严格文本解析、值对声明校验——种类/
 # 范围闭区间/枚举选项/RealArray 有限性、滑条归一化映射与取整、生效值解析、
 # 控件初值文本）、RealArray 矩阵网格（扁平推断形状/重排尺寸保留数据）、节点
-# 产物有界缓存（对契约假引擎拉取、每节点最新一幅、容量驱逐、停止排空）、缩略
+# 产物有界缓存（对工作流引擎拉取、每节点最新一幅、容量驱逐、停止排空）、缩略
 # 图降采样（Gray8/Rgba8 按格式、最近邻只缩不放、stride 处理、有界幅面、
 # sourceSequence 透传）、节点失败标注事件语义（NodeFailed 置位、Started/Stopped
 # 清空）、画布 setParam（替换同 paramId/追加/toGraph 携带/无效赋值经校验标注）。
-# 单线程纯逻辑（缓存拉取走假引擎契约面，owner 线程直接调用，无并发；DOD-02
+# 单线程纯逻辑（缓存拉取走引擎契约面，owner 线程直接调用，无并发；DOD-02
 # 矩阵不适用，见文件头说明）；compose 绘制路径需活动 EUI 运行时，headless
 # 不可测（真机视觉验收归 M5-07）。
 add_executable(test_param_panel test_param_panel.cpp)
-target_link_libraries(test_param_panel PRIVATE rin::workflow_fake)
+target_link_libraries(test_param_panel PRIVATE rin::workflow)
 target_include_directories(test_param_panel PRIVATE
     ${CMAKE_SOURCE_DIR}/apps/viewer
     ${CMAKE_SOURCE_DIR}/include)
@@ -237,14 +261,14 @@ set_tests_properties(param_panel PROPERTIES LABELS "unit")
 
 # M5-05 性能面板统计管道纯逻辑（apps/viewer/perf_model.hpp；ui_workspace_design.md
 # §5.7/§4/§7 测试清单）：统计数值文本（统一小数位 + 固定后缀的 DEC-005 mono 替代
-# 纪律）、WorkflowPerfState 统计管道（对契约假引擎的 sequence 推进消费、最新态
+# 纪律）、WorkflowPerfState 统计管道（对工作流引擎的 sequence 推进消费、最新态
 # 快照合并、节点统计查找、停止/失败后末次值冻结与 live 标志切换、重启衔接、
-# clear 关闭排空后 stale 统计不复活）。单线程纯逻辑（消费走假引擎契约面，owner
+# clear 关闭排空后 stale 统计不复活）。单线程纯逻辑（消费走引擎契约面，owner
 # 线程直接调用，无并发；DOD-02 矩阵不适用，见文件头说明）；compose 绘制路径
 # （工具栏状态徽标/节点耗时徽标/右面板总览）需活动 EUI 运行时，headless 不可测
 # （真机视觉验收归 M5-07）。
 add_executable(test_perf_panel test_perf_panel.cpp)
-target_link_libraries(test_perf_panel PRIVATE rin::workflow_fake)
+target_link_libraries(test_perf_panel PRIVATE rin::workflow)
 target_include_directories(test_perf_panel PRIVATE
     ${CMAKE_SOURCE_DIR}/apps/viewer
     ${CMAKE_SOURCE_DIR}/include)
@@ -372,19 +396,19 @@ set_tests_properties(image_ops_fft PROPERTIES LABELS "unit")
 # M4-07 工作流真引擎独立验证（DEC-013 执行模型，Independent-Verification-Agent）：
 # 以真引擎 fixture 运行两引擎共用契约套件（workflow_engine_contract_suite.hpp，
 # DEC-016），加真引擎特有检查：工厂校验三分支抛 invalid_argument
-# （paramQueueCapacity==0 按 1 处理）、默认目录与 makeDefaultFakeCatalog 逐字段
-# 一致（单一事实源）、真实算子数值链（source→grayify BT.601 定点亮度逐像素
+# （paramQueueCapacity==0 按 1 处理）、默认目录单一事实源（makeDefaultImageNodeCatalog）、
+# 真实算子数值链（source→grayify BT.601 定点亮度逐像素
 # golden 手推）、参数"下一帧生效"（downscale scale 0.5→1.0 输出 64×48→128×96）、
 # EXEC-07 过载显式丢弃（maxInFlight=1 + 20ms 慢算子 → droppedFrames>0 且
 # processedFrames 增长且 inFlight≤1）、帧源空闲静默（门控关闭 300ms 无帧且保持
-# Running）、Running 图替换消费式语义（GraphApplied 不逐帧重发——假引擎 peek
-# 缺陷探针 + 参数真实生效 floor(128×0.9)=115）、sourceSequence 传播（同帧两节点
+# Running）、Running 图替换消费式语义（GraphApplied 不逐帧重发——对照已移除
+# 假引擎的 peek 缺陷探针 + 参数真实生效 floor(128×0.9)=115）、sourceSequence 传播（同帧两节点
 # 相等 + 运行期非递减）、运行期算子失败归因（crop 越界 ROI → NodeFailed node=2
 # + Failed + lastError，多会话采样）、关停竞态防御（executor.shutdown(false) 后
 # stop 有界收敛）与会话复位（processedFrames 复位、统计通道序号实例内单调）。
 # tsan 预设复跑目标（跨上下文通道与关闭顺序）。
 add_executable(test_workflow_engine test_workflow_engine.cpp)
-target_link_libraries(test_workflow_engine PRIVATE rin::workflow rin::workflow_fake)
+target_link_libraries(test_workflow_engine PRIVATE rin::workflow)
 target_include_directories(test_workflow_engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src/workflow
     ${CMAKE_SOURCE_DIR}/include)
