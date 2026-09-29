@@ -110,6 +110,10 @@ struct ViewerContext {
     /// 工作流引擎（M5-06 假换真集成：M4-07 真引擎 + 相机帧源接缝，DEC-013/
     /// DEC-016）。目录指针随实例存续，构建期确定。
     std::shared_ptr<rin::IWorkflowEngine> workflow;
+    /// 帧源路由快照（M6-05，DEC-017）：source 节点 → rendition，画布图变更
+    /// 即整体换新（原子共享，帧泵 tick 只读）；pump 以画布修订号为脏标记刷新。
+    viewer::WorkflowSourceRouter sourceRouter;
+    std::uint64_t sourceRouterRevision = 0;
     /// 工作流页画布会话状态（node_canvas.hpp；DEC-014 决策 4：切页保持）。
     WorkflowCanvasState workflowCanvas;
     /// 工作流页参数面板会话状态（param_panel.hpp，M5-04：控件绑定/缩略图缓存；
@@ -138,6 +142,19 @@ ViewerContext& context() {
     return instance;
 }
 
+/// 重建帧源路由快照（M6-05，DEC-017）：source 节点 typeId → rendition。
+/// ensureStarted 与 pump（画布修订号脏标记）调用；整体换新对帧泵 tick 原子
+/// 可见，未知节点由路由回退 RGB。
+void refreshSourceRouter(ViewerContext& ctx) {
+    auto routes = std::make_shared<viewer::WorkflowSourceRouter::RouteMap>();
+    routes->reserve(ctx.workflowCanvas.model.nodes.size());
+    for (const CanvasNode& node : ctx.workflowCanvas.model.nodes) {
+        (*routes)[node.id] = viewer::renditionForSourceType(node.typeId);
+    }
+    ctx.sourceRouter.replace(std::move(routes));
+    ctx.sourceRouterRevision = ctx.workflowCanvas.revision;
+}
+
 void ensureStarted() {
     static const bool once = [] {
         ViewerContext& ctx = context();
@@ -148,16 +165,19 @@ void ensureStarted() {
         }
         ctx.service = rin::createRealSenseCameraService(ctx.executor);
         // 工作流引擎（M5-06 真引擎，DEC-013 执行模型）：目录为构建期数据，画布
-        // 模型直接引用（引擎存续期由本上下文持有）；帧源取 RGB 彩色流（与预览
-        // 同一帧，零拷贝包装，workflow_frame_source.hpp），以 shared_ptr 持有
-        // 相机服务——关闭顺序中服务先停、引擎后回收，帧源闭包不悬垂。
+        // 模型直接引用（引擎存续期由本上下文持有）；帧源按路由快照分发源节点
+        // rendition（M6-05，DEC-017：RGB/深度伪彩/深度灰度/深度自适应），零拷贝
+        // 包装（workflow_frame_source.hpp），以 shared_ptr 持有相机服务——关闭
+        // 顺序中服务先停、引擎后回收，帧源闭包不悬垂；router 为本上下文成员，
+        // 存续覆盖引擎。
         rin::WorkflowEngineConfig workflowConfig;
         workflowConfig.frameSource =
-            viewer::makeCameraFrameSource(ctx.service, rin::FrameKind::Rgb);
+            viewer::makeCameraFrameSource(ctx.service, ctx.sourceRouter);
         ctx.workflow = rin::createWorkflowEngine(ctx.executor,
                                                  std::move(workflowConfig));
         ctx.workflowCanvas.model.catalog = &ctx.workflow->catalog();
         ctx.workflowCanvas.afterGraphChange(ctx.workflow.get());
+        refreshSourceRouter(ctx);
         // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
         const rin::StartOutcome outcome = ctx.service->start(kDefaultRequest);
         if (!outcome.admitted) {
@@ -377,6 +397,11 @@ void ViewerContext::pump() {
     // destructive 徽标（M5-04 §4），Started/Stopped 清空（会话级）。GraphApplied
     // 事件清除待生效标注（M5-06 §4：Running 下图结构变更 → 帧边界应用确认）。
     if (workflow != nullptr) {
+        // 帧源路由刷新（M6-05）：画布图变更（修订号推进）即重建 rendition
+        // 快照，原子换新对帧泵 tick 可见。
+        if (sourceRouterRevision != workflowCanvas.revision) {
+            refreshSourceRouter(*this);
+        }
         rin::WorkflowEvent workflowEvent;
         if (workflow->tryLoadEvent(workflowEvent)) {
             const std::string line = workflowEventLine(workflowEvent);
@@ -937,11 +962,29 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 case WorkbenchPage::Pose:
                     composePosePage(ui, ctx, ox, pageTop, contentWidth, pageHeight);
                     break;
-                case WorkbenchPage::Workflow:
+                case WorkbenchPage::Workflow: {
+                    // 相机分辨率入口绑定（M6-06，DEC-017）：与预览选择器共享
+                    // 同一档位列表（ctx.resolutionOptions，本帧已构建的标签）
+                    // 与选择状态（ctx.resolutionIndex），经 applyResolutionChoice
+                    // 走同一命令通道。标签向量仅 compose 期有效（面板按值引用
+                    // 内容渲染，不跨帧持有）。
+                    std::vector<std::string> resolutionLabels;
+                    resolutionLabels.reserve(ctx.resolutionOptions.size());
+                    for (const ResolutionUiOption& option : ctx.resolutionOptions) {
+                        resolutionLabels.push_back(option.label);
+                    }
+                    const viewer::CameraResolutionBinding cameraResolution{
+                        &resolutionLabels, ctx.resolutionIndex.get(),
+                        &ctx.workflowPanel.cameraResolutionOpen,
+                        [&ctx](int index) {
+                            ctx.resolutionIndex.set(index);
+                            ctx.applyResolutionChoice(index);
+                        }};
                     composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflowPanel,
-                                        ctx.workflow.get(), ox, pageTop, contentWidth,
-                                        pageHeight);
+                                        ctx.workflow.get(), &cameraResolution, ox, pageTop,
+                                        contentWidth, pageHeight);
                     break;
+                }
                 case WorkbenchPage::Settings:
                     composeSettingsPage(ui, ox, pageTop, contentWidth);
                     break;

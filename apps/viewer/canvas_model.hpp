@@ -920,12 +920,15 @@ struct PaletteGroup {
 };
 
 /// 类型 → 分组归类表（UI 私有呈现；契约无类别字段）。未知类型归入 Other，
-/// 保证目录扩展时调色板不丢项。
+/// 保证目录扩展时调色板不丢项。M6-03 深度源归 Source、灰度域几何算子归
+/// Geometry（与 Rgba8 版同组，DEC-017）。
 [[nodiscard]] inline const char* paletteGroupFor(const std::string& typeId) {
-    if (typeId == "source") {
+    if (typeId == "source" || typeId == "source_depth_jet" ||
+        typeId == "source_depth_gray" || typeId == "source_depth_adaptive") {
         return "Source";
     }
-    if (typeId == "crop" || typeId == "downscale") {
+    if (typeId == "crop" || typeId == "downscale" || typeId == "crop_gray" ||
+        typeId == "downscale_gray") {
         return "Geometry";
     }
     if (typeId == "grayify" || typeId == "gaussian_blur" || typeId == "conv_kernel") {
