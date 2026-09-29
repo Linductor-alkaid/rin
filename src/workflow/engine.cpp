@@ -371,12 +371,16 @@ private:
     /// 生效图一代：图基底（参数应用后的图值，参数边界重建的基底）+ 编译图 +
     /// 每节点最新产物邮箱（有界：每节点仅最新一幅，M4-09 保留语义）。图替换
     /// 时整体换代；在飞任务持有旧代 shared_ptr 完成当帧（迟到的旧代发布不进
-    /// 新代）。
+    /// 新代）。M7-02：产物邮箱跨代共享——同一节点 id 在换代（图替换/参数重建）
+    /// 时沿用上一代邮箱（shared_ptr 共享同一对象），发布序号跨代连续，UI 的
+    /// "上次已见序号"水位语义跨代成立（此前每代新建邮箱使序号从头计，运行中
+    /// 改图/热更新参数后 UI 水位过滤掉全部新快照，面板永久显示旧代陈旧产物）；
+    /// 被移除节点的邮箱随旧代释放，新节点取全新邮箱。
     struct Generation {
         std::shared_ptr<const WorkflowGraph> sourceGraph;  /// 构建来源图值。
         std::unique_ptr<NodeGraph> compiled;               /// 稳定拓扑序编译图。
         std::vector<NodeId> injectableNodes;               /// 注入型源节点（拓扑序）。
-        std::unordered_map<NodeId, std::unique_ptr<LatestMailbox<NodeOutputSnapshot>>>
+        std::unordered_map<NodeId, std::shared_ptr<LatestMailbox<NodeOutputSnapshot>>>
             outputs;
     };
     using GenerationPtr = std::shared_ptr<const Generation>;
@@ -419,7 +423,12 @@ private:
     }
 
     /// 编译并装配一代；失败返回 nullptr（buildFailureMessage_ 临时携带原因）。
-    [[nodiscard]] GenerationPtr buildGeneration(const WorkflowGraph& graph) {
+    /// previous 为上一代（start 期为空）：同 id 节点沿用其产物邮箱（跨代序号
+    /// 连续，见 Generation 注释），新节点取全新邮箱。调用方持有 lifecycleMutex_
+    /// 且传递的 previous 即 effective_ 当前值——共享（不移除）语义对并发读取
+    /// 者（tryLoadNodeOutput 持旧代 shared_ptr）无数据竞争。
+    [[nodiscard]] GenerationPtr buildGeneration(
+        const WorkflowGraph& graph, const GenerationPtr& previous = {}) {
         NodeGraphBuild build =
             buildNodeGraph(graph, config_.catalog, config_.nodeFactory, config_.maxNodes);
         if (build.graph == nullptr) {
@@ -439,7 +448,14 @@ private:
             if (node.impl == nullptr && node.descriptor->outputs.size() == 1) {
                 generation->injectableNodes.push_back(node.id);
             }
-            generation->outputs[node.id] = std::make_unique<LatestMailbox<NodeOutputSnapshot>>(
+            if (previous != nullptr) {
+                if (const auto carried = previous->outputs.find(node.id);
+                    carried != previous->outputs.end()) {
+                    generation->outputs[node.id] = carried->second;  // 跨代共享同一邮箱。
+                    continue;
+                }
+            }
+            generation->outputs[node.id] = std::make_shared<LatestMailbox<NodeOutputSnapshot>>(
                 "rin.workflow.node." + std::to_string(node.id));
         }
         return generation;
@@ -534,7 +550,7 @@ private:
         const bool hasQueued = graphQueue_.try_load(queued);
         const bool graphNew = hasQueued && queued != consumedQueued_;
         if (graphNew) {
-            GenerationPtr rebuilt = buildGeneration(*queued);
+            GenerationPtr rebuilt = buildGeneration(*queued, effective_.load());
             if (rebuilt != nullptr) {
                 promote(std::move(rebuilt));
                 publishEvent(WorkflowEventKind::GraphApplied, kInvalidNode,
@@ -572,7 +588,7 @@ private:
         if (applied == 0) {
             return;  // 全部失配已按条发布 Info；图不变不重建。
         }
-        GenerationPtr rebuilt = buildGeneration(next);
+        GenerationPtr rebuilt = buildGeneration(next, effective_.load());
         if (rebuilt == nullptr) {
             // 防御路径（requestParamUpdate 已预编译校验，批量组合失败才会到
             // 这里）：保持旧代显式报告，不进入重试风暴。
@@ -712,7 +728,7 @@ private:
                  it != pendingPublish_.end();
                  it = pendingPublish_.find(nextPublishSeq_)) {
                 PendingPublish& frame = it->second;
-                publishOutputs(*frame.generation, frame.outputs, *frame.inputs);
+                publishOutputs(frame.generation, frame.outputs, *frame.inputs);
                 recordFrameCompleted(*frame.generation);
                 pendingPublish_.erase(it);
                 ++nextPublishSeq_;
@@ -722,10 +738,17 @@ private:
 
     /// 产物发布（执行序）：每节点最新一幅（LatestMailbox）；sourceSequence
     /// 传播语义（DEC-013）：源节点 = 注入帧序号，下游 = 各生产者的最小值。
-    void publishOutputs(const Generation& generation,
+    /// M7-02：generation 非当前生效代（提交后在飞期间发生换代）时跳过邮箱
+    /// 发布、统计照记——邮箱跨代共享后，迟到的旧代帧不得以更高序号把旧图
+    /// 产物写回共享邮箱（"迟到的旧代发布不进新代"语义在共享邮箱下的等价
+    /// 保障；提交序有序化保证新代帧不被跳过）。
+    void publishOutputs(const GenerationPtr& generation,
                         const std::vector<std::vector<ImageU8>>& outputs,
                         const std::unordered_map<NodeId, WorkflowFrameInput>& inputs) {
-        const std::vector<NodeGraph::Node>& nodes = generation.compiled->nodes();
+        if (generation != effective_.load()) {
+            return;  // 过代帧：跳过发布（recordFrameCompleted 由调用方照记）。
+        }
+        const std::vector<NodeGraph::Node>& nodes = generation->compiled->nodes();
         std::unordered_map<NodeId, std::uint64_t> seqOf;
         seqOf.reserve(nodes.size());
         for (std::size_t i = 0; i < nodes.size(); ++i) {
@@ -752,8 +775,8 @@ private:
             }
             seqOf[node.id] = sequence;
 
-            const auto mailbox = generation.outputs.find(node.id);
-            if (mailbox == generation.outputs.end()) {
+            const auto mailbox = generation->outputs.find(node.id);
+            if (mailbox == generation->outputs.end()) {
                 continue;  // 代内一致，防御。
             }
             for (std::size_t port = 0; port < nodeOutputs.size(); ++port) {
