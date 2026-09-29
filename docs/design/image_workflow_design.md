@@ -4,7 +4,8 @@
 > 日期：2026-09-28（随 `M4-02` 产出）；2026-09-29 随 `M4-03` 冻结几何算子数值语义；
 > 2026-09-29 随 `M4-04` 冻结卷积/高斯数值语义（`conv_kernel` 目录 schema 增加
 > `border` 参数，假引擎目录同步扩展）；2026-09-29 随 `M4-05` 冻结直方图均衡与
-> 灰度化数值语义（目录 schema 不变）
+> 灰度化数值语义（目录 schema 不变）；2026-09-29 随 `M4-06` 冻结 FFT 滤波族数值
+> 语义（目录 schema 不变）
 > 负责人：Linductor-alkaid
 > 关联：[M4 里程碑](../plans/m4-cv-node-workflow.md)、[DEC-012](../decisions/DEC-012-image-operator-strategy.md)、
 > [DEC-013（暂定，M4-07 冻结）](../plans/rin-implementation-plan.md)、
@@ -15,7 +16,8 @@
 本文冻结 M4 图像工作流的 Core 契约与执行语义：图像类型、端口类型系统、节点契约与
 类型化参数模型、图编译与单帧求值，以及 M4 节点目录与逐节点 golden 测试项要求。
 实现载体为 `include/rin/image_types.hpp`、`include/rin/image_node.hpp`、
-`include/rin/node_graph.hpp`（`rin_core`，零第三方依赖）。
+`include/rin/node_graph.hpp`（`rin_core`，公开契约零第三方类型，RULE-01；FFT 后端
+kissfft 为实现私有链接，见 §2 与 DEC-012）。
 
 工作流视图契约（`M4-09`，`workflow_types.hpp`/`workflow_engine.hpp`）是 UI 与引擎
 之间的唯一数据面；本文的 Core 契约是其引擎侧延伸，共用 `validateWorkflowGraph`
@@ -97,9 +99,10 @@ Executor 承载细节（`M4-07` 实现，执行模型经 DEC-013 冻结）。
 时由引擎注入相机帧）；构造失败抛异常，由 `buildNodeGraph` 转为显式校验问题。
 M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默认工厂入口为
 `makeDefaultImageNode`（`include/rin/image_ops.hpp`，M4-03 起）："crop"/"downscale"/
-"gaussian_blur"/"conv_kernel"/"grayify"/"hist_eq" 返回对应实现、"source" 返回
-nullptr、其余 M4 类型（FFT 族，随 M4-06 扩展）抛 `std::invalid_argument`——目录
-声明与工厂能力的偏差显式暴露，不静默。
+"gaussian_blur"/"conv_kernel"/"grayify"/"hist_eq"/"fft_lowpass"/"fft_highpass"/
+"fft_bandpass" 返回对应实现、"source" 返回 nullptr、未知 typeId 抛
+`std::invalid_argument`（M4 目录类型已全部实现，此为未知类型的显式暴露路径）——
+目录声明与工厂能力的偏差显式暴露，不静默。
 
 ## 5. 图编译与执行语义
 
@@ -148,8 +151,8 @@ nullptr、其余 M4 类型（FFT 族，随 M4-06 扩展）抛 `std::invalid_argu
 准（M5 调色板/参数面板按其开发）；真引擎目录提供同一组 typeId 与 schema，数值
 语义归 `M4-03`..`M4-06` 实现。schema 演进随算子工作项同步双向落盘（假引擎目录
 与本文表格同批更新）：`M4-04` 为 `conv_kernel` 增加 `border` 边界填充参数（§7
-冻结的三种策略）；`M4-05` 无 schema 变更（`grayify`/`hist_eq` 均无参数），其余
-schema 不变：
+冻结的三种策略）；`M4-05` 无 schema 变更（`grayify`/`hist_eq` 均无参数）；
+`M4-06` 无 schema 变更（FFT 族参数面冻结不变），其余 schema 不变：
 
 | typeId | 显示名 | 输入 | 输出 | 参数（id: kind 默认 [范围]） |
 | --- | --- | --- | --- | --- |
@@ -265,15 +268,63 @@ schema 不变：
     先例一致）。
   - 输出为 W×H Gray8 新紧凑缓冲（stride = 宽×1），不共享源像素；输入允许
     stride padding。目录签名 Rgba8 → Gray8、无参数（§6）。
-- FFT 族（M4-06，DEC-012 节点级约束的 golden 化）：
-  - 内部零填充到 2 幂（宽高各自向上取 2 幂；848×480 → 1024×512），掩膜按
-    归一化频率在填充分辨率上构造，IFFT 后裁回原尺寸——填充/裁剪往返误差
-    golden；
-  - 正弦注入 → 单频滤除：848×480（填充路径）与 512×512（原生路径）各覆盖一组
-    （低通/高通/带通各测）；
-  - 截止/带宽为归一化频率 ∈ [0,1]，语义不随填充尺寸改变（同 cutoff 在两个尺寸
-    路径滤除同一归一化频率）；
-  - 掩膜形状按 DEC-012 冻结（工作项冻结时记录）。
+- FFT 族（M4-06）：正弦注入 → 单频滤除、填充/裁剪往返误差、掩膜代数恒等。数值
+  语义（M4-06 冻结，掩膜形状按 DEC-012 定为理想锐截止）：
+  - 参数构造期定型：cutoff（`fft_lowpass`/`fft_highpass`，Real，默认 0.2）、
+    lowCut/highCut（`fft_bandpass`，Real，默认 0.2/0.6），均为归一化频率 ∈ [0,1]。
+    构造期防御（运行期直接构造的实例）：参数缺失或种类错位、非有限、越界 [0,1]
+    → 构造抛 `std::invalid_argument`；bandpass 的 lowCut ≥ highCut（空通带为
+    参数矛盾，同 `conv_kernel` kernel 长度先例——带通通带 (lowCut, highCut] 须
+    非空，不存在空集掩膜的退化输出，退化以构造期显式拒绝暴露）→ 构造抛
+    `std::invalid_argument`（buildNodeGraph 显式化为 BadParam）。
+  - 内部零填充到 2 幂：padW/padH 为各自向上取 2 幂且下界 2（kissfft 实数半谱维
+    须为偶数，1 像素宽/高同样填到 2）；848×480 → 1024×512，512×512 原生不填。
+    输入 Gray8 逐像素（0..255，float 精确表示）写入行主序 padded 缓冲，填充区
+    为零。
+  - 变换与谱布局：kiss_fftndr（dims = {padH, padW}，实数半谱维为内存最快维
+    padW）→ 半谱 padH×(padW/2+1) 复数（未归一化）。
+  - 归一化频率（每像素周期数）：fx = u/padW（半谱 u ∈ [0, padW/2]，非负）、
+    fy = v ≤ padH/2 ? v/padH : (v−padH)/padH（带符号折返）；径向频率
+    ρ = √(fx² + fy²)。2 幂填充下 fx/fy 为二进有理数，与 cutoff 的比较在 double
+    内精确；空间频率 f 周期/像素的正弦在填充后能量仍落在 ρ = f——归一化频率
+    语义不随填充尺寸改变（同 cutoff 在两个尺寸路径滤除同一归一化频率）。
+  - 掩膜（理想锐截止，实值 0/1，在填充分辨率上构造，掩膜乘在半谱上原地执行）：
+    `fft_lowpass` 保留 ρ ≤ cutoff；`fft_highpass` 保留 ρ > cutoff（低通的逐点
+    补，DC（ρ = 0）恒被移除）；`fft_bandpass` 保留 lowCut < ρ ≤ highCut（=
+    低通(highCut) 掩膜 − 低通(lowCut) 掩膜的掩膜差；构造期已保证
+    lowCut < highCut，通带非空）。边界推论：cutoff = 0 的低通仅保留 DC、
+    cutoff = 0 的高通仅移除 DC；cutoff ≥ √0.5 ≈ 0.7071 的低通为恒等（归一化
+    频率上界 √(0.5² + 0.5²)，cutoff = 1 恒等）。掩膜关于 (u, v) → (−u, −v)
+    对称，实输入 DFT 的共轭对称保持，逆变换为实图。
+  - 逆变换与量化：kiss_fftndri（未归一化）后显式 1/(padW·padH) 缩放，裁回原
+    尺寸左上 W×H，floor(v + 0.5)（round-half-up）后饱和 [0,255] 量化（卷积/
+    高斯族同款纪律；往返浮点误差可为微小负值/超界，饱和兜底）。输出为原尺寸
+    Gray8 新紧凑缓冲（stride = 宽×1），不共享源像素；输入允许 stride padding。
+    目录签名 Gray8 → Gray8（§6）——"IFFT 回空间域"的显示消费（含 RGBA 显示）
+    归 M5 工作台显示面，节点不提供颜色域变换。
+  - 精度与容差：FFT 后端为 pinned kissfft float（KISSFFT_DATATYPE=float，
+    DEC-012 构建面），float 中间 + double 掩膜判定与最终量化；正逆往返误差在
+    0..255 域约 ±0.3（DEC-012 基准 float 容差 1e-3@[0,1) 域折算），golden 以
+    ±1 字节容差锁定；阻带频率被掩膜精确置零，单频滤除后的残余仅为浮点误差
+    量级。
+  - 边界语义披露：零填充等价于按矩形截断的周期延拓假设，理想掩膜滤波在原图
+    边界附近产生环状振铃（Gibbs）——这是 DEC-012 填充策略的既定语义，不属于
+    缺陷；使用建议（强振铃时先降分辨率或改用空间域算子）随 `M4-08` 实测记录。
+  - 有界性与生命周期：padW·padH ≤ 4×输入像素数（N ≤ kMaxImageBytes 预算 →
+    ≤ 2²⁶）；float 实图缓冲与半谱合计约 8 B/填充像素 → 瞬时 ≤ 约 576 MiB
+    上界，随帧释放；典型 848×480 填充路径约 4 MiB。kissfft 计划（twiddle 表）
+    在 apply 内分配/释放（kiss_fft_free）——节点实例逻辑只读、可被引擎并发调用
+    （§4.1），不做实例内计划缓存；计划分配失败为系统故障，抛 `std::runtime_error`
+    （引擎 NodeFailed，EXEC-07）。
+  - golden 测试项：848×480（填充路径）与 512×512（原生路径）正弦注入 → 单频
+    滤除，低通/高通/带通各一组（注入频率取填充栅格上的精确 bin k/padW，无泄
+    漏；被滤频残余与保留频带内容均在 ±1 字节容差内）；填充/裁剪往返误差
+    （cutoff ≥ √0.5 低通恒等，含 848×480 非平凡填充与 512×512 原生）；掩膜
+    代数（同 cutoff 低通 + 高通 ≈ 恒等、bandpass(lo,hi) ≈ lowpass(hi) −
+    lowpass(lo)，逐像素差 ≤ 1）；归一化频率跨尺寸不变（同 cutoff 两路径滤除
+    同一频率）；DC 语义（常值图低通恒等、高通全黑）；构造期拒绝全分支（含
+    bandpass 的 lowCut > highCut 与 lowCut == highCut）；防御
+    路径与 stride padding 输入/紧凑输出。
 
 ## 8. 测试矩阵（M4-02 契约层）
 

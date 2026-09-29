@@ -65,9 +65,16 @@
       桥接节点实现 Rgba8 → Gray8 BT.601 定点亮度，亮度域唯一公式定义随 grayify；
       `hist_eq` 目录签名 Gray8 → Gray8 冻结不变，RGBA 相机帧经 grayify 进入
       Gray8 算子族，链路一致性由图集成 golden 覆盖。）
-- [ ] `M4-06` FFT 滤波节点族：Gray 频域变换、低通 / 高通 / 带通（截止与带宽可
+- [x] `M4-06` FFT 滤波节点族：Gray 频域变换、低通 / 高通 / 带通（截止与带宽可
       调、掩膜形状按 `DEC-012` 定）、IFFT 回 RGBA 显示。完成判据：正弦注入→单频
-      滤除数值测试通过。
+      滤除数值测试通过。（对齐注记，2026-09-29：①"IFFT 回 RGBA 显示"按 `M5-08`
+      假目录冻结的 §6 目录签名解释——FFT 节点为 Gray8 → Gray8，IFFT 即"回空间
+      域"输出 Gray8，RGBA 显示消费归 M5 工作台显示面，节点不提供颜色域变换；
+      ②掩膜形状按 `DEC-012` 冻结为理想锐截止（0/1 掩膜），归一化频率为每像素
+      周期数、高通 = 低通逐点补、带通 = 低通(highCut) − 低通(lowCut) 掩膜差、
+      bandpass lowCut ≥ highCut 构造期显式拒绝（空通带为参数矛盾），语义随本
+      工作项在 [design/image_workflow_design.md](../design/image_workflow_design.md)
+      §7 冻结。）
 - [ ] `M4-07` 工作流引擎（`EXEC-07`，按 `DEC-013`）：拓扑序执行、源节点（相机帧
       注入语义）、每节点耗时统计、中间产物有界保留（最近 N 张）、过载显式丢弃与
       计数、取消与排空、关闭幂等。完成判据：引擎测试（正常完成 / 节点异常 /
@@ -111,6 +118,58 @@
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-29：`M4-06` 完成关闭——FFT 滤波节点族落地（`rin_core`，kissfft 为实现
+私有链接、公开头零第三方类型，RULE-01/DEC-012）。`src/core/image_ops.cpp` 新增
+`FftFilterImageNode`（`fft_lowpass`/`fft_highpass`/`fft_bandpass` 三类型共用，
+调用面收敛单一实现）与工厂扩展；`src/CMakeLists.txt` 为 `rin_core` 私有链接
+`kissfft::kissfft`（pinned 131.2.0 float 静态库，STATIC PRIVATE → 消费者
+LINK_ONLY，不外泄头文件），分层注释同步。数值语义随本工作项在
+[design/image_workflow_design.md](../design/image_workflow_design.md) §7 冻结：
+内部零填充到 2 幂（宽高各自向上取 2 幂且下界 2——kissfft 实数半谱维须偶数；
+848×480 → 1024×512，512×512 原生）、掩膜按归一化频率（每像素周期数，2 幂填充
+下为二进有理数、与 cutoff 比较在 double 内精确）在填充分辨率上构造且语义不随
+填充尺寸改变、理想锐截止掩膜（低通 ρ ≤ cutoff、高通 ρ > cutoff 为低通逐点补、
+带通 lowCut < ρ ≤ highCut 为低通掩膜差）、IFFT 显式 1/(padW·padH) 归一化后裁回
+左上原尺寸、round-half-up 饱和量化、输出新紧凑缓冲；构造期防御：参数缺失/种类
+错位/非有限/越界 [0,1] 与 bandpass lowCut ≥ highCut（空通带为参数矛盾，通带须
+非空，无空集掩膜退化输出）抛 `std::invalid_argument`；kissfft 计划在 apply 内
+分配/释放（节点逻辑只读可并发调用，不做实例内缓存），分配失败抛
+`std::runtime_error`（系统故障显式化）。目录 schema 无变更（§6 假目录基线即
+低通/高通 cutoff 单参数、带通 lowCut/highCut 双参数，假引擎目录无需同步）。
+工厂扩展三类型后，未知 typeId 错误消息收敛为 "no core implementation for node
+type 'X'"（M4 目录类型全部实现，无遗留未实现口径）。测试（Independent-
+Verification-Agent 独立编写执行，三轮——两轮实现修复 + 一轮裁决落盘复验，实现
+文件对验证方只读以保证 golden 独立性）：新增 `tests/test_image_ops_fft.cpp`
+174 项（自含 double 精度 radix-2 参考实现 + 解析手推 golden：工厂签名与未知
+类型消息冻结、构造期拒绝全分支〔缺失/种类错位/NaN/±inf/越界/空通带含相等〕、
+默认参数单频探针、正弦注入→单频滤除 512×512 原生解析与 848×480 填充参考各覆盖
+低通/高通/带通、二维对角单频、填充/裁剪往返恒等〔cutoff ≥ √0.5，含 5×3、1×5
+退化小图 pad 2 的下界路径与 √0.5 角点边界〕、掩膜代数〔LP+HP 带限内容字节域
+和恒等、带通 ≡ 低通差参考未量化差形式〕、DC 语义〔常值图低通恒等/高通全黑/
+cutoff=0 填充路径单 bin 99.375→99、28.625→29 精确〕、归一化频率跨尺寸不变、
+防御路径、stride padding 输入/紧凑输出/不共享源像素、掩膜边界 ≤/> 归属、图
+集成与空通带 BadParam）；既有见证适配：`test_image_ops_geometry.cpp`（fft_lowpass
+改实现见证、bandpass 参数矛盾 → buildNodeGraph BadParam 见证，167 项）、
+`test_image_ops_convolution.cpp`（fft_lowpass 实现见证 + ghost 消息新口径冻结，
+166 项）、`test_image_ops_histogram.cpp`（同口径，79 项）、`test_public_boundary.cpp`
+扩展三类型工厂可见性与最小实例化（37→50 项）。验证方两轮共发现 2 个实现侧
+问题，均主循环修复后复验闭合：① bandpass 构造函数无条件读取未声明的 `cutoff`
+参数（按冻结 schema 不可构造，致命；修复为按 mode 分支读取 lowCut/highCut）；
+② §7 冻结文本自相矛盾（带通公式 lowCut < ρ ≤ highCut 在 lowCut == highCut 时
+为空集，与"薄壳"推论冲突）——裁决公式为准并把空通带升级为构造期显式拒绝
+（lowCut ≥ highCut 抛出，退化显式失败优于静默黑帧），文档与测试同步。其余
+10 处首轮失败经验证方全模拟取证均为测试侧断言设计缺陷（填充平面均值口径、
+对角谱线归属、8bit 饱和物理对掩膜代数字节域形式的影响、stride 用例内容污染
+等），实现未动。debug/asan/ubsan 三预设全量 ctest 25/25（既有 24 + 新增
+image_ops_fft；realsense_hardware 真机冒烟设备不在位 SKIP，不计失败），
+asan/ubsan 零诊断报告，编译零警告（-Wall -Wextra -Werror 口径）。环境：x86_64
+Linux，GCC 13，CMake presets debug/asan/ubsan；tsan 未跑（本层单线程纯逻辑，
+DOD-02 并发矩阵归 `M4-07` 引擎与 `M5-08` 契约套件，与 `M4-02`..`M4-05` 先例
+一致）。已知未验证路径：kissfft 计划分配失败（`std::runtime_error`）无法在
+公开 API 下触发（OOM 注入不可达），仅断言消息口径；FFT 性能实测归 `M4-08`
+（本工作项不做性能声明，DEC-012 基准只支撑选型）。
+`M4-07`（工作流引擎，EXEC-07/DEC-013）为下一工作项。
 
 2026-09-29：`M4-05` 完成关闭——直方图均衡与灰度化节点落地（`rin_core`，零第三方
 公开依赖，RULE-01）。工作项"Gray8 与 RGBA 亮度域"按冻结语义解释为随本工作项一并
