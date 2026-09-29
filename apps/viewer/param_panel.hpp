@@ -442,9 +442,11 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
     const theme::ThemeTokens& tokens = theme::dark();
     const float pad = kSpace3;
     const float innerWidth = width - pad * 2.0f;
-    constexpr float kOutputBlockHeight = 148.0f;
-    const float outputTop = height - pad - kOutputBlockHeight;  // 面板内局部坐标。
-    const float paramsLimit = outputTop - kSpace2;              // 参数行下限。
+    // 输出块高（M7-04 docking：分隔条拖拽可调，夹取范围；下限保证缩略图可用，
+    // 上限不越过参数区）。
+    const float outputBlockHeight = std::clamp(canvas.outputBlockHeight, 96.0f, 340.0f);
+    const float outputTop = height - pad - outputBlockHeight;  // 面板内局部坐标。
+    const float paramsLimit = outputTop - kSpace2;             // 参数行下限。
 
     ui.stack("workflow.context")
         .position(x, y)
@@ -1037,14 +1039,49 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                 rowY += kSpace2;
             }
 
+            // 输出块上缘分隔条（M7-04 docking 第 4 处）：向上拖拽增高输出块。
+            {
+                const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                ui.rect("workflow.context.output.divider.bar")
+                    .position(0.0f, outputTop - 4.0f)
+                    .size(innerWidth, 3.0f)
+                    .radius(2.0f)
+                    .color(canvas.dockDrag == 3 ? tokens.brand : transparent)
+                    .build();
+                components::mouseArea(ui, "workflow.context.output.divider.drag")
+                    .position(0.0f, outputTop - 9.0f)
+                    .size(innerWidth, 10.0f)
+                    .cursor(eui::CursorShape::Hand)
+                    .onDragStart([&canvas](const components::MouseEvent& event) {
+                        canvas.dockDrag = 3;
+                        canvas.dockDragStartPointer = event.y;
+                        canvas.dockDragStartValue = canvas.outputBlockHeight;
+                    })
+                    .onDrag([&canvas](const components::MouseDragEvent& event) {
+                        if (canvas.dockDrag != 3) {
+                            return;
+                        }
+                        canvas.outputBlockHeight =
+                            canvas.dockDragStartValue -
+                            (event.y - canvas.dockDragStartPointer);
+                    })
+                    .onDragEnd([&canvas](const components::MouseEvent&) {
+                        if (canvas.dockDrag == 3) {
+                            canvas.dockDrag = -1;
+                        }
+                    })
+                    .build();
+            }
             // 底部：选中节点中间产物缩略图（面板底部锚定，§2"底部：选中节点快照"）。
-            composeNodeOutputBlock(ui, panel, pad, outputTop, innerWidth, kOutputBlockHeight);
+            composeNodeOutputBlock(ui, panel, pad, outputTop, innerWidth,
+                                   outputBlockHeight);
         })
         .build();
 }
 
-// --- 工作流页五区组装（几何与 M5-02 骨架一致；面板最后合成，下拉弹层可浮于
-// 底部列表之上） ---
+// --- 工作流页五区组装（M7-04：几何由 WorkflowCanvasState 的 docking 布局
+// 状态驱动，palette/context 宽、底部高可经分隔条拖拽调节；面板最后合成，下拉
+// 弹层可浮于底部列表之上） ---
 inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
                                 WorkflowPanelState& panel, rin::IWorkflowEngine* engine,
                                 const CameraResolutionBinding* cameraResolution,
@@ -1052,12 +1089,14 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
                                 const float height) {
     const float gap = theme::kSpace3;
     const float toolbarHeight = 44.0f;
-    const float bottomHeight = 120.0f;
-    const float paletteWidth = 200.0f;
-    const float contextWidth = 264.0f;
+    const float paletteWidth = std::clamp(state.paletteWidth, 150.0f, 400.0f);
+    const float contextWidth = std::clamp(state.contextWidth, 220.0f, 460.0f);
+    const float bottomHeight = std::clamp(state.bottomHeight, 72.0f, 300.0f);
     const float bodyTop = y + toolbarHeight + gap;
-    const float bodyHeight = height - toolbarHeight - bottomHeight - gap * 2.0f;
-    const float canvasWidth = width - paletteWidth - contextWidth - gap * 2.0f;
+    const float bodyHeight = std::max(
+        120.0f, height - toolbarHeight - bottomHeight - gap * 2.0f);
+    const float canvasWidth =
+        std::max(240.0f, width - paletteWidth - contextWidth - gap * 2.0f);
 
     composeWorkflowToolbar(ui, state, engine, x, y, width, toolbarHeight);
     composeWorkflowPalette(ui, state, engine, x, bodyTop, paletteWidth, bodyHeight);
@@ -1066,6 +1105,59 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
     composeWorkflowIssues(ui, state, x, y + height - bottomHeight, width, bottomHeight);
     composeWorkflowContext(ui, state, panel, engine, cameraResolution,
                            x + width - contextWidth, bodyTop, contextWidth, bodyHeight);
+
+    // 分隔条（M7-04，最后合成 = 浮层；捕获 &state 稳定地址——与画布交互同
+    // 纪律）。命中区略宽于视觉条；拖拽经 onDragStart 记录起始、onDrag 按指针
+    // 增量更新布局值（compose 期夹取生效）。growWithNegative：指针负向增量
+    // 使布局值增大（context 左缘/底部上缘/输出块上缘均为反向缘）。
+    const float handleHit = 10.0f;
+    const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+    const auto dividerTint = [&state, &transparent](int index) {
+        return state.dockDrag == index ? theme::dark().brand : transparent;
+    };
+    const auto divider = [&](const char* id, int index, float dx, float dy, float dw,
+                             float dh, bool vertical, bool growWithNegative,
+                             float* dockValue) {
+        ui.rect(std::string(id) + ".bar")
+            .position(dx, dy)
+            .size(dw, dh)
+            .radius(2.0f)
+            .color(dividerTint(index))
+            .build();
+        components::mouseArea(ui, std::string(id) + ".drag")
+            .position(dx - (vertical ? handleHit * 0.5f : 0.0f),
+                      dy - (vertical ? 0.0f : handleHit * 0.5f))
+            .size(vertical ? handleHit : dw, vertical ? dh : handleHit)
+            .cursor(eui::CursorShape::Hand)
+            .onDragStart([&state, index, dockValue, vertical](
+                             const components::MouseEvent& event) {
+                state.dockDrag = index;
+                state.dockDragStartPointer = vertical ? event.x : event.y;
+                state.dockDragStartValue = *dockValue;
+            })
+            .onDrag([&state, index, dockValue, vertical, growWithNegative](
+                        const components::MouseDragEvent& event) {
+                if (state.dockDrag != index) {
+                    return;
+                }
+                const float pointer = vertical ? event.x : event.y;
+                const float delta = pointer - state.dockDragStartPointer;
+                *dockValue = growWithNegative ? state.dockDragStartValue - delta
+                                              : state.dockDragStartValue + delta;
+            })
+            .onDragEnd([&state, index](const components::MouseEvent&) {
+                if (state.dockDrag == index) {
+                    state.dockDrag = -1;
+                }
+            })
+            .build();
+    };
+    divider("workflow.divider.palette", 0, x + paletteWidth + gap * 0.5f - 2.0f, bodyTop,
+            4.0f, bodyHeight, true, false, &state.paletteWidth);
+    divider("workflow.divider.context", 1, x + width - contextWidth - gap * 0.5f - 2.0f,
+            bodyTop, 4.0f, bodyHeight, true, true, &state.contextWidth);
+    divider("workflow.divider.bottom", 2, x, y + height - bottomHeight - gap * 0.5f - 2.0f,
+            width, 4.0f, false, true, &state.bottomHeight);
 }
 
 }  // namespace viewer
