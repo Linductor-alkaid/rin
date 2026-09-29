@@ -99,7 +99,14 @@ M4 目录构建提取为两引擎共享单一事实源；引擎测试 431 项（
 适配套件共 1605 项检查 debug/asan/ubsan/tsan 四预设 26/26 全绿 [独立验证]，
 含 onShutdown 关闭顺序同构回归；真机冒烟（D435if）真相机 30fps 进真引擎零
 丢弃、stop 排空语义与 §4 逐项一致（截图 `screenshots/m5-06/`）。
-`M5-07`（M5 测试矩阵、真机验收与文档回写）为下一工作项。
+`M5-07`（M5 测试矩阵、真机验收与文档回写）为下一工作项。2026-09-29 用户
+真机验收反馈五项立项 [M6](m6-workflow-input-expansion.md)（POST-04 触发）：
+工作流输入扩展（[DEC-017](../decisions/DEC-017-workflow-camera-sources.md)
+冻结）——相机源四型（RGB + 深度伪彩/灰度/自适应灰度固定 rendition，与预览
+配色解耦）、灰度域裁切/降分辨率（crop_gray/downscale_gray，复用泛格式实现）、
+裁切 ROI 控件联动夹取防呆（apply 期拒绝语义不变）、相机源面板分辨率入口
+（与预览共享全局命令）；相机契约加性扩展（FrameKind::DepthJet + GrayFrame/
+tryLoadGrayFrame）。
 
 ## 交付边界（SCOPE）
 
@@ -187,6 +194,7 @@ M4 目录构建提取为两引擎共享单一事实源；引擎测试 431 项（
 | M3 IMU 位姿通路与 3D 视图 | [m3-imu-pose-view.md](m3-imu-pose-view.md) | M1 | v0.3.0 |
 | M4 图像处理节点与工作流引擎 | [m4-cv-node-workflow.md](m4-cv-node-workflow.md) | 无（建议 M3 后） | v0.4.0 |
 | M5 工作台 UI（导航 / 节点编辑器 / 性能面板） | [m5-ui-workbench.md](m5-ui-workbench.md) | M3、M4-09（骨架先行，DEC-016）；完成依赖 M4 | v0.5.0 |
+| M6 工作流输入扩展（深度源 / 灰度算子 / 控件防呆） | [m6-workflow-input-expansion.md](m6-workflow-input-expansion.md) | M4、M5-06 | v0.5.0（随 M5） |
 
 ## 暂定决策（未冻结）
 
@@ -238,6 +246,12 @@ M4 目录构建提取为两引擎共享单一事实源；引擎测试 431 项（
   M5 骨架对契约假引擎先行开发（`M5-08`），M4 真引擎按同一契约实现并在 `M5-06`
   假换真集成；假引擎必须复刻 `EXEC-07` 的 Executor/comm 语义并覆盖失败路径，
   性能结论以真引擎实测为准。
+- `DEC-017`（已记录，2026-09-29 随 M6 立项冻结）工作流相机源四型与深度
+  rendition 语义：`source`/`source_depth_jet`（Rgba8）/`source_depth_gray`/
+  `source_depth_adaptive`（Gray8）独立 typeId（静态端口类型可判）；深度
+  rendition 与预览配色解耦（DEC-007 命令只影响预览通道）；分辨率是相机流
+  全局属性（工作流源面板与预览共享同一命令，不做 per-source）；ROI 防呆
+  分层（控件夹取 + M4-03 apply 期拒绝兜底）。
 
 ## 通用完成定义（DOD）
 
@@ -253,7 +267,9 @@ M4 目录构建提取为两引擎共享单一事实源；引擎测试 431 项（
 - `POST-02` 多设备支持：出现多相机接入需求时立项。
 - `POST-03` Windows/Android 平台矩阵：出现对应部署需求时立项。
 - `POST-04` 工作流图持久化（保存/加载 JSON）与节点库扩展（边缘检测、形态学、
-  色彩空间、阈值、中值滤波等）：M5 验收后按用户需求立项。
+  色彩空间、阈值、中值滤波等）：M5 验收后按用户需求立项。2026-09-29 用户
+  需求触发首批节点扩展，随 [M6](m6-workflow-input-expansion.md) 交付
+  （深度 rendition 源与灰度域算子，DEC-017）；其余节点类型仍按需立项。
 - `POST-05` T26x / `RS2_STREAM_POSE` 位姿源与 VIO/SLAM：出现对应硬件或算法需求
   时立项；M3 的 `ImuFuser` 边界应不阻碍替换为外部位姿源。
 
