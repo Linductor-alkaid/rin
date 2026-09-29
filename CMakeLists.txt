@@ -18,6 +18,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(RIN_BUILD_TESTS "Build Rin tests" ON)
+option(RIN_BUILD_TOOLS "Build Rin benchmark/measurement tools" ON)
 option(RIN_BUILD_VIEWER "Build the EUI-NEO viewer application" ON)
 option(RIN_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
@@ -53,6 +54,10 @@ if(RIN_ENABLE_TSAN)
 endif()
 
 add_subdirectory(src)
+
+if(RIN_BUILD_TOOLS)
+    add_subdirectory(tools)
+endif()
 
 if(RIN_BUILD_VIEWER)
     add_subdirectory(apps/viewer)
