@@ -40,6 +40,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -80,17 +81,28 @@ struct WorkflowCanvasState {
     /// 性能面板统计管道（M5-05 §5.7：sequence 推进消费 + 停止冻结语义；
     /// 消费在 app.cpp pump，工具栏状态徽标/节点耗时徽标/右面板总览读取）。
     WorkflowPerfState perf;
+    /// 待生效标注（M5-06 §4）：Running 下图结构变更已入队引擎、尚未经
+    /// GraphApplied 帧边界应用。afterGraphChange 置位（校验通过才入队），
+    /// pump 消费 GraphApplied 事件或引擎离开 Running（stop 排空待生效队列，
+    /// 画布图即待运行图）时清除；帧边界拒绝（Info 事件）时保持——画布图与
+    /// 生效图确实不一致，"待生效"如实呈现。
+    bool graphPending = false;
     /// 画布内容修订号（连线 polygon 的显式脏键，EUI-20260924-001 绕行）。
     std::uint64_t revision = 0;
 
     /// 图变更统一出口：UI 预检与引擎准入共用唯一判据（§5.3）——有引擎时以
     /// applyGraph 的同步校验结果为准（引擎拒绝时保持当前生效图不变，契约），
-    /// 无引擎（纯逻辑测试）时本地 revalidate。
+    /// 无引擎（纯逻辑测试）时本地 revalidate。Running 下同步校验通过即入队
+    /// 帧边界应用 → 置 graphPending（§4"待生效"，GraphApplied 后清除）；
+    /// Idle/Failed 下同步生效，无待生效语义。
     void afterGraphChange(rin::IWorkflowEngine* engine) {
         if (engine != nullptr) {
             model.validation = engine->applyGraph(model.toGraph());
+            graphPending = model.validation.ok &&
+                           engine->state() == rin::WorkflowEngineState::Running;
         } else {
             model.revalidate();
+            graphPending = false;
         }
         ++revision;
     }
@@ -189,14 +201,62 @@ using viewer::theme::kSpace3;
     return std::max(minimum, base * scale);
 }
 
-// --- 工具栏（§5.8 运行控制 M5-06 接入；本区当前：标题/引擎状态徽标/校验状态/
-// 反馈/Fit。状态徽标按 §5.7：四态点标 + toString，色经 workflowStateColor） ---
+// --- 工具栏（§5.8 运行控制，M5-06：启动/停止 + 待生效标注；本区：标题/校验状态/
+// 引擎状态徽标/待生效/反馈/运行按钮/Fit。状态徽标按 §5.7：四态点标 + toString，
+// 色经 workflowStateColor） ---
+//
+// 按钮语义（§4/§5.8）：启动可用条件 = 当前图校验通过且引擎 Idle/Failed（Failed
+// 的恢复路径 = 修复后重新启动；Failed 下 stop 先回到 Idle，契约"Failed 为运行
+// 终态，stop 后可重启"）；停止可用条件 = Running/Failed（幂等，Failed 下作用为
+// 显式回到 Idle）；Stopping 下控件全部禁用至回到 Idle。无暂停（契约无暂停语义）。
+// start 的准入失败以 AdmissionResult.error 显式呈现（反馈行），不静默。stop() 为
+// owner 线程同步调用、阻塞至在飞帧任务回收完成（有界：≤ maxInFlight 帧任务，
+// 与 onShutdown 同一纪律，workflow_engine.hpp 契约）。
 inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
-                                   const rin::WorkflowEngineState engineState, const float x,
+                                   rin::IWorkflowEngine* engine, const float x,
                                    const float y, const float width, const float height) {
     const theme::ThemeTokens& tokens = theme::dark();
+    const rin::WorkflowEngineState engineState =
+        engine != nullptr ? engine->state() : rin::WorkflowEngineState::Idle;
     const float pad = kSpace3;
     const float fitWidth = 56.0f;
+    const float runWidth = 56.0f;
+    const float runGap = 8.0f;
+    const float fitX = width - pad - fitWidth;
+    const float stopX = fitX - runGap - runWidth;
+    const float startX = stopX - runGap - runWidth;
+    const bool startEnabled = state.model.validation.ok &&
+                              (engineState == rin::WorkflowEngineState::Idle ||
+                               engineState == rin::WorkflowEngineState::Failed);
+    const bool stopEnabled = engineState == rin::WorkflowEngineState::Running ||
+                             engineState == rin::WorkflowEngineState::Failed;
+
+    const auto runButton = [&](const char* id, const char* label, const float bx,
+                               const bool enabled, const std::function<void()>& onClick) {
+        ui.rect(std::string("workflow.toolbar.") + id)
+            .position(bx, (height - 26.0f) * 0.5f)
+            .size(runWidth, 26.0f)
+            .radius(kRadiusMd)
+            .color(tokens.input)
+            .border(kBorderHairline, enabled ? tokens.inputBorder : tokens.cardBorder)
+            .states(tokens.input, enabled ? tokens.inputBorderHover : tokens.inputBorder,
+                    enabled ? tokens.inputBorderHover : tokens.inputBorder)
+            .onClick([onClick, enabled] {
+                if (enabled) {
+                    onClick();
+                }
+            })
+            .build();
+        ui.text(std::string("workflow.toolbar.") + id + "Text")
+            .position(bx, (height - 26.0f) * 0.5f)
+            .size(runWidth, 26.0f)
+            .text(label)
+            .fontSize(kFontSm)
+            .color(enabled ? tokens.fgSubtle : tokens.fgSubtlest)
+            .horizontalAlign(eui::HorizontalAlign::Center)
+            .verticalAlign(eui::VerticalAlign::Center)
+            .build();
+    };
 
     ui.stack("workflow.toolbar")
         .position(x, y)
@@ -233,7 +293,7 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
             // 引擎状态徽标（§5.7 执行状态）：状态点 + 文本，语义色映射与 M5-02
-            // 令牌扩展同源；启动/停止按钮归 M5-06 运行控制。
+            // 令牌扩展同源。
             const eui::Color stateTint = theme::workflowStateColor(engineState);
             ui.rect("workflow.toolbar.stateDot")
                 .position(344.0f, (height - kSpace2) * 0.5f)
@@ -249,9 +309,22 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
                 .color(stateTint)
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
+            // 待生效标注（§4）：Running 下图结构变更入队引擎后、GraphApplied
+            // 帧边界应用前呈现（消费在 app.cpp pump；帧边界拒绝时如实保持——
+            // 画布图与生效图确实不一致）。
+            if (state.graphPending) {
+                ui.text("workflow.toolbar.pending")
+                    .position(452.0f, 0.0f)
+                    .size(190.0f, height)
+                    .text("pending - applies next frame")
+                    .fontSize(kFontXs)
+                    .color(tokens.warning)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+            }
             // 帧全图按钮（§5.1 快捷键 F 的鼠标等价路径）。
             ui.rect("workflow.toolbar.fit")
-                .position(width - pad - fitWidth, (height - 26.0f) * 0.5f)
+                .position(fitX, (height - 26.0f) * 0.5f)
                 .size(fitWidth, 26.0f)
                 .radius(kRadiusMd)
                 .color(tokens.input)
@@ -264,7 +337,7 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
                 })
                 .build();
             ui.text("workflow.toolbar.fitText")
-                .position(width - pad - fitWidth, (height - 26.0f) * 0.5f)
+                .position(fitX, (height - 26.0f) * 0.5f)
                 .size(fitWidth, 26.0f)
                 .text("Fit")
                 .fontSize(kFontSm)
@@ -272,16 +345,36 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
                 .horizontalAlign(eui::HorizontalAlign::Center)
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
+            // 运行控制（§5.8，M5-06）：启动/停止；回调反馈经反馈行显式呈现。
+            runButton("start", "Start", startX, startEnabled, [&state, engine] {
+                if (engine == nullptr) {
+                    return;
+                }
+                if (engine->state() == rin::WorkflowEngineState::Failed) {
+                    engine->stop();  // Failed 为运行终态：stop 回 Idle 后方可重启。
+                }
+                const rin::AdmissionResult admission = engine->start();
+                state.feedback =
+                    admission.admitted
+                        ? ""
+                        : (admission.error.empty() ? "start rejected" : admission.error);
+            });
+            runButton("stop", "Stop", stopX, stopEnabled, [&state, engine] {
+                if (engine != nullptr) {
+                    engine->stop();  // 幂等；有界排空（见函数头注释）。
+                    state.feedback.clear();
+                }
+            });
             if (!state.feedback.empty()) {
                 ui.text("workflow.toolbar.feedback")
                     .position(452.0f, 0.0f)
-                    .size(width - 452.0f - fitWidth - pad * 2.0f, height)
+                    .size(startX - 452.0f - runGap, height)
                     .text(state.feedback)
                     .fontSize(kFontSm)
                     .color(tokens.fgSubtlest)
                     .horizontalAlign(eui::HorizontalAlign::Right)
                     .verticalAlign(eui::VerticalAlign::Center)
-                    .maxWidth(width - 452.0f - fitWidth - pad * 2.0f)
+                    .maxWidth(startX - 452.0f - runGap)
                     .build();
             }
         })

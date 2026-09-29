@@ -6,7 +6,9 @@
 // - 工厂校验：frameSource 为空、maxInFlight==0、pumpInterval<=0 抛
 //   std::invalid_argument；paramQueueCapacity==0 按 1 处理（构造不抛）；
 // - 默认目录单一事实源：createWorkflowEngine 引擎的 catalog() 与
-//   makeDefaultFakeCatalog() 逐字段相等（typeId/displayName/inputs/outputs 与
+//   makeDefaultImageNodeCatalog()（src/workflow/default_catalog.hpp，两引擎共同
+//   单一事实源；假引擎已随 M5-06 假换真集成移除）逐字段相等
+//   （typeId/displayName/inputs/outputs 与
 //   每个 ParamDescriptor 的 id/label/kind/defaultValue/hasRange/min/max/enumOptions）；
 // - 真实算子数值链：source→grayify 的 BT.601 定点亮度
 //   Y=(77R+150G+29B+128)>>8 逐像素 golden（独立手推，设计文档 §7 冻结公式）；
@@ -58,8 +60,8 @@
 #include <variant>
 #include <vector>
 
+#include "default_catalog.hpp"
 #include "engine.hpp"
-#include "fake_engine.hpp"
 #include "rin/workflow_types.hpp"
 #include "workflow_engine_contract_suite.hpp"
 
@@ -321,7 +323,8 @@ int main() {
         RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
     }
 
-    // ---- 3) 默认目录一致性：真引擎 catalog() 与 makeDefaultFakeCatalog() 逐字段相等 ----
+    // ---- 3) 默认目录一致性：真引擎 catalog() 与 makeDefaultImageNodeCatalog()
+    // 逐字段相等（两引擎共同单一事实源；假引擎已随 M5-06 移除，基线即本函数）----
     {
         executor::Executor executor;
         executor::ExecutorConfig executorConfig;
@@ -333,46 +336,47 @@ int main() {
         RIN_CHECK(static_cast<bool>(engine));
         if (engine) {
             const NodeCatalog& real = engine->catalog();
-            const NodeCatalog fake = rin::makeDefaultFakeCatalog();
+            const NodeCatalog baseline =
+                rin::workflow_catalog::makeDefaultImageNodeCatalog();
             RIN_CHECK(real.valid());
-            RIN_CHECK(fake.valid());
-            RIN_CHECK_EQ(real.nodes.size(), fake.nodes.size());
+            RIN_CHECK(baseline.valid());
+            RIN_CHECK_EQ(real.nodes.size(), baseline.nodes.size());
             for (const NodeDescriptor& realNode : real.nodes) {
-                const NodeDescriptor* fakeNode =
-                    rin::findNodeDescriptor(fake, realNode.typeId);
-                RIN_CHECK_MSG(fakeNode != nullptr,
-                              ("fake catalog must contain typeId: " + realNode.typeId)
+                const NodeDescriptor* expectedNode =
+                    rin::findNodeDescriptor(baseline, realNode.typeId);
+                RIN_CHECK_MSG(expectedNode != nullptr,
+                              ("baseline catalog must contain typeId: " + realNode.typeId)
                                   .c_str());
-                if (fakeNode == nullptr) {
+                if (expectedNode == nullptr) {
                     continue;
                 }
-                RIN_CHECK_EQ(realNode.typeId, fakeNode->typeId);
-                RIN_CHECK_EQ(realNode.displayName, fakeNode->displayName);
-                RIN_CHECK(realNode.inputs == fakeNode->inputs);
-                RIN_CHECK(realNode.outputs == fakeNode->outputs);
-                RIN_CHECK_EQ(realNode.params.size(), fakeNode->params.size());
+                RIN_CHECK_EQ(realNode.typeId, expectedNode->typeId);
+                RIN_CHECK_EQ(realNode.displayName, expectedNode->displayName);
+                RIN_CHECK(realNode.inputs == expectedNode->inputs);
+                RIN_CHECK(realNode.outputs == expectedNode->outputs);
+                RIN_CHECK_EQ(realNode.params.size(), expectedNode->params.size());
                 for (const ParamDescriptor& realParam : realNode.params) {
-                    const ParamDescriptor* fakeParam = nullptr;
-                    for (const ParamDescriptor& candidate : fakeNode->params) {
+                    const ParamDescriptor* expectedParam = nullptr;
+                    for (const ParamDescriptor& candidate : expectedNode->params) {
                         if (candidate.id == realParam.id) {
-                            fakeParam = &candidate;
+                            expectedParam = &candidate;
                             break;
                         }
                     }
-                    RIN_CHECK_MSG(fakeParam != nullptr,
-                                  ("fake catalog must contain param: " + realParam.id)
+                    RIN_CHECK_MSG(expectedParam != nullptr,
+                                  ("baseline catalog must contain param: " + realParam.id)
                                       .c_str());
-                    if (fakeParam == nullptr) {
+                    if (expectedParam == nullptr) {
                         continue;
                     }
-                    RIN_CHECK_EQ(realParam.id, fakeParam->id);
-                    RIN_CHECK_EQ(realParam.label, fakeParam->label);
-                    RIN_CHECK(realParam.kind == fakeParam->kind);
-                    RIN_CHECK(realParam.defaultValue == fakeParam->defaultValue);
-                    RIN_CHECK_EQ(realParam.hasRange, fakeParam->hasRange);
-                    RIN_CHECK_EQ(realParam.minValue, fakeParam->minValue);
-                    RIN_CHECK_EQ(realParam.maxValue, fakeParam->maxValue);
-                    RIN_CHECK(realParam.enumOptions == fakeParam->enumOptions);
+                    RIN_CHECK_EQ(realParam.id, expectedParam->id);
+                    RIN_CHECK_EQ(realParam.label, expectedParam->label);
+                    RIN_CHECK(realParam.kind == expectedParam->kind);
+                    RIN_CHECK(realParam.defaultValue == expectedParam->defaultValue);
+                    RIN_CHECK_EQ(realParam.hasRange, expectedParam->hasRange);
+                    RIN_CHECK_EQ(realParam.minValue, expectedParam->minValue);
+                    RIN_CHECK_EQ(realParam.maxValue, expectedParam->maxValue);
+                    RIN_CHECK(realParam.enumOptions == expectedParam->enumOptions);
                 }
             }
         }

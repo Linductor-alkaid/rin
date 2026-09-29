@@ -26,25 +26,10 @@ target_compile_features(rin_core PUBLIC cxx_std_20)
 # 公开头；STATIC 库的 PRIVATE 依赖以 LINK_ONLY 传递给消费者链接，不外泄头文件。
 target_link_libraries(rin_core PRIVATE kissfft::kissfft)
 
-# M5-08 契约假引擎（DEC-016）：IWorkflowEngine 的仿真实现，M5 骨架（M5-03..05）
-# 对它先行开发调试；位于 Core 契约与 Executor 之间，零设备/窗口依赖；M5-06
-# 假换真集成后移除。仿真统计仅为 UI 调试数据，不代表性能结论。
-add_library(rin_workflow_fake STATIC
-    workflow/fake_engine.cpp
-)
-add_library(rin::workflow_fake ALIAS rin_workflow_fake)
-
-target_include_directories(rin_workflow_fake
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/workflow>
-)
-target_compile_features(rin_workflow_fake PUBLIC cxx_std_20)
-# executor 作为运行时契约 PUBLIC 传递（与 adapter 同纪律：引擎任务全部受 Executor 管理）。
-target_link_libraries(rin_workflow_fake PUBLIC rin::core executor::executor)
-
 # M4-07 工作流真引擎（DEC-013 执行模型）：按 M4-09 契约实现 IWorkflowEngine，
 # 帧泵采样 + 最新帧快照 + 有界在飞显式丢弃；经 runNodeGraph 求值真实算子。
-# 与 rin_workflow_fake 并列（DEC-016 假换真集成在 M5-06），零设备/窗口依赖。
+# M5-08 契约假引擎（rin_workflow_fake）已完成历史使命（M5-03..05 骨架先行调试，
+# DEC-016），随 M5-06 假换真集成移除。零设备/窗口依赖。
 add_library(rin_workflow STATIC
     workflow/engine.cpp
 )
@@ -55,7 +40,7 @@ target_include_directories(rin_workflow
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/workflow>
 )
 target_compile_features(rin_workflow PUBLIC cxx_std_20)
-# executor 作为运行时契约 PUBLIC 传递（与假引擎同纪律：引擎任务全部受 Executor 管理）。
+# executor 作为运行时契约 PUBLIC 传递（与 adapter 同纪律：引擎任务全部受 Executor 管理）。
 target_link_libraries(rin_workflow PUBLIC rin::core executor::executor)
 
 add_library(rin_realsense_adapter STATIC

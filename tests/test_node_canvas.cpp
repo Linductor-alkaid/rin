@@ -18,8 +18,7 @@
 //      带状封闭轮廓，EUI polygon 填充语义下开放点集误渲染为"弦-曲线封闭
 //      区域"的真机缺陷回归守卫）。
 //
-// 目录构造为本文件私有的小型 rin::NodeCatalog（只链 rin::core，不引入
-// fake_engine）。测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），
+// 目录构造为本文件私有的小型 rin::NodeCatalog（只链 rin::core）。测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），
 // main 返回 rin_test::exitStatus()。单线程纯逻辑，无 sleep。
 //
 // 末节 "iva_defect_probes" 原为针对实现疑点的缺陷探针：2026-09-28 主循环

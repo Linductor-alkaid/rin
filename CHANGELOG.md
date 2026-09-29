@@ -60,6 +60,14 @@
   运行控制 + 有界最新态数据通道）——UI 与引擎间的唯一契约面，公开头零第三方
   类型；`M5-08` 假引擎与 `M4-07` 真引擎实现同一契约并共用契约测试套件，完成
   判据随 `M4-08` 关闭全部满足。
+- 工作流运行控制与假换真集成（M5，`M5-06`，[DEC-016](docs/decisions/DEC-016-contract-first-workbench-order.md)
+  交错策略终点）：工作台工作流页改接 `M4-07` 真引擎（`createWorkflowEngine`），
+  新增相机帧源接缝（RGB 彩色流"上次已见序号"非阻塞过滤读取 + RGBA8 共享缓冲
+  零拷贝接管，多源图各源节点独立水位）；工具栏 Start/Stop 运行控制（启动可用
+  条件 = 图校验通过且引擎 Idle/Failed，Failed 先停后重启，准入错误显式反馈；
+  停止幂等有界排空；Stopping 全禁用、无暂停）与 Running 下图结构变更"待生效"
+  标注（`GraphApplied` 帧边界应用后清除）；契约假引擎（`rin_workflow_fake`，
+  `M5-08`）按既定计划随集成移除，`M4-09` 契约与共用测试套件由真引擎延续。
 - M4 测试矩阵与吞吐实测记录（M4，`M4-08`）：`tools/workflow_bench` 实测工具
   （Release 构建，`RIN_BUILD_TOOLS` 门控，不进 ctest）与记录
   [docs/benchmarks/workflow-throughput-848x480.md](docs/benchmarks/workflow-throughput-848x480.md)

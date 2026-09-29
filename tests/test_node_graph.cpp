@@ -31,7 +31,7 @@
 //    - 空图求值返回空。
 //
 // 节点桩直接内联实现 IImageNode（自建小目录，含 0 输出/双输出源与多输入汇聚，
-// 比 makeDefaultFakeCatalog 更便于构造防御路径）；目录构造手法沿用
+// 比默认目录更便于构造防御路径）；目录构造手法沿用
 // test_workflow_contracts.cpp。
 //
 // DOD-02 适用性说明：buildNodeGraph/runNodeGraph 为单帧同步纯函数，本测试全部

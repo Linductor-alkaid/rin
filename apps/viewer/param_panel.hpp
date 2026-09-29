@@ -890,10 +890,7 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
     const float bodyHeight = height - toolbarHeight - bottomHeight - gap * 2.0f;
     const float canvasWidth = width - paletteWidth - contextWidth - gap * 2.0f;
 
-    composeWorkflowToolbar(ui, state,
-                           engine != nullptr ? engine->state()
-                                             : rin::WorkflowEngineState::Idle,
-                           x, y, width, toolbarHeight);
+    composeWorkflowToolbar(ui, state, engine, x, y, width, toolbarHeight);
     composeWorkflowPalette(ui, state, engine, x, bodyTop, paletteWidth, bodyHeight);
     composeWorkflowCanvas(ui, state, engine, x + paletteWidth + gap, bodyTop, canvasWidth,
                           bodyHeight);

@@ -15,18 +15,22 @@
 //      不复活 stale 快照（§4/§7 关闭排空语义；与 M3-07 test_shutdown_drain
 //      "clear 后 stale 不复活、复活只能来自新会话新数据" 同纪律）、新会话
 //      严格更新序号衔接；
-//   3. 对契约假引擎（rin::workflow_fake）的集成管道：Idle 拒绝、启动衔接、
-//      Running 下返回值语义与序号单调、最新态合并（200ms 间隙序号跨度 >= 2）、
-//      节点统计（simulatedCostMs 常数 2.0 注入 -> last/avg ≈ 2.0、executedFrames
-//      > 0、图外 id nullptr）、停止冻结（stop 后至多一次 true，末次值内容与
-//      序号恒定）、新会话重启（sequence 严格大于停前、会话累计计数复位）；
-//   4. 失败冻结（injectNodeFailure）：引擎 Failed 后 live()==false，末次快照
+//   3. 对 M4-07 真引擎 + 合成帧源的集成管道（M5-06 假换真，契约点 2/3/4/5/7）：
+//      Idle 拒绝、启动衔接、Running 下返回值语义与序号单调、最新态合并（200ms
+//      间隙序号跨度 >= 2）、节点统计（grayify 注入 ~2ms 定长睡眠 -> last/avg
+//      实测 >= 1.5ms 且源节点不伪造耗时（恒 0，engine.hpp 源节点记账语义）、
+//      executedFrames > 0、图外 id nullptr）、停止冻结（stop 后至多一次 true，
+//      末次值内容与序号恒定）、新会话重启（sequence 严格大于停前、会话累计计数
+//      复位）；
+//   4. 失败冻结（运行期注入，契约点 6）：crop 越界 ROI 经 requestParamUpdate
+//      热更（声明范围 [0,4096] 内合法受理，运行期 x+width > 帧宽由真实算子
+//      拒绝）——前两帧正常发布快照，引擎 Failed 后 live()==false，末次快照
 //      保持可读且 stop() 排空后内容不变。
 //
 // 测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），main 返回
 // rin_test::exitStatus()。引擎消费全部走契约面、owner（测试主线程）直接调用，
 // 单线程无并发（DOD-02 矩阵不适用）；所有等待用秒级死限的有界轮询 pollUntil
-// 防悬挂。executor 生命周期按 fake_engine.hpp 纪律：引擎 stop + 释放先于
+// 防悬挂。executor 生命周期按 engine.hpp 纪律：引擎 stop + 释放先于
 // executor.shutdown(true)。compose 绘制路径（工具栏状态徽标/节点耗时徽标/
 // 右面板工作流总览）需活动 EUI 运行时，headless 不可测，不在本文件范围
 // （真机视觉验收归 M5-07，与 test_param_panel 同纪律）。
@@ -37,13 +41,13 @@
 
 #include <executor/executor.hpp>
 
+#include <rin/image_node.hpp>
 #include <rin/workflow_engine.hpp>
 #include <rin/workflow_types.hpp>
 
-#include "fake_engine.hpp"
+#include "engine.hpp"
 
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -59,10 +63,6 @@ namespace {
 void runSection(const char* name, void (*fn)()) {
     std::printf("== %s\n", name);
     fn();
-}
-
-[[nodiscard]] bool nearD(double a, double b, double tol = 1e-6) {
-    return std::fabs(a - b) <= tol;
 }
 
 // 有界轮询（秒级死限，防悬挂；pred() 为真即返回）。
@@ -114,6 +114,114 @@ void drainPerf(viewer::WorkflowPerfState& perf, rin::IWorkflowEngine& engine) {
     connection.to = rin::PortRef{2, rin::PortDirection::Input, 0};
     graph.connections.push_back(connection);
     return graph;
+}
+
+// source(1) -> crop(2) 链（失败注入用；crop 显式携带合法 ROI——真实算子对越界
+// ROI 运行期拒绝，默认 64x64 ROI 越出 32x24 帧）。
+[[nodiscard]] rin::WorkflowGraph makeCropChainGraph() {
+    rin::WorkflowGraph graph;
+    rin::NodeInstance source;
+    source.id = 1;
+    source.typeId = "source";
+    rin::NodeInstance crop;
+    crop.id = 2;
+    crop.typeId = "crop";
+    crop.params = {
+        {"x", rin::ParamValue{static_cast<std::int64_t>(0)}},
+        {"y", rin::ParamValue{static_cast<std::int64_t>(0)}},
+        {"width", rin::ParamValue{static_cast<std::int64_t>(16)}},
+        {"height", rin::ParamValue{static_cast<std::int64_t>(12)}},
+    };
+    graph.nodes = {source, crop};
+    rin::Connection connection;
+    connection.from = rin::PortRef{1, rin::PortDirection::Output, 0};
+    connection.to = rin::PortRef{2, rin::PortDirection::Input, 0};
+    graph.connections.push_back(connection);
+    return graph;
+}
+
+// --- 真引擎 fixture（M5-06 假换真：createWorkflowEngine + 合成饱和帧源） ---
+
+constexpr std::uint32_t kFixtureWidth = 32;
+constexpr std::uint32_t kFixtureHeight = 24;
+
+// 确定性 32x24 Rgba8 图案（共享不可变缓冲；本测试不断言具体像素值）。
+[[nodiscard]] const std::shared_ptr<const std::vector<std::uint8_t>>& fixturePixels() {
+    static const std::shared_ptr<const std::vector<std::uint8_t>> pixels = [] {
+        auto buffer = std::make_shared<std::vector<std::uint8_t>>(
+            static_cast<std::size_t>(kFixtureWidth) * kFixtureHeight * 4);
+        for (std::uint32_t y = 0; y < kFixtureHeight; ++y) {
+            for (std::uint32_t x = 0; x < kFixtureWidth; ++x) {
+                const std::size_t offset =
+                    (static_cast<std::size_t>(y) * kFixtureWidth + x) * 4;
+                (*buffer)[offset + 0] = static_cast<std::uint8_t>((x * 2 + y) & 0xFF);
+                (*buffer)[offset + 1] = static_cast<std::uint8_t>((x + y * 3) & 0xFF);
+                (*buffer)[offset + 2] = static_cast<std::uint8_t>((x * 5 + y * 7) & 0xFF);
+                (*buffer)[offset + 3] = 0xFF;
+            }
+        }
+        return buffer;
+    }();
+    return pixels;
+}
+
+// 饱和帧源：每次探测交付新帧（workflow_bench saturatingSource 同款；水位由
+// 引擎按节点传入的 lastSeen 驱动，帧源无状态）。
+[[nodiscard]] rin::WorkflowFrameSource saturatingSource() {
+    return [](rin::NodeId, std::uint64_t& lastSeen, rin::WorkflowFrameInput& out) {
+        out.sourceSequence = lastSeen + 1;
+        out.image = rin::ImageU8::wrap(rin::PortType::Rgba8, kFixtureWidth,
+                                       kFixtureHeight, kFixtureWidth * 4,
+                                       fixturePixels());
+        lastSeen = out.sourceSequence;
+        return true;
+    };
+}
+
+// 定长睡眠包装节点：apply 内先睡眠再转发真实算子（真实耗时注入，替代假引擎的
+// simulatedCostMs 常数仿真——真引擎逐节点耗时为 runNodeGraph 实测值）。
+class SleepNode final : public rin::IImageNode {
+public:
+    SleepNode(std::unique_ptr<rin::IImageNode> inner, std::chrono::milliseconds delay)
+        : inner_(std::move(inner)), delay_(delay) {}
+
+    [[nodiscard]] const rin::NodeDescriptor& descriptor() const noexcept override {
+        return inner_->descriptor();
+    }
+
+    [[nodiscard]] std::vector<rin::ImageU8> apply(
+        const std::vector<rin::ImageU8>& inputs) const override {
+        std::this_thread::sleep_for(delay_);
+        return inner_->apply(inputs);
+    }
+
+private:
+    std::unique_ptr<rin::IImageNode> inner_;
+    std::chrono::milliseconds delay_;
+};
+
+// 基线真引擎配置：2ms 泵 + 饱和帧源；nodeFactory 对 grayify 注入 ~2ms 定长
+// 工作（统计检查的确定依据），其余节点走默认工厂（source 返回 nullptr = 注入型
+// 源节点语义）。
+[[nodiscard]] rin::WorkflowEngineConfig realEngineConfig() {
+    rin::WorkflowEngineConfig config;
+    config.pumpInterval = std::chrono::milliseconds{2};
+    config.frameSource = saturatingSource();
+    config.nodeFactory =
+        [](const rin::NodeDescriptor& descriptor, const rin::NodeInstance& instance)
+        -> std::unique_ptr<rin::IImageNode> {
+        if (instance.typeId == "source") {
+            return nullptr;
+        }
+        std::unique_ptr<rin::IImageNode> inner =
+            rin::makeDefaultImageNode(descriptor, instance);
+        if (instance.typeId == "grayify") {
+            inner = std::make_unique<SleepNode>(std::move(inner),
+                                                std::chrono::milliseconds{2});
+        }
+        return inner;
+    };
+    return config;
 }
 
 // --- 契约桩引擎（纯逻辑消费语义的确定驱动，无 executor/线程） ---
@@ -324,9 +432,9 @@ void testStubConsumeSemantics() {
     RIN_CHECK(perf.stats() != nullptr && perf.stats()->sequence == 4);
 }
 
-// --- 3. 对契约假引擎的集成管道（契约点 2/3/4/5/7） ---
+// --- 3. 对真引擎的集成管道（契约点 2/3/4/5/7） ---
 
-void testFakeEnginePipeline() {
+void testRealEnginePipeline() {
     executor::Executor executor;
     executor::ExecutorConfig executorConfig;
     const bool initialized = executor.initialize(executorConfig);
@@ -335,17 +443,8 @@ void testFakeEnginePipeline() {
         return;
     }
 
-    rin::FakeWorkflowEngineConfig config;
-    config.frameWidth = 32;
-    config.frameHeight = 24;
-    config.frameInterval = std::chrono::milliseconds{10};
-    config.maxInFlight = 2;
-    // 常数仿真耗时 2.0（全部节点全部帧）：节点统计的确定断言依据。
-    config.simulatedCostMs = [](const rin::NodeInstance&, std::uint64_t) {
-        return 2.0;
-    };
     std::shared_ptr<rin::IWorkflowEngine> engine =
-        rin::createFakeWorkflowEngine(executor, std::move(config));
+        rin::createWorkflowEngine(executor, realEngineConfig());
 
     const rin::WorkflowGraph graph = makeTwoNodeGraph();
     RIN_CHECK(engine->applyGraph(graph).ok);
@@ -433,23 +532,25 @@ void testFakeEnginePipeline() {
                       "perf: gap consume jumps >= 2 sequences (latest-wins merge)");
     }
 
-    // 契约点 4：节点统计（常数 2.0 仿真耗时）与图外 id 拒绝。
+    // 契约点 4：节点统计（真实耗时）与图外 id 拒绝。真引擎语义（M4-07）：
+    // 逐节点耗时为 runNodeGraph 实测——grayify 注入 ~2ms 定长睡眠，实测
+    // last/avg 应落在睡眠量级（下界 1.5ms 吸收计时粒度；上界 100ms 为
+    // 消毒器/负载抖动的宽松护栏）；源节点不经耗时观测，不伪造耗时值（恒 0，
+    // engine.hpp 源节点记账语义，区别于假引擎的全节点仿真值）。
     const rin::NodeStats* node1 = perf.nodeStats(1);
     const rin::NodeStats* node2 = perf.nodeStats(2);
     RIN_CHECK(node1 != nullptr && node2 != nullptr);
     if (node1 != nullptr) {
         RIN_CHECK(node1->executedFrames > 0);
-        RIN_CHECK_MSG(nearD(node1->lastCostMs, 2.0),
-                      "perf: node 1 lastCostMs ~= 2.0 (constant injection)");
-        RIN_CHECK_MSG(nearD(node1->avgCostMs, 2.0),
-                      "perf: node 1 avgCostMs ~= 2.0 (constant window)");
+        RIN_CHECK_MSG(node1->lastCostMs == 0.0 && node1->avgCostMs == 0.0,
+                      "perf: source node must not carry fabricated cost values");
     }
     if (node2 != nullptr) {
         RIN_CHECK(node2->executedFrames > 0);
-        RIN_CHECK_MSG(nearD(node2->lastCostMs, 2.0),
-                      "perf: node 2 lastCostMs ~= 2.0");
-        RIN_CHECK_MSG(nearD(node2->avgCostMs, 2.0),
-                      "perf: node 2 avgCostMs ~= 2.0");
+        RIN_CHECK_MSG(node2->lastCostMs >= 1.5 && node2->lastCostMs <= 100.0,
+                      "perf: node 2 lastCostMs reflects the injected ~2ms work");
+        RIN_CHECK_MSG(node2->avgCostMs >= 1.5 && node2->avgCostMs <= 100.0,
+                      "perf: node 2 avgCostMs reflects the injected ~2ms work");
     }
     RIN_CHECK(perf.nodeStats(9999) == nullptr);
     RIN_CHECK(perf.nodeStats(rin::kInvalidNode) == nullptr);
@@ -546,9 +647,9 @@ void testFakeEnginePipeline() {
     RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
 }
 
-// --- 4. 失败冻结（契约点 6） ---
+// --- 4. 失败冻结（契约点 6；真引擎运行期注入） ---
 
-void testFakeEngineFailureFreeze() {
+void testRealEngineFailureFreeze() {
     executor::Executor executor;
     executor::ExecutorConfig executorConfig;
     const bool initialized = executor.initialize(executorConfig);
@@ -557,17 +658,15 @@ void testFakeEngineFailureFreeze() {
         return;
     }
 
-    rin::FakeWorkflowEngineConfig config;
-    config.frameInterval = std::chrono::milliseconds{10};
-    // 第 3 帧起 grayify（节点 2）失败：前两帧正常发布快照，失败前有末次值。
-    config.injectNodeFailure = [](const rin::NodeInstance& node,
-                                  std::uint64_t frameIndex) {
-        return node.id == 2 && frameIndex >= 3;
-    };
+    // 真引擎失败注入（M5-06 假换真）：合法 ROI（16x12 @ (0,0)）先正常运行发布
+    // 快照，累计 >= 2 帧后经 requestParamUpdate 热更 crop.x -> 1000（声明范围
+    // [0,4096] 内合法受理），下一帧生效时 1000+16 > 32 帧宽由真实 crop 算子
+    // 运行期拒绝 -> NodeFailed -> 引擎 Failed。失败前有末次值（前两帧快照）。
+    rin::WorkflowEngineConfig config = realEngineConfig();
     std::shared_ptr<rin::IWorkflowEngine> engine =
-        rin::createFakeWorkflowEngine(executor, std::move(config));
+        rin::createWorkflowEngine(executor, std::move(config));
 
-    RIN_CHECK(engine->applyGraph(makeTwoNodeGraph()).ok);
+    RIN_CHECK(engine->applyGraph(makeCropChainGraph()).ok);
 
     viewer::WorkflowPerfState perf;
     const rin::AdmissionResult admission = engine->start();
@@ -579,12 +678,29 @@ void testFakeEngineFailureFreeze() {
         return;
     }
 
+    // 前两帧正常发布快照（边轮询边消费，保持消费活跃）。
+    RIN_CHECK_MSG(pollUntil([&] {
+                      perf.consume(*engine);
+                      return perf.stats() != nullptr &&
+                             perf.stats()->processedFrames >= 2;
+                  }),
+                  "perf: pre-failure frames publish stats snapshots");
+
+    // 运行期热更越界 ROI：受理（值在声明范围内），等引擎 Failed。
+    std::string error;
+    RIN_CHECK_MSG(engine->requestParamUpdate(2, "x",
+                                             rin::ParamValue{static_cast<std::int64_t>(1000)},
+                                             &error),
+                  "perf: out-of-bounds-at-runtime ROI is accepted at admission "
+                  "(within declared range)");
+    RIN_CHECK(error.empty());
+
     // 轮询至 Failed（边轮询边消费，保持消费活跃）。
     RIN_CHECK_MSG(pollUntil([&] {
                       perf.consume(*engine);
                       return engine->state() == rin::WorkflowEngineState::Failed;
                   }),
-                  "perf: injected node failure drives the engine to Failed");
+                  "perf: runtime-op failure via param hot-update drives Failed");
 
     // 失败后 live false（引擎非 Running）；末次快照保持可读。
     RIN_CHECK(!perf.live());
@@ -592,7 +708,7 @@ void testFakeEngineFailureFreeze() {
     RIN_CHECK(perf.stats() != nullptr);
     if (perf.stats() != nullptr) {
         RIN_CHECK(perf.stats()->sequence >= 1);
-        RIN_CHECK(perf.nodeStats(2) != nullptr);  // grayify 失败前已执行的统计
+        RIN_CHECK(perf.nodeStats(2) != nullptr);  // crop 失败前已执行的统计
     }
     const rin::WorkflowStats atFailure =
         perf.stats() != nullptr ? *perf.stats() : rin::WorkflowStats{};
@@ -615,7 +731,7 @@ void testFakeEngineFailureFreeze() {
 int main() {
     runSection("perf_formatting", testPerfFormatting);
     runSection("perf_stub_consume_semantics", testStubConsumeSemantics);
-    runSection("perf_fake_engine_pipeline", testFakeEnginePipeline);
-    runSection("perf_fake_engine_failure_freeze", testFakeEngineFailureFreeze);
+    runSection("perf_real_engine_pipeline", testRealEnginePipeline);
+    runSection("perf_real_engine_failure_freeze", testRealEngineFailureFreeze);
     return rin_test::exitStatus();
 }

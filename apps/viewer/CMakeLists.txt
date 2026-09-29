@@ -2,9 +2,10 @@
 
 add_executable(rin app.cpp)
 
-# 工作流页对契约假引擎开发调试（M5-03..05，DEC-016）；M5-06 假换真集成后由
-# 真引擎目标替换。
-target_link_libraries(rin PRIVATE rin::realsense_adapter rin::workflow_fake OpenGL::GL)
+# 工作流页运行控制与真引擎集成（M5-06，DEC-013/DEC-016）：M4-07 真引擎 +
+# 相机帧源接缝（workflow_frame_source.hpp）替代 M5-08 契约假引擎（已随本次
+# 集成移除，见 src/CMakeLists）。
+target_link_libraries(rin PRIVATE rin::realsense_adapter rin::workflow OpenGL::GL)
 
 # 设置页"关于"展示的版本号（根 project(Rin VERSION ...)）。
 target_compile_definitions(rin PRIVATE RIN_VERSION="${Rin_VERSION}")
