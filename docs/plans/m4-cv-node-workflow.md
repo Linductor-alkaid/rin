@@ -1,6 +1,6 @@
 # M4：图像处理节点库与工作流引擎
 
-> 状态：In Progress
+> 状态：Completed
 > 负责人：Linductor-alkaid（授权 Agent 按工程规范自治执行）
 > 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：M1（与 M3 无代码耦合，可并行排期；建议 M3 后实施）；`M4-09` 视图契约
@@ -87,9 +87,12 @@
       （"中间产物有界保留"按 `M4-09` 契约冻结语义实现：每节点最新一幅；
       消费式图替换以图对象同一性判定——`LatestMailbox` 纯快照无消费操作，
       同一性记录达成读取即消费语义。）
-- [ ] `M4-08` M4 测试矩阵与性能记录：全预设测试通过；848×480 典型工作流全链路
-      吞吐实测记录（只记录实测值与方法，不宣称未验证的性能目标）。
-- [ ] `M4-09` 工作流视图契约冻结（[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)，
+- [x] `M4-08` M4 测试矩阵与性能记录：全预设测试通过；848×480 典型工作流全链路
+      吞吐实测记录（只记录实测值与方法，不宣称未验证的性能目标）。（实测落盘
+      [benchmarks/workflow-throughput-848x480.md](../benchmarks/workflow-throughput-848x480.md)，
+      工具 `tools/workflow_bench` 随项目构建（`RIN_BUILD_TOOLS`，不进 ctest）；
+      Independent-Verification-Agent 独立复验后修订 3 处文档失实注记。）
+- [x] `M4-09` 工作流视图契约冻结（[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)，
       先于 M5 骨架实施）：在 `include/rin/` 定义 UI 与引擎之间的唯一契约面——
       工作流图模型（节点/连线/校验结果）、类型化节点参数模型、逐节点耗时与端到端
       统计 schema、运行控制命令与结果/错误事件语义及 `executor::comm` 通道选型
@@ -112,15 +115,74 @@
 
 ## 测试与退出条件
 
-- [ ] `ctest`（debug/asan/ubsan，涉及跨上下文时 tsan）全绿，新增：契约校验、
-      逐算子 golden、FFT 数值、引擎状态路径测试。
-- [ ] `DEC-012`/`DEC-013` 记录生效并被实现引用。
+- [x] `ctest`（debug/asan/ubsan，涉及跨上下文时 tsan）全绿，新增：契约校验、
+      逐算子 golden、FFT 数值、引擎状态路径测试。（2026-09-29 独立验证：四预设
+      26/26 全绿、真机冒烟 PASS、零消毒器诊断、无新增编译警告。）
+- [x] `DEC-012`/`DEC-013` 记录生效并被实现引用。
 - [x] 引擎过载 / 取消 / 关闭测试通过（`M4-07`）。
-- [ ] 性能实测记录落盘（`M4-08`），无未经验证的性能声明。
-- [ ] 文档同步：新增 `docs/design/image_workflow_design.md`、总计划 `SCOPE-08`、
+- [x] 性能实测记录落盘（`M4-08`），无未经验证的性能声明。
+- [x] 文档同步：新增 `docs/design/image_workflow_design.md`、总计划 `SCOPE-08`、
       CHANGELOG（Unreleased）。
 
 ## 验证记录
+
+2026-09-29：`M4-08` 完成关闭——M4 测试矩阵与吞吐实测记录落盘，M4 里程碑全部
+工作项与退出条件闭合，状态改 `Completed`。新增 `tools/workflow_bench/`
+（`workflow_bench.cpp` + README：方法/口径/复现命令单一事实源）与
+`tools/CMakeLists.txt`（根 CMakeLists 新增 `RIN_BUILD_TOOLS` 选项默认 ON）：
+实测工具链接 `rin::workflow`，随项目构建、不进 ctest（与 fft_bench 决策取证
+工具定位区分）。测量对象为 `createWorkflowEngine` 真引擎（发布默认
+maxInFlight=2/帧泵 5ms、Executor 默认配置）对三条典型链：`typical`
+（source→grayify→gaussian_blur→fft_lowpass→hist_eq，848×480 填充路径）、
+`downscale`（前置 downscale(bilinear,0.5) 变体）、`spatial`（无 FFT 参照）；
+输入为 848×480 合成图案零拷贝注入（隔离引擎+算子成本与相机转换，RULE-01），
+`saturate`/`camera30` 两种模式，warmup 60 帧 + 测量窗 240 帧 × 3 轮取中位数，
+双口径（外部墙钟 + 引擎自报 endToEndFps）交叉。实测记录落盘
+[benchmarks/workflow-throughput-848x480.md](../benchmarks/workflow-throughput-848x480.md)：
+核心结论——`typical` 链 camera30 下三次独立运行 18 轮 29.94–30.04 fps、
+dropped 全 0（本记录最强可复现结论，30 fps 相机速率余量约 3.4 倍）；标称
+频率态饱和吞吐 ≈102 fps，FFT 低通为链主导成本（10.4–14.9 ms/帧）；降分辨率
+前置把 FFT 降至 1.8–4.3 ms/帧（512×256 填充）、链饱和吞吐升至 ≈160–198 fps；
+空间域参照链 ≈198 fps（贴近帧泵输入上限）。§7 "强振铃先降分辨率或改用空间域
+算子"使用建议随实测量化回填设计文档（数值 + 链接），CHANGELOG（Unreleased）
+同步。测试矩阵（Independent-Verification-Agent 独立执行）：debug/asan/ubsan/
+tsan 四预设 configure/build/ctest 全绿——各 26/26 通过、D435if 真机冒烟
+（设备在位）四预设均 PASS 非 SKIP、asan/ubsan/tsan 零消毒器诊断、
+`workflow_bench` 四预设编译零警告（既有 master 唯一警告
+`realsense_camera_service.cpp:987` nodiscard 未消费为预存基线，不在本工作项
+范围）；tsan 预设首次 configure 失败经对照复现切割为该构建目录预存缓存污染
+（陈旧 `FETCHCONTENT_SOURCE_DIR_*` 指向已清空的 `build/iva-debug/_deps`，
+与本次改动无关），缓存级定向清除后按 pin 重新拉取全绿。基准复验
+（Independent-Verification-Agent 独立执行）：静态方法学核对（README 与源码
+一致性、同快照基线、有界等待、口径定义、Executor owner 纪律）+ 两次完整独立
+重跑 + 11 项逐项核对——9 项 PASS；2 项 FAIL 均为本记录初稿文档失实（非工具
+代码缺陷），已修订闭合：① 初稿"saturate 双口径差 ≤5%"注记被证伪（实测差
+9.1–28.8%：engine fps 为滚动窗口瞬时速率的单点采样，帧批量完成 + powersave
+频率漂移放大偏差；camera30 与贴近帧泵上限链实测差 <3%）——改为如实描述单点
+采样偏差并以 ext fps 为准；② 初稿"轮间波动 ±15%"低估（同配置相邻轮实测
+摆动达约 2.9 倍，低频态到频率恢复的过渡被轮窗采样）——改为 saturate 绝对
+数值只作量级与模式内相对解读、精确复现需频率锁定（需 root，未执行）；
+③ README 编译口径误写 -O2（release 预设实为 -O3；DEC-012 fft_bench 为显式
+-O2，跨工具对照注意差异）——已更正。复验总判断：工具可作为 M4-08 实测记录
+的可信方法（构建路径真实、协议严谨、验收相关结论在 camera30 工况下高度稳定
+且与 DEC-012 基准量级交叉不矛盾）。环境：x86_64 Linux（内核 7.0.0-34），
+GCC 13.3.0，Intel Core Ultra 5 225H（14 核，powersave 无频率锁定），Release
+`-O3`；完整日志 /tmp/iva_m4_08/（矩阵）与 /tmp/wb_run1.txt、/tmp/wb_run2.txt
+（基准复验）。遗留观察项（不阻塞验收，移交后续处置）：① debug 预设本机构建
+缓存存在 `FETCHCONTENT_SOURCE_DIR_EXECUTOR=/home/linductor/executor` 源目录
+覆盖（其 HEAD 不等于 pin 4731b16，FetchContent 覆盖不校验 commit），debug
+预设链接的是该本地版本，asan/ubsan/tsan 为 pinned 正本——建议统一本机各
+预设缓存来源；② `build/iva-debug/` 陈旧目录残留缓存变量曾污染 tsan 配置
+一次，建议清理；③ master 预存的 `sleepPoll` 返回值未消费警告待独立小修复。
+M4 里程碑关闭后，下一工作项为 `M5-06`（假换真集成，依赖本里程碑，DEC-016）。
+
+2026-09-29：`M4-09` 完成关闭（工作项收尾）——完成判据最后一项随 `M4-07`
+合入（PR #20）满足：`M5-08` 假引擎（`rin::workflow_fake`，委托共享目录
+`src/workflow/default_catalog.hpp`）与 `M4-07` 真引擎（`rin_workflow`）均实现
+`include/rin/workflow_engine.hpp` 的 `IWorkflowEngine` 契约并共用
+`tests/workflow_engine_contract_suite.hpp` 契约套件（真引擎测试 431 项含契约
+套件 90 项，四预设全绿）；契约头文件与 `validateWorkflowGraph` 类型/校验单测
+（2026-09-24 记录的 204 项）持续回归。工作项勾选闭合，无代码变更。
 
 2026-09-29：`M4-07` 完成关闭——工作流真引擎落地（[DEC-013](../decisions/DEC-013-workflow-execution-model.md)
 随本工作项冻结 `Accepted`：帧泵采样 + 最新帧快照 + 有界在飞显式丢弃）。新增
