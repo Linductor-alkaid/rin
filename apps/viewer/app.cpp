@@ -96,6 +96,14 @@ struct ViewerContext {
     std::string resolutionOptionsForSerial;
     eui::Signal<int> resolutionIndex{0};
     eui::Signal<bool> resolutionOpen{false};
+    /// 分辨率档位标签（M7-01：与 resolutionOptions 同步重建的稳定副本——
+    /// 工作流源面板的分辨率下拉回调被 retained 节点持有、点击时才执行，
+    /// 捕获地址必须稳定，不得指向 compose 栈临时量）。
+    std::vector<std::string> resolutionLabels;
+    /// 相机分辨率入口绑定（M6-06 引入，M7-01 移入本上下文）：对象与 labels
+    /// 均稳定存续，onPick 捕获 &ctx（静态单例）；selectedIndex 每次 compose
+    /// 前从 resolutionIndex 刷新（仅 compose 期读取）。
+    viewer::CameraResolutionBinding cameraResolutionBinding;
     /// 深度配色（DEC-007）：0 = Jet，1 = Grayscale，2 = AdaptiveGrayscale；
     /// 不依赖设备目录，Waiting 可预设。
     eui::Signal<int> paletteIndex{0};
@@ -126,6 +134,7 @@ struct ViewerContext {
 
     bool started = false;
     bool shutdownDone = false;
+
 
 
     void applyResolutionChoice(int index);
@@ -178,6 +187,15 @@ void ensureStarted() {
         ctx.workflowCanvas.model.catalog = &ctx.workflow->catalog();
         ctx.workflowCanvas.afterGraphChange(ctx.workflow.get());
         refreshSourceRouter(ctx);
+        // 相机分辨率入口绑定（M7-01）：全部捕获稳定地址（labels 为本上下文
+        // 成员、onPick 捕获静态单例 &ctx、open 指向面板成员），一次性接线；
+        // selectedIndex 由 compose 每帧从 resolutionIndex 刷新。
+        ctx.cameraResolutionBinding.labels = &ctx.resolutionLabels;
+        ctx.cameraResolutionBinding.open = &ctx.workflowPanel.cameraResolutionOpen;
+        ctx.cameraResolutionBinding.onPick = [&ctx](int index) {
+            ctx.resolutionIndex.set(index);
+            ctx.applyResolutionChoice(index);
+        };
         // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
         const rin::StartOutcome outcome = ctx.service->start(kDefaultRequest);
         if (!outcome.admitted) {
@@ -256,6 +274,7 @@ void ViewerContext::rebuildDeviceOptions() {
 
 void ViewerContext::rebuildResolutionOptions() {
     resolutionOptions.clear();
+    resolutionLabels.clear();
     const rin::DeviceInfo* device = activeDevice(*this);
     if (device == nullptr) {
         resolutionOptionsForSerial.clear();
@@ -297,6 +316,7 @@ void ViewerContext::rebuildResolutionOptions() {
         // 姿态通道停止发布（IMU 面板/3D 视图停留在陈旧快照）。
         option.request.enableMotion = kDefaultRequest.enableMotion;
         option.label = std::to_string(color.width) + " x " + std::to_string(color.height);
+        resolutionLabels.push_back(option.label);
         resolutionOptions.push_back(std::move(option));
     }
 }
@@ -415,6 +435,7 @@ void ViewerContext::pump() {
                 workflowCanvas.graphPending = false;
                 app::requestUpdate();
             }
+
         }
         // 待生效标注随引擎离开 Running 一并清除（stop 排空待生效队列，画布图
         // 即待运行图；Failed 下待生效队列同样丢弃，契约 applyGraph 状态分支）。
@@ -963,26 +984,13 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     composePosePage(ui, ctx, ox, pageTop, contentWidth, pageHeight);
                     break;
                 case WorkbenchPage::Workflow: {
-                    // 相机分辨率入口绑定（M6-06，DEC-017）：与预览选择器共享
-                    // 同一档位列表（ctx.resolutionOptions，本帧已构建的标签）
-                    // 与选择状态（ctx.resolutionIndex），经 applyResolutionChoice
-                    // 走同一命令通道。标签向量仅 compose 期有效（面板按值引用
-                    // 内容渲染，不跨帧持有）。
-                    std::vector<std::string> resolutionLabels;
-                    resolutionLabels.reserve(ctx.resolutionOptions.size());
-                    for (const ResolutionUiOption& option : ctx.resolutionOptions) {
-                        resolutionLabels.push_back(option.label);
-                    }
-                    const viewer::CameraResolutionBinding cameraResolution{
-                        &resolutionLabels, ctx.resolutionIndex.get(),
-                        &ctx.workflowPanel.cameraResolutionOpen,
-                        [&ctx](int index) {
-                            ctx.resolutionIndex.set(index);
-                            ctx.applyResolutionChoice(index);
-                        }};
+                    // 相机分辨率入口绑定（M7-01 稳定化）：绑定对象与 labels 均
+                    // 为 ViewerContext 成员（retained 回调持有安全），仅
+                    // selectedIndex 每帧从共享信号刷新。
+                    ctx.cameraResolutionBinding.selectedIndex = ctx.resolutionIndex.get();
                     composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflowPanel,
-                                        ctx.workflow.get(), &cameraResolution, ox, pageTop,
-                                        contentWidth, pageHeight);
+                                        ctx.workflow.get(), &ctx.cameraResolutionBinding,
+                                        ox, pageTop, contentWidth, pageHeight);
                     break;
                 }
                 case WorkbenchPage::Settings:

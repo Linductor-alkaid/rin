@@ -42,7 +42,12 @@
 //   7. pumpNodeOutput 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源）：选中
 //      crop 节点（入边来自 source）Running 后 panel.outputs 同时含选中节点与
 //      驱动节点快照（尺寸可得）；引擎回 Idle 后整体排空（一次 true、幂等
-//      二次 false）。
+//      二次 false）；
+//   8. 工作台布局状态（M7-03/04）：WorkflowCanvasState 五区 docking 字段默认值
+//      见证（= M5-02 冻结骨架几何 200/264/120/148、dockDrag==-1、paletteScroll
+//      初值 0）与 compose 期 std::clamp 夹取边界常量语义（默认值在范围内恒等、
+//      越界拖拽收敛边界、范围内值不被修改）；分隔条 mouseArea 回调时序与视觉
+//      呈现 headless 不可测（归真机验收）。
 //
 // DOD-02 适用性说明（与 tests/test_shutdown_drain.cpp 同纪律，如实取舍）：
 // 正常完成——§3 全链路覆盖（发布→捕获→执行→发布→UI 消费）；任务异常——节点
@@ -86,6 +91,7 @@
 
 #include "engine.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -1265,16 +1271,25 @@ void testPumpNodeOutputDriverPull() {
 
     // Running 后 pump：panel.outputs 同时含选中节点（crop 16x12）与输入驱动
     // 节点（source 32x24）快照——驱动拉取即 ROI 联动约束的尺寸源。
+    // 谓词必须同时要求两节点快照到位：publishOutputs 按执行序先发布 source(1)
+    // 后发布 crop(2)，两次邮箱发布之间 UI 线程可插入 pump——只查 driver 的谓词
+    // 会在此窗口退出，紧随其后的 find(2) 断言偶发失败（CI ubuntu runner 实报；
+    // 生产行为正确：同一次 publishOutputs 两节点都发布，下一轮 pump 即齐）。
     WorkflowPanelState panel;
     std::uint64_t publishSeq = 0;
     RIN_CHECK_MSG(pollUntil([&] {
                       service->publish(makeFrame(++publishSeq, 32, 24));
                       (void)viewer::pumpNodeOutput(canvas, panel, *engine);
                       const rin::NodeOutputSnapshot* driver = panel.outputs.find(1);
+                      const rin::NodeOutputSnapshot* selected =
+                          panel.outputs.find(2);
                       return driver != nullptr && driver->valid() &&
-                             driver->width == 32 && driver->height == 24;
+                             driver->width == 32 && driver->height == 24 &&
+                             selected != nullptr && selected->valid() &&
+                             selected->width == 16 && selected->height == 12;
                   }),
-                  "pump: driver node output (input size source) is cached");
+                  "pump: driver (32x24) and selected (16x12) outputs are cached "
+                  "together");
     const rin::NodeOutputSnapshot* selected = panel.outputs.find(2);
     RIN_CHECK_MSG(selected != nullptr && selected->valid(),
                   "pump: selected node output cached alongside the driver");
@@ -1282,7 +1297,7 @@ void testPumpNodeOutputDriverPull() {
         RIN_CHECK_EQ(selected->width, 16u);
         RIN_CHECK_EQ(selected->height, 12u);
     }
-    RIN_CHECK(panel.outputs.size() >= 1);
+    RIN_CHECK(panel.outputs.size() >= 2);
 
     // 引擎回 Idle：pumpNodeOutput 整体排空（一次 true、幂等二次 false）。
     engine->stop();
@@ -1296,6 +1311,70 @@ void testPumpNodeOutputDriverPull() {
     RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
 }
 
+// --- 8. 工作台布局状态（M7-03/04）：WorkflowCanvasState docking 字段默认值
+//        见证 + compose 期夹取边界常量语义 ---
+//
+// 被测契约（apps/viewer/node_canvas.hpp WorkflowCanvasState + param_panel.hpp
+// composeWorkflowPage/composeWorkflowContext 的 std::clamp 夹取）：
+//   - 五区 docking 布局字段默认值 = M5-02 冻结骨架几何（调色板 200 / 上下文
+//     264 / 底部 120 / Context 输出块 148），无活动拖拽（dockDrag == -1）、
+//     拖拽起始状态归零；M7-03 调色板滚动偏移信号默认 0（scrollView bind 初值）；
+//   - 夹取边界常量语义：分隔条 onDrag 把未夹取值写入状态字段，compose 期以
+//     [150,400]/[220,460]/[72,300]/[96,340] 夹取。headless 以与 compose 同式的
+//     std::clamp 见证三点不变量：默认值在范围内（夹取恒等——出厂几何即骨架）、
+//     越界拖拽写入收敛到边界、范围内任意拖拽值不被修改。
+// 分隔条/输出块分隔条的 mouseArea 回调时序（onDragStart/onDrag/onDragEnd）与
+// 视觉呈现需活动 EUI 运行时，headless 不可测——归真机验收（M7-05 冒烟）。
+
+void testWorkflowCanvasLayoutState() {
+    viewer::WorkflowCanvasState canvas;
+
+    // 默认值见证（DEC-014"画布布局为 UI 私有状态"：值语义构造，无隐式全局）。
+    RIN_CHECK_MSG(canvas.paletteWidth == 200.0f && canvas.contextWidth == 264.0f &&
+                      canvas.bottomHeight == 120.0f &&
+                      canvas.outputBlockHeight == 148.0f,
+                  "layout: defaults match the frozen M5-02 five-zone skeleton");
+    RIN_CHECK_MSG(canvas.dockDrag == -1 && canvas.dockDragStartPointer == 0.0f &&
+                      canvas.dockDragStartValue == 0.0f,
+                  "layout: no active dock drag after construction");
+    RIN_CHECK_MSG(canvas.paletteScroll.get() == 0.0f,
+                  "layout: palette scroll offset starts at 0 (scrollView bind)");
+
+    // compose 期夹取（param_panel.hpp composeWorkflowPage:1092-1094 与
+    // composeWorkflowContext:447 的 std::clamp 同式）：拖拽写入 → 夹取读取。
+    struct DockField {
+        float value;
+        float lo;
+        float hi;
+        const char* name;
+    };
+    const DockField fields[] = {
+        {canvas.paletteWidth, 150.0f, 400.0f, "paletteWidth"},
+        {canvas.contextWidth, 220.0f, 460.0f, "contextWidth"},
+        {canvas.bottomHeight, 72.0f, 300.0f, "bottomHeight"},
+        {canvas.outputBlockHeight, 96.0f, 340.0f, "outputBlockHeight"},
+    };
+    for (const DockField& field : fields) {
+        RIN_CHECK_MSG(field.lo < field.value && field.value < field.hi,
+                      (std::string("layout: default ") + field.name +
+                       " sits inside its clamp range")
+                          .c_str());
+        // 范围内合成拖拽值不被夹取修改（合法性边界内的自由调节）。
+        const float mid = field.lo + (field.hi - field.lo) * 0.5f;
+        RIN_CHECK_MSG(std::clamp(field.value, field.lo, field.hi) == field.value &&
+                          std::clamp(mid, field.lo, field.hi) == mid,
+                      (std::string("layout: in-range values pass the ") + field.name +
+                       " clamp unchanged")
+                          .c_str());
+        // 越界拖拽写入收敛到闭区间边界（两端点可达）。
+        RIN_CHECK_MSG(std::clamp(field.lo - 50.0f, field.lo, field.hi) == field.lo &&
+                          std::clamp(field.hi + 50.0f, field.lo, field.hi) == field.hi,
+                      (std::string("layout: out-of-range drags clamp to the ") +
+                       field.name + " bounds")
+                          .c_str());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1306,5 +1385,6 @@ int main() {
     runSection("camera_source_rendition_routing", testCameraSourceRenditionRouting);
     runSection("gray_chain_end_to_end", testGrayChainEndToEnd);
     runSection("pump_node_output_driver_pull", testPumpNodeOutputDriverPull);
+    runSection("workflow_canvas_layout_state", testWorkflowCanvasLayoutState);
     return rin_test::exitStatus();
 }

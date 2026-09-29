@@ -70,6 +70,21 @@ struct WorkflowCanvasState {
     CanvasPoint menuPos{0.0f, 0.0f};
     eui::Signal<std::string> menuFilter;
     eui::Signal<std::string> paletteFilter;
+    /// 调色板滚动偏移（M7-03，scrollView bind；目录/过滤变化由 contentKey
+    /// 重测量，滚动位置随信号保持）。
+    eui::Signal<float> paletteScroll{0.0f};
+
+    /// 五区 docking 布局（M7-04，UI 私有会话状态，DEC-014"画布布局为 UI 私有
+    /// 状态"延伸）：分隔条拖拽可调，compose 期夹取范围；会话级，不持久化。
+    float paletteWidth = 200.0f;      /// 调色板宽 [150, 400]
+    float contextWidth = 264.0f;      /// 右上下文面板宽 [220, 460]
+    float bottomHeight = 120.0f;      /// 底部校验/事件区高 [72, 300]
+    float outputBlockHeight = 148.0f; /// Context 输出块高 [96, 340]
+    /// 活动分隔条（-1 无；0 = palette 右缘、1 = context 左缘、2 = 底部上缘、
+    /// 3 = Context 输出块上缘）与拖拽起始（指针坐标 + 布局起始值）。
+    int dockDrag = -1;
+    float dockDragStartPointer = 0.0f;
+    float dockDragStartValue = 0.0f;
 
     /// 最近一次操作反馈（§5.4 拒绝原因显式反馈，不静默失败）。
     std::string feedback;
@@ -381,20 +396,18 @@ inline void composeWorkflowToolbar(eui::Ui& ui, WorkflowCanvasState& state,
         .build();
 }
 
-// --- 调色板（§5.2：目录分组 + 即输即筛 + 拖出创建） ---
+// --- 调色板（§5.2：目录分组 + 即输即筛 + 拖出创建；M7-03 起条目区为
+// components::scrollView 滚动容器——pinned 组件，小窗口/目录扩展时条目可滚动） ---
 inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
-                                   rin::IWorkflowEngine* engine, const float x, const float y,
-                                   const float width, const float height) {
+                                   rin::IWorkflowEngine* engine, const float x,
+                                   const float y, const float width, const float height) {
     const theme::ThemeTokens& tokens = theme::dark();
     const float pad = kSpace3;
     const float inputHeight = 28.0f;
-    const float groupTitleHeight = kFontXs + kSpace2;
-    const float itemHeight = 26.0f;
 
     ui.stack("workflow.palette")
         .position(x, y)
         .size(width, height)
-        .clip()
         .content([&] {
             ui.rect("workflow.palette.card")
                 .size(width, height)
@@ -440,73 +453,112 @@ inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
             const rin::NodeCatalog& paletteCatalog =
                 state.model.catalog != nullptr ? *state.model.catalog
                                                : kEmptyPaletteCatalog;
-            const std::vector<PaletteGroup> groups =
-                paletteGroups(paletteCatalog, state.paletteFilter.get());
-            float rowY = pad + kFontSm + kSpace2 + inputHeight + kSpace2;
-            for (const PaletteGroup& group : groups) {
-                ui.text("workflow.palette.group." + group.title)
-                    .position(pad, rowY)
-                    .size(width - pad * 2.0f, groupTitleHeight)
-                    .text(group.title)
-                    .fontSize(kFontXs)
-                    .color(tokens.fgSubtlest)
-                    .verticalAlign(eui::VerticalAlign::Center)
-                    .build();
-                rowY += groupTitleHeight;
-                for (const rin::NodeDescriptor* descriptor : group.items) {
-                    const std::string base =
-                        std::string("workflow.palette.item.") + descriptor->typeId;
-                    const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
-                    ui.rect(base + ".row")
-                        .position(pad, rowY)
-                        .size(width - pad * 2.0f, itemHeight)
-                        .radius(kRadiusSm)
-                        .color(transparent)
-                        .states(transparent, tokens.menuHover, tokens.menuHover)
-                        .build();
-                    ui.text(base + ".label")
-                        .position(pad + kSpace2, rowY)
-                        .size(width - pad * 2.0f - kSpace2, itemHeight)
-                        .text(descriptor->displayName)
-                        .fontSize(kFontCaption)
-                        .color(tokens.fg)
-                        .verticalAlign(eui::VerticalAlign::Center)
-                        .build();
-                    // 拖出创建（§5.2.1）：拖拽越过阈值才进入拖拽态（浮层跟随
-                    // 光标），落在画布内创建、画布外取消；原位单击不触发。
-                    components::mouseArea(ui, base + ".drag")
-                        .position(pad, rowY)
-                        .size(width - pad * 2.0f, itemHeight)
-                        .cursor(eui::CursorShape::Hand)
-                        .onDragStart([&state, descriptor](
-                                         const components::MouseEvent& event) {
-                            state.paletteDragging = true;
-                            state.paletteDragType = descriptor->typeId;
-                            state.paletteDragPos = {event.globalX, event.globalY};
-                        })
-                        .onDrag([&state](const components::MouseDragEvent& event) {
-                            state.paletteDragPos = {event.globalX, event.globalY};
-                        })
-                        .onDragEnd([&state, engine](const components::MouseDragEvent& event) {
-                            state.paletteDragging = false;
-                            if (!state.areaRect.contains({event.globalX, event.globalY})) {
-                                return;  // §5.2.1 落点在画布外 = 取消。
-                            }
-                            const CanvasPoint canvas =
-                                state.globalToCanvas({event.globalX, event.globalY});
-                            const CanvasPoint origin{
-                                canvas.x - kNodeWidth * 0.5f,
-                                canvas.y - kNodeHeaderHeight * 0.5f};
-                            const CanvasOpResult result = state.model.createNode(
-                                state.paletteDragType, origin);
-                            state.feedback = result.ok ? "" : result.error;
-                            state.afterGraphChange(engine);
-                        })
-                        .build();
-                    rowY += itemHeight;
-                }
-                rowY += kSpace1;
-            }
+            const std::string filter = state.paletteFilter.get();
+
+            // 滚动条目区（M7-03）：scrollView 内容为列布局流式行（组标题 +
+            // 条目行，行内绝对定位）；contentKey=过滤词驱动重测量。滚动偏移
+            // 绑定会话信号，切页保持。内容 compose 会被测量趟额外调用（丢弃
+            // 式 UI）——内容仅绘制与登记回调，无状态副作用；条目回调捕获
+            // &state/descriptor（目录指针稳定）。滚动条样式字段逐一取 viewer
+            // 令牌（DEC-005 组件接线纪律）。
+            const float groupTitleHeight = kFontXs + kSpace2;
+            const float itemHeight = 26.0f;
+            components::ScrollStyle scrollStyle;
+            scrollStyle.track = tokens.surface;
+            scrollStyle.thumb = tokens.inputBorder;
+            scrollStyle.thumbHover = tokens.fgSubtlest;
+            scrollStyle.thumbPressed = tokens.brand;
+            scrollStyle.radius = kRadiusSm;
+            components::scrollView(ui, "workflow.palette.scroll")
+                .position(pad, pad + kFontSm + kSpace2 + inputHeight + kSpace2)
+                .size(width - pad * 2.0f,
+                      height - (pad + kFontSm + kSpace2 + inputHeight + kSpace2) - pad)
+                .bind(state.paletteScroll)
+                .contentKey(filter)
+                .gap(kSpace1)
+                .style(scrollStyle)
+                .content([&state, engine, &paletteCatalog, &filter, &tokens,
+                          itemHeight, groupTitleHeight](eui::Ui& listUi,
+                                                        float contentWidth, float) {
+                    const std::vector<PaletteGroup> groups =
+                        paletteGroups(paletteCatalog, filter);
+                    for (const PaletteGroup& group : groups) {
+                        listUi.text("workflow.palette.group." + group.title)
+                            .size(contentWidth, groupTitleHeight)
+                            .text(group.title)
+                            .fontSize(kFontXs)
+                            .color(tokens.fgSubtlest)
+                            .verticalAlign(eui::VerticalAlign::Center)
+                            .build();
+                        for (const rin::NodeDescriptor* descriptor : group.items) {
+                            const std::string base =
+                                std::string("workflow.palette.item.") + descriptor->typeId;
+                            const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                            listUi.stack(base + ".row")
+                                .size(contentWidth, itemHeight)
+                                .content([&] {
+                                    listUi.rect(base + ".rowBg")
+                                        .size(contentWidth, itemHeight)
+                                        .radius(kRadiusSm)
+                                        .color(transparent)
+                                        .states(transparent, tokens.menuHover,
+                                                tokens.menuHover)
+                                        .build();
+                                    listUi.text(base + ".label")
+                                        .position(kSpace2, 0.0f)
+                                        .size(contentWidth - kSpace2, itemHeight)
+                                        .text(descriptor->displayName)
+                                        .fontSize(kFontCaption)
+                                        .color(tokens.fg)
+                                        .verticalAlign(eui::VerticalAlign::Center)
+                                        .build();
+                                    // 拖出创建（§5.2.1）：拖拽越过阈值才进入拖拽
+                                    // 态（浮层跟随光标），落在画布内创建、画布外
+                                    // 取消；原位单击不触发。
+                                    components::mouseArea(listUi, base + ".drag")
+                                        .size(contentWidth, itemHeight)
+                                        .cursor(eui::CursorShape::Hand)
+                                        .onDragStart(
+                                            [&state, descriptor](
+                                                const components::MouseEvent& event) {
+                                                state.paletteDragging = true;
+                                                state.paletteDragType = descriptor->typeId;
+                                                state.paletteDragPos = {event.globalX,
+                                                                        event.globalY};
+                                            })
+                                        .onDrag([&state](
+                                                    const components::MouseDragEvent&
+                                                        event) {
+                                            state.paletteDragPos = {event.globalX,
+                                                                    event.globalY};
+                                        })
+                                        .onDragEnd([&state, engine](
+                                                       const components::MouseDragEvent&
+                                                           event) {
+                                            state.paletteDragging = false;
+                                            if (!state.areaRect.contains(
+                                                    {event.globalX, event.globalY})) {
+                                                return;  // §5.2.1 落点在画布外 = 取消。
+                                            }
+                                            const CanvasPoint canvas =
+                                                state.globalToCanvas(
+                                                    {event.globalX, event.globalY});
+                                            const CanvasPoint origin{
+                                                canvas.x - kNodeWidth * 0.5f,
+                                                canvas.y - kNodeHeaderHeight * 0.5f};
+                                            const CanvasOpResult result =
+                                                state.model.createNode(state.paletteDragType,
+                                                                       origin);
+                                            state.feedback = result.ok ? "" : result.error;
+                                            state.afterGraphChange(engine);
+                                        })
+                                        .build();
+                                })
+                                .build();
+                        }
+                    }
+                })
+                .build();
         })
         .build();
 }

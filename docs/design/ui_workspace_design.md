@@ -242,6 +242,13 @@ UI 状态（DEC-014 决策 5：不入契约）。缩放=滚轮（以指针为锚
 > 下拉：与预览页选择器共享同一档位列表/选择状态/`requestResolution` 命令
 > （全局 restream，提示文案明示"global - rebuilds the camera stream"）。
 
+> M7 实施补记（2026-09-29）：调色板条目区改为 pinned `components::scrollView`
+> 滚动容器（小窗口/目录扩展时条目可滚动，过滤词作 contentKey 驱动重测量，
+> 滚动偏移绑定会话信号切页保持；样式字段取 viewer 令牌）。五区 docking 改为
+> 可调大小：palette 宽 / context 宽 / 底部高 / Context 输出块高四处分隔条
+> （mouseArea 拖拽，范围夹取），布局值存放于 WorkflowCanvasState（UI 私有
+> 会话状态，DEC-014 延伸，不持久化）。
+
 ### 5.8 运行控制
 
 - 工具栏：启动（需当前图预检通过，否则禁用并提示问题数）/停止；无暂停

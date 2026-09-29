@@ -40,6 +40,13 @@
 //   新图不产出、恢复供帧后正常执行。GraphApplied 相对输入可用的时序与旧图
 //   是否继续运行为观察项（printf，不作断言）——DEC-013 §1.3 字面为"推迟换代
 //   （图保持待生效，不发布事件）"，实现为立即换代 + 覆盖检查推迟提交（见报告）。
+// - M7-02 跨代水位回归（2026-09-29 真机 Bug B，产物邮箱跨代共享化）：17）
+//   Running 图替换后同 id 节点以既有"上次已见序号"水位继续可拉新尺寸快照且
+//   邮箱序号跨代严格递增（判别判据：大水位 + 窄判别窗口——旧实现每代新建
+//   邮箱、序号从 1 重计，窗口内无法越过大水位，永久拉不到）；18）参数热更新
+//   换代（无 GraphApplied 事件路径）同样成立；19）过代帧不回写共享邮箱
+//   （maxInFlight=1 + 门控挂起算子确定性构造"交付 → 挂起执行期间换代 → 释放"
+//   时序：释放后挂起旧代帧完成且统计照记，但共享邮箱保持冻结）。
 //
 // 契约面（引擎无关）由 tests/workflow_engine_contract_suite.hpp 共用套件覆盖
 // （本文件先以真引擎 fixture 运行它）；DOD-02 适用性说明见套件文件头。所有等待
@@ -227,6 +234,79 @@ public:
 private:
     std::unique_ptr<IImageNode> inner_;
     std::chrono::milliseconds delay_;
+};
+
+/// 任意尺寸确定性 Rgba8 帧（每次调用独立常量缓冲；M7-02 跨代尺寸回归用，
+/// 断言只依赖尺寸/格式，不依赖像素值）。
+ImageU8 sizedFrame(std::uint32_t width, std::uint32_t height) {
+    auto buffer = std::make_shared<const std::vector<std::uint8_t>>(
+        static_cast<std::size_t>(width) * height * 4, std::uint8_t{128});
+    return ImageU8::wrap(rin::PortType::Rgba8, width, height, width * 4,
+                         std::move(buffer));
+}
+
+/// 可控帧源：supply 置 false 后按"无新帧"处理（与 GatedSource 相同，但帧尺寸
+/// 可指定——M7-02 跨代尺寸回归用）。
+struct SizedGatedSource {
+    std::shared_ptr<std::atomic<bool>> supply{
+        std::make_shared<std::atomic<bool>>(true)};
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    rin::WorkflowFrameSource fn;
+
+    SizedGatedSource(std::uint32_t frameWidth, std::uint32_t frameHeight)
+        : width(frameWidth), height(frameHeight) {
+        fn = [supply = supply, w = width, h = height](
+                 NodeId, std::uint64_t& lastSeen, WorkflowFrameInput& out) {
+            if (!supply->load(std::memory_order_relaxed)) {
+                return false;
+            }
+            out.sourceSequence = lastSeen + 1;
+            out.image = sizedFrame(w, h);
+            lastSeen = out.sourceSequence;
+            return true;
+        };
+    }
+};
+
+/// 一次性武装的门控挂起算子：apply 入口计数（entered，测试线程可观察）；
+/// 被武装（arm 一次性消费）的下一次 apply 在入口挂起，直至 release 置位
+/// （有界 10s 防悬挂）。M7-02 过代帧回归用：测试线程以 entered 前进而完成数
+/// 停滞定位"已提交且挂起中"的帧，从而确定性地构造"帧源交付 → 慢算子执行
+/// 期间换代 → 释放"时序，无须依赖统计邮箱（发布按提交序有序化，挂起帧会
+/// 冻结全部后续发布，统计邮箱不可用）。
+class GatedHoldNode final : public IImageNode {
+public:
+    GatedHoldNode(std::unique_ptr<IImageNode> inner,
+                  std::shared_ptr<std::atomic<std::uint64_t>> entered,
+                  std::shared_ptr<std::atomic<bool>> arm,
+                  std::shared_ptr<std::atomic<bool>> release)
+        : inner_(std::move(inner)), entered_(std::move(entered)),
+          arm_(std::move(arm)), release_(std::move(release)) {}
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return inner_->descriptor();
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(
+        const std::vector<ImageU8>& inputs) const override {
+        entered_->fetch_add(1, std::memory_order_relaxed);
+        if (arm_->exchange(false, std::memory_order_acq_rel)) {
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds{10};
+            while (!release_->load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::microseconds{200});
+            }
+        }
+        return inner_->apply(inputs);
+    }
+
+private:
+    std::unique_ptr<IImageNode> inner_;
+    std::shared_ptr<std::atomic<std::uint64_t>> entered_;
+    std::shared_ptr<std::atomic<bool>> arm_;
+    std::shared_ptr<std::atomic<bool>> release_;
 };
 
 /// 契约套件 fixture：标准引擎 + 跨代/跨会话计数故障注入（消费节点 crop）。
@@ -887,22 +967,32 @@ int main() {
         RIN_CHECK(engine->state() == WorkflowEngineState::Idle);
 
         // 会话 2：processedFrames 复位从小值重新增长；统计通道序号不回退。
+        // 观测窗内取最小值见证复位（对调度鲁棒）：tsan 高负载下测试线程可能
+        // 被延迟数百 ms，"首个快照"已越过会话 1 累计值（IVA 实测 ~1/13 次）；
+        // 复位语义下窗口内必然观测到 < 会话 1 总量的小值，若复位缺失则全部
+        // 观测值 ≥ 会话 1 总量、最小值同样判失败——语义等价且无调度盲区。
         RIN_CHECK(engine->start().admitted);
-        std::uint64_t firstProcessedSession2 = 0;
-        bool haveFirstSession2 = false;
+        std::uint64_t minProcessedSession2 = 0;
+        bool haveSession2Sample = false;
         {
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::milliseconds{2000};
             while (std::chrono::steady_clock::now() < deadline) {
                 if (engine->tryLoadStats(statsSeen, stats)) {
-                    firstProcessedSession2 = stats.processedFrames;
-                    haveFirstSession2 = true;
-                    break;
+                    if (!haveSession2Sample ||
+                        stats.processedFrames < minProcessedSession2) {
+                        minProcessedSession2 = stats.processedFrames;
+                    }
+                    haveSession2Sample = true;
+                    if (minProcessedSession2 < processedSession1) {
+                        break;  // 复位见证已达成，提前收窗。
+                    }
                 }
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
         }
-        RIN_CHECK(haveFirstSession2);
-        RIN_CHECK_MSG(firstProcessedSession2 < processedSession1,
+        RIN_CHECK(haveSession2Sample);
+        RIN_CHECK_MSG(minProcessedSession2 < processedSession1,
                       "session-2 processedFrames must restart below session-1 total");
         RIN_CHECK_MSG(stats.sequence > sequenceSession1,
                       "stats channel sequence must not regress across sessions");
@@ -1109,6 +1199,374 @@ int main() {
                    probe.processedFrames > processedAtClose;
         }));
 
+        engine->stop();
+        engine.reset();
+        RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
+    }
+
+    // ---- 17) M7-02 跨代水位回归（图替换）：同 id 节点产物邮箱跨代共享 ----
+    // 真机缺陷（M7 Bug B）：M4-07 产物邮箱为代内设施（每代逐节点新建、内部序
+    // 号从 1 重计），UI 的"上次已见序号"水位跨代比较无意义——运行中改图后新代
+    // 快照全部被旧水位过滤，面板永久显示旧代陈旧产物。修复后同 id 节点跨代共
+    // 享同一邮箱（发布序号连续），以既有水位继续拉取必须立刻得到新代产物。
+    // 判别判据：先积累水位 ≥ kWm（远大于判别窗口内新建邮箱可追平的帧数），
+    // 再换代并在 kSwitchWindow 内以既有水位拉取——旧实现需 ≥kWm 帧才能以更高
+    // 序号越过水位（kWm×泵周期 >> kSwitchWindow），窗口内拉不到 → 回归失败；
+    // 新实现共享邮箱 → 首个新代帧即命中。
+    {
+        executor::Executor executor;
+        executor::ExecutorConfig executorConfig;
+        RIN_CHECK(executor.initialize(executorConfig));
+        SizedGatedSource source(64, 48);  // grayify 保持输入尺寸：图 A 输出 64x48。
+        WorkflowEngineConfig config = baseConfig();
+        config.frameSource = source.fn;
+        std::shared_ptr<IWorkflowEngine> engine =
+            rin::createWorkflowEngine(executor, std::move(config));
+
+        // 图 A：source(1) → grayify(2)。
+        RIN_CHECK(engine->applyGraph(makeChain("grayify")).ok);
+        RIN_CHECK(engine->start().admitted);
+
+        // 积累节点 2 的消费水位（有界 30s：2ms 泵 × 300 帧 ≈ 1s，余量吸收
+        // sanitizer 下的调度放大）。
+        constexpr std::uint64_t kWm = 300;
+        std::uint64_t seen = 0;
+        NodeOutputSnapshot out;
+        RIN_CHECK_MSG(rin_test::pollUntil(
+                          [&] {
+                              return engine->state() == WorkflowEngineState::Running &&
+                                     engine->tryLoadNodeOutput(2, seen, out) &&
+                                     out.valid() && out.width == 64 &&
+                                     out.height == 48 && seen >= kWm;
+                          },
+                          std::chrono::milliseconds{30000}),
+                      "cross-gen: node 2 watermark accumulates while Running "
+                      "(generation A, 64x48 gray)");
+
+        // 运行中 applyGraph 图 B：source(1) → downscale(3) → grayify(2)
+        // （grayify 同 id；downscale 默认 scale=0.5 → 输入减半，grayify 输出
+        // 32x24 Gray8）。
+        WorkflowGraph graphB;
+        {
+            rin::NodeInstance src;
+            src.id = 1;
+            src.typeId = "source";
+            rin::NodeInstance down;
+            down.id = 3;
+            down.typeId = "downscale";
+            rin::NodeInstance gray;
+            gray.id = 2;
+            gray.typeId = "grayify";
+            graphB.nodes = {src, down, gray};
+            graphB.connections = {
+                rin::Connection{rin::PortRef{1, rin::PortDirection::Output, 0},
+                                rin::PortRef{3, rin::PortDirection::Input, 0}},
+                rin::Connection{rin::PortRef{3, rin::PortDirection::Output, 0},
+                                rin::PortRef{2, rin::PortDirection::Input, 0}},
+            };
+        }
+        RIN_CHECK(engine->applyGraph(graphB).ok);
+        WorkflowEvent event;
+        RIN_CHECK_MSG(rin_test::pollUntil([&] {
+                          return engine->tryLoadEvent(event) &&
+                                 event.kind == WorkflowEventKind::GraphApplied;
+                      }),
+                      "cross-gen: graph B applies at a frame boundary");
+
+        // 核心判据：以既有水位继续拉节点 2，判别窗口内拉到新尺寸快照。窗口内
+        // 的中间加载允许命中换代前最后发布的旧尺寸帧（水位积累退出后、换代前
+        // 在飞/已发布的 gen-A 帧合法存在于邮箱中，发布序领先水位），判据是窗口
+        // 内出现新尺寸快照——旧实现（换代新建邮箱、序号从 1 重计）在新尺寸出现
+        // 前必须先以 ≥kWm 帧越过大水位（kWm×泵周期 >> kSwitchWindow），窗口内
+        // 拉不到 → 回归失败；新实现共享邮箱 → 首个新代帧即命中。
+        const std::uint64_t watermarkAtSwitch = seen;
+        constexpr auto kSwitchWindow = std::chrono::milliseconds{300};
+        NodeOutputSnapshot out2;
+        bool resized = false;
+        {
+            const auto deadline = std::chrono::steady_clock::now() + kSwitchWindow;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (engine->tryLoadNodeOutput(2, seen, out2) && out2.valid() &&
+                    out2.width == 32 && out2.height == 24) {
+                    resized = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+        }
+        RIN_CHECK_MSG(resized,
+                      "cross-gen: existing watermark must keep working across the "
+                      "generation switch (stale-thumbnail regression: a per-"
+                      "generation mailbox restarting at 1 cannot overtake the "
+                      "watermark within the bounded window)");
+        if (resized) {
+            RIN_CHECK_EQ(out2.width, 32u);
+            RIN_CHECK_EQ(out2.height, 24u);
+            RIN_CHECK(out2.format == rin::PortType::Gray8);
+            RIN_CHECK_MSG(seen > watermarkAtSwitch,
+                          "cross-gen: mailbox publish sequence must strictly "
+                          "increase across the generation switch");
+        }
+
+        // 序号跨代单调（修复强化的语义）：继续采样，后续每幅新快照序号严格递增。
+        {
+            bool strictlyIncreasing = true;
+            std::uint64_t previous = seen;
+            int loads = 0;
+            rin_test::pollUntil(
+                [&] {
+                    NodeOutputSnapshot next;
+                    if (engine->tryLoadNodeOutput(2, seen, next) && next.valid()) {
+                        if (seen <= previous) {
+                            strictlyIncreasing = false;
+                        }
+                        previous = seen;
+                        ++loads;
+                    }
+                    return loads >= 5 || !strictlyIncreasing;
+                },
+                std::chrono::milliseconds{5000});
+            RIN_CHECK_MSG(loads >= 5,
+                          "cross-gen: node 2 keeps publishing in generation B");
+            RIN_CHECK_MSG(strictlyIncreasing,
+                          "cross-gen: node 2 sequence stays strictly increasing "
+                          "after the switch");
+        }
+
+        // 新节点 downscale(3) 从水位 0 可拉（新节点取全新邮箱）。
+        {
+            std::uint64_t seen3 = 0;
+            NodeOutputSnapshot out3;
+            RIN_CHECK_MSG(rin_test::pollUntil([&] {
+                              return engine->tryLoadNodeOutput(3, seen3, out3) &&
+                                     out3.valid() && out3.width == 32 &&
+                                     out3.height == 24;
+                          }),
+                          "cross-gen: new node 3 is pullable from a zero watermark");
+            RIN_CHECK(out3.format == rin::PortType::Rgba8);
+        }
+
+        RIN_CHECK_MSG(engine->state() == WorkflowEngineState::Running,
+                      "cross-gen: engine stays Running across the graph switch");
+        engine->stop();
+        engine.reset();
+        RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
+    }
+
+    // ---- 18) M7-02 参数热更新跨代回归：参数换代（不走 GraphApplied 事件）----
+    // 参数命令在帧边界应用并重建一代（drainBoundary 参数路径），与图替换同一
+    // "换代"机制但不发布 GraphApplied——本回归确保该路径的邮箱共享同样成立：
+    // 同 id 节点以既有水位可拉到参数生效后的新尺寸快照。判别判据同 17）。
+    {
+        executor::Executor executor;
+        executor::ExecutorConfig executorConfig;
+        RIN_CHECK(executor.initialize(executorConfig));
+        SizedGatedSource source(128, 96);
+        WorkflowEngineConfig config = baseConfig();
+        config.frameSource = source.fn;
+        std::shared_ptr<IWorkflowEngine> engine =
+            rin::createWorkflowEngine(executor, std::move(config));
+
+        // source(1) → downscale(2)：默认 scale=0.5 → 输出 64x48。
+        RIN_CHECK(engine->applyGraph(makeChain("downscale")).ok);
+        RIN_CHECK(engine->start().admitted);
+
+        constexpr std::uint64_t kWm = 300;
+        std::uint64_t seen = 0;
+        NodeOutputSnapshot out;
+        RIN_CHECK_MSG(rin_test::pollUntil(
+                          [&] {
+                              return engine->state() == WorkflowEngineState::Running &&
+                                     engine->tryLoadNodeOutput(2, seen, out) &&
+                                     out.valid() && out.width == 64 &&
+                                     out.height == 48 && seen >= kWm;
+                          },
+                          std::chrono::milliseconds{30000}),
+                      "param-gen: node 2 watermark accumulates at 64x48");
+
+        std::string error;
+        RIN_CHECK_MSG(
+            engine->requestParamUpdate(2, "scale", ParamValue{1.0}, &error),
+            "param-gen: scale hot update accepted while running");
+        RIN_CHECK(error.empty());
+
+        // 参数换代无 GraphApplied 事件：以判别窗口轮询既有水位。注意窗口内的
+        // 中间加载允许命中更新命令前提交的在飞旧尺寸帧（"下一帧生效"语义），
+        // 判据是窗口内出现新尺寸快照——旧实现（参数换代新建邮箱、序号从 1 重
+        // 计）在新尺寸出现前必须先以 ≥kWm 帧越过大水位，窗口内不可达。
+        const std::uint64_t watermarkAtUpdate = seen;
+        constexpr auto kSwitchWindow = std::chrono::milliseconds{300};
+        NodeOutputSnapshot out2;
+        bool resized = false;
+        {
+            const auto deadline = std::chrono::steady_clock::now() + kSwitchWindow;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (engine->tryLoadNodeOutput(2, seen, out2) && out2.valid() &&
+                    out2.width == 128 && out2.height == 96) {
+                    resized = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+        }
+        RIN_CHECK_MSG(resized,
+                      "param-gen: existing watermark must keep working across the "
+                      "param rebuild (64x48 -> 128x96 at the next frame boundary)");
+        if (resized) {
+            RIN_CHECK_EQ(out2.width, 128u);
+            RIN_CHECK_EQ(out2.height, 96u);
+            RIN_CHECK_MSG(seen > watermarkAtUpdate,
+                          "param-gen: mailbox sequence strictly increases across "
+                          "the param rebuild");
+        }
+
+        RIN_CHECK_MSG(engine->state() == WorkflowEngineState::Running,
+                      "param-gen: engine stays Running across the param rebuild");
+        engine->stop();
+        engine.reset();
+        RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
+    }
+
+    // ---- 19) M7-02 过代帧不回写共享邮箱：换代前提交的旧代帧发布被跳过 ----
+    // 邮箱跨代共享后，换代前提交的在飞旧代帧若照常发布，会以更高邮箱序号把
+    // 旧图产物写回共享邮箱（"迟到的旧代发布不进新代"语义在共享邮箱下的保障，
+    // publishOutputs 对非生效代跳过、统计照记）。确定性构造：maxInFlight=1 +
+    // 门控挂起算子挂起一帧（帧源在图 B 应用前交付、挂起执行期间应用图 B），
+    // 停源后释放挂起帧——此后不存在任何新代帧，共享邮箱必须保持冻结（静默窗
+    // 内无新快照）。判别判据：若跳过语义缺失，挂起帧完成时会以更高的邮箱序号
+    // 发布旧图产物，静默窗检查读到新快照而失败。（注：本判据只在邮箱共享前提
+    // 下判别"跳过缺失"；共享语义本身由 17）/18）锁定。）
+    {
+        executor::Executor executor;
+        executor::ExecutorConfig executorConfig;
+        RIN_CHECK(executor.initialize(executorConfig));
+        SizedGatedSource source(128, 96);
+        auto entered = std::make_shared<std::atomic<std::uint64_t>>(0);
+        auto arm = std::make_shared<std::atomic<bool>>(false);
+        auto release = std::make_shared<std::atomic<bool>>(false);
+        WorkflowEngineConfig config = baseConfig();
+        config.maxInFlight = 1;
+        config.frameSource = source.fn;
+        config.nodeFactory = [entered, arm, release](
+                                 const NodeDescriptor& descriptor,
+                                 const rin::NodeInstance& instance)
+            -> std::unique_ptr<IImageNode> {
+            if (instance.typeId == "source") {
+                return nullptr;  // 注入型源节点语义。
+            }
+            std::unique_ptr<IImageNode> inner =
+                rin::makeDefaultImageNode(descriptor, instance);
+            if (instance.typeId == "grayify") {
+                inner = std::make_unique<GatedHoldNode>(std::move(inner), entered,
+                                                        arm, release);
+            }
+            return inner;
+        };
+        std::shared_ptr<IWorkflowEngine> engine =
+            rin::createWorkflowEngine(executor, std::move(config));
+
+        // 图 A：source(1) → grayify(2)（输出 128x96）。帧流动若干幅。
+        RIN_CHECK(engine->applyGraph(makeChain("grayify")).ok);
+        RIN_CHECK(engine->start().admitted);
+        std::uint64_t statsSeen = 0;
+        WorkflowStats stats;
+        RIN_CHECK_MSG(rin_test::pollUntil(
+                          [&] {
+                              return engine->tryLoadStats(statsSeen, stats) &&
+                                     stats.processedFrames >= 40;
+                          },
+                          std::chrono::milliseconds{30000}),
+                      "stale-frame: generation A flows before the hold");
+
+        // 武装挂起：下一次 grayify apply（即下一帧）在入口挂起。apply 计数前进
+        // 而完成数停滞 = "已提交且挂起中"的确定性证据（发布按提交序有序化，
+        // 挂起帧冻结全部后续发布，故以节点入口计数定位）。
+        arm->store(true, std::memory_order_release);
+        const std::uint64_t appliedAtArm = entered->load(std::memory_order_relaxed);
+        RIN_CHECK_MSG(rin_test::pollUntil(
+                          [&] {
+                              return entered->load(std::memory_order_relaxed) >
+                                     appliedAtArm;
+                          },
+                          std::chrono::milliseconds{10000}),
+                      "stale-frame: a frame is held inside the gated operator");
+        // 统计邮箱自挂起帧后冻结（发布按提交序有序化），既有水位已消费到最新
+        // 快照——以全新水位 0 探针读取当前累计值。
+        RIN_CHECK(engine->tryLoadStats(statsSeen = 0, stats));
+        RIN_CHECK_MSG(stats.processedFrames ==
+                          entered->load(std::memory_order_relaxed) - 1,
+                      "stale-frame: held frame started but has not completed");
+
+        // 停源（挂起帧之后不再有任何新代帧）→ 运行中应用图 B：
+        // source(1) → downscale(3) → grayify(2)（grayify 同 id → 邮箱共享）。
+        source.supply->store(false, std::memory_order_relaxed);
+        WorkflowGraph graphB;
+        {
+            rin::NodeInstance src;
+            src.id = 1;
+            src.typeId = "source";
+            rin::NodeInstance down;
+            down.id = 3;
+            down.typeId = "downscale";
+            rin::NodeInstance gray;
+            gray.id = 2;
+            gray.typeId = "grayify";
+            graphB.nodes = {src, down, gray};
+            graphB.connections = {
+                rin::Connection{rin::PortRef{1, rin::PortDirection::Output, 0},
+                                rin::PortRef{3, rin::PortDirection::Input, 0}},
+                rin::Connection{rin::PortRef{3, rin::PortDirection::Output, 0},
+                                rin::PortRef{2, rin::PortDirection::Input, 0}},
+            };
+        }
+        RIN_CHECK(engine->applyGraph(graphB).ok);
+        WorkflowEvent event;
+        RIN_CHECK_MSG(rin_test::pollUntil(
+                          [&] {
+                              return engine->tryLoadEvent(event) &&
+                                     event.kind == WorkflowEventKind::GraphApplied;
+                          },
+                          std::chrono::milliseconds{10000}),
+                      "stale-frame: graph B applies while the frame is held");
+
+        // 释放挂起帧：完成且统计照记（过代帧仍是完成的一帧）。
+        release->store(true, std::memory_order_release);
+        const std::uint64_t heldApplies = entered->load(std::memory_order_relaxed);
+        RIN_CHECK_MSG(rin_test::pollUntil(
+                          [&] {
+                              std::uint64_t probeSeen = 0;
+                              WorkflowStats probe;
+                              return engine->tryLoadStats(probeSeen, probe) &&
+                                     probe.processedFrames >= heldApplies;
+                          },
+                          std::chrono::milliseconds{10000}),
+                      "stale-frame: stale frame completes and is still counted");
+
+        // 共享邮箱未被回写：末次产物仍是旧代末帧（128x96），此后静默窗内不得
+        // 出现任何新快照（挂起帧是停源后唯一可能的发布者，其发布必须被跳过）。
+        {
+            std::uint64_t probeSeen = 0;
+            NodeOutputSnapshot probe;
+            RIN_CHECK_MSG(engine->tryLoadNodeOutput(2, probeSeen, probe) &&
+                              probe.valid() && probe.width == 128 &&
+                              probe.height == 96,
+                          "stale-frame: mailbox keeps the last generation-A output");
+            const std::uint64_t frozen = probeSeen;
+            RIN_CHECK_MSG(rin_test::quietFor(
+                              [&] {
+                                  std::uint64_t probeSeen2 = frozen;
+                                  NodeOutputSnapshot discarded;
+                                  return engine->tryLoadNodeOutput(2, probeSeen2,
+                                                                   discarded);
+                              },
+                              rin_test::kContractQuietWindow),
+                          "stale-frame: late generation-A frame must not publish "
+                          "into the shared mailbox");
+        }
+
+        RIN_CHECK_MSG(engine->state() == WorkflowEngineState::Running,
+                      "stale-frame: engine stays Running across the held-frame "
+                      "switch");
         engine->stop();
         engine.reset();
         RIN_CHECK(executor.shutdown(true) == ShutdownResult::Completed);
