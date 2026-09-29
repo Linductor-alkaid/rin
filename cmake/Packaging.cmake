@@ -62,6 +62,27 @@ install(FILES "${CMAKE_CURRENT_LIST_DIR}/../docs/rin.png"
     COMPONENT rin
 )
 
+# EUI-NEO 运行时字体（UI 文本 + 图标）：EUI 默认按"可执行文件旁 assets/"解析，
+# 开发布局由 eui_neo_configure_app 拷贝命中；deb 布局 /usr/bin 旁无 assets，
+# 系统回退不保证覆盖中文与 Font Awesome 图标码位且字体无法经 shlibdeps 声明
+# 依赖——随包捆绑，由 viewer 显式指定（apps/viewer/app.cpp kInstalledUiFont/
+# kInstalledIconFont，探测本目录）。文件名与 EUI 默认字体一致（eui
+# core/render/text.cpp kDefaultUiFontFile/kDefaultIconFontFile），更换时同步。
+if(EUI-NEO_SOURCE_DIR
+        AND EXISTS "${EUI-NEO_SOURCE_DIR}/assets/JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf"
+        AND EXISTS "${EUI-NEO_SOURCE_DIR}/assets/Font Awesome 7 Free-Solid-900.otf")
+    install(FILES
+        "${EUI-NEO_SOURCE_DIR}/assets/JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf"
+        "${EUI-NEO_SOURCE_DIR}/assets/Font Awesome 7 Free-Solid-900.otf"
+        DESTINATION share/rin/fonts
+        COMPONENT rin
+    )
+else()
+    message(WARNING
+        "Rin packaging: EUI-NEO assets fonts not found; "
+        "the deb will miss bundled UI text/icon fonts")
+endif()
+
 set(CPACK_PACKAGE_NAME "${RIN_PACKAGE_NAME}")
 set(CPACK_PACKAGE_VERSION "${RIN_PACKAGE_VERSION}")
 set(CPACK_PACKAGE_VENDOR "Linductor-alkaid")
