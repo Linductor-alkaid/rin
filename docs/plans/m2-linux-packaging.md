@@ -162,3 +162,41 @@ GitHub Actions 产出安装包工件，tag 触发 Release 上传。
   应用可用、设备出流正常）；agent 无免密 sudo，未代行安装。
 - 结论：M2 全部工作项与退出条件通过，里程碑关闭（Completed）。
 - 同步：本文件状态与 M2-07 勾选、总计划 SCOPE-06 与整体状态。
+
+### 2026-09-29：deb 安装后 UI 字体丢失缺陷修复（fix/viewer-deb-fonts）
+
+- 范围：M2-04 交付的 deb 分发缺陷修复——v0.2.0 起 deb 未随包携带 EUI-NEO
+  运行时字体，安装后（`/usr/bin` 旁无 `assets/`）UI 文本与图标退化为系统
+  字体回退：中文（JingNanJunJunTi）与 Font Awesome 图标码位在常见系统字体中
+  无覆盖，且 EUI 的 CJK 惰性回退路径（`truetype/noto/NotoSansCJK-*`）与
+  Ubuntu 24.04 实际安装位置（`opentype/noto/`）不匹配；字体无法经 shlibdeps
+  声明依赖，精简系统上文字整体不渲染（文本原语加载失败静默不绘制，不崩溃）。
+  缺陷取证（修复前，strace openat 实证）：解包 deb 模拟安装布局运行，仅系统
+  字体 NotoSans/NotoSansSymbols2/NotoColorEmoji/DejaVuSans 被加载，三个打包
+  字体零命中。修复：`cmake/Packaging.cmake` 随包安装两个运行时字体到
+  `/usr/share/rin/fonts/`（文件名与 EUI 默认字体逐字一致），
+  `apps/viewer/app.cpp` 启动时探测该目录、两文件齐备时经
+  `DslAppConfig::textFont/iconFont` 显式指定（门控：目录不存在保持 EUI 默认
+  的 exe 旁 assets 解析，开发布局不受影响）。
+- 依据：DEC-009（本日增补字体捆绑条目与字体回归验证方式）、EUI
+  `DslAppConfig::textFont/iconFont` 公开 API（应用侧字体指定职责，非依赖
+  能力缺口，不涉及台账）。
+- 验证（Independent-Verification-Agent 独立执行，PASS）：四预设
+  debug/asan/ubsan/tsan ctest 26/26 全绿（真机冒烟 PASS）、零消毒器诊断、
+  零新增编译警告；核心判定以 bwrap 沙箱逐字复刻 deb 安装后布局
+  （`/usr/bin/rin` + `/usr/lib/rin` + `/usr/share/rin/fonts` 均来自 deb 解包、
+  exe 旁无 assets）strace 实跑——JingNanJunJunTi 9 次、Font Awesome 6 次
+  openat 全部成功，15s 运行零系统字体回退、stderr 为空；修复前 deb 同法对照
+  为零命中 + CJK 全 ENOENT；未安装态（宿主无字体目录）行为与修复前一致，
+  实证门控语义；开发布局 strace 仍打开 exe 旁 assets 字体。deb 内容
+  `dpkg -c` 核对含两个字体（+2.4 MB）。日志
+  `/tmp/rin_fix_bwrap_strace.log`（核心）、`/tmp/rin_prefix_bwrap_strace.log`
+  （对照）、`/tmp/rin_dev_strace.log`（开发态）、`/tmp/verify_debfix/`（预设
+  回归）。
+- 限制：无免密 sudo，真实 `dpkg -i` 端到端未由 agent 执行（bwrap 布局与
+  解包即装后状态逐字节等价，绝对路径探测/openat 行为无异）；M2-07 先例保持
+  ——安装冒烟由维护者按需执行。环境观察项：build/asan、build/ubsan 的
+  CMakeCache 残留指向已删除目录的 `FETCHCONTENT_SOURCE_DIR_REALSENSE2`（复用
+  `build/iva-debug` 的陈旧缓存所致，验证中已清空该条目），后续 configure 前
+  建议清理或 `cmake --fresh`。
+- 同步：DEC-009 决策增补、CHANGELOG（Unreleased 修复）、本验证记录。

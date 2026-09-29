@@ -34,11 +34,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <iterator>
 #include <memory>
 #include <set>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -984,9 +986,23 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
 
 namespace app {
 
-const DslAppConfig& dslAppConfig() {
+// deb 安装布局的运行时字体目录（cmake/Packaging.cmake 随包安装；DEC-009 的
+// deb 前缀固定 /usr）。EUI 默认按"可执行文件旁 assets/"解析字体：开发布局由
+// eui_neo_configure_app 把 assets 拷到可执行文件旁、解析命中；安装布局
+// /usr/bin 旁无 assets，退化为系统回退——中文与 Font Awesome 图标码位在常见
+// 系统字体中无覆盖（本机 Ubuntu 24.04 桌面实测：中文无 CJK 路径命中、图标
+// 静默消失；strace 证据见 M2 计划验证记录 2026-09-29）。该目录存在时显式
+// 指定两个默认字体；文件名与 EUI 默认字体一致（eui core/render/text.cpp
+// kDefaultUiFontFile/kDefaultIconFontFile），更换 EUI 字体时须同步本处与
+// Packaging.cmake。
+constexpr const char* kInstalledUiFont =
+    "/usr/share/rin/fonts/JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf";
+constexpr const char* kInstalledIconFont =
+    "/usr/share/rin/fonts/Font Awesome 7 Free-Solid-900.otf";
+
+DslAppConfig makeDslAppConfig() {
     viewer::ensureStarted();
-    static const DslAppConfig config =
+    DslAppConfig config =
         DslAppConfig{}
             .title("Rin")
             .pageId("Rin")
@@ -1045,6 +1061,19 @@ const DslAppConfig& dslAppConfig() {
                 }
             })
             .onShutdown([] { viewer::context().shutdown(); });
+
+    // 安装态字体捆绑生效（见上方说明）：显式路径由 EUI resolveFontFilePath
+    // 直接命中，开发布局目录不存在、保持 EUI 默认 exeDir/assets 解析。
+    std::error_code fsError;
+    if (std::filesystem::exists(kInstalledUiFont, fsError) &&
+        std::filesystem::exists(kInstalledIconFont, fsError)) {
+        config.textFont(kInstalledUiFont).iconFont(kInstalledIconFont);
+    }
+    return config;
+}
+
+const DslAppConfig& dslAppConfig() {
+    static const DslAppConfig config = makeDslAppConfig();
     return config;
 }
 
