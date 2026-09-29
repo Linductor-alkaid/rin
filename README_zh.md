@@ -5,6 +5,7 @@
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![CMake](https://img.shields.io/badge/CMake-%E2%89%A53.25-064F8C?logo=cmake&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux-f96854?logo=linux&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](README.md) | 简体中文
 
@@ -118,3 +119,10 @@ third_party/executor, eui-neo,    pinned 依赖（configure 时 commit 校验）
 ## 更新日志
 
 各版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
+
+Rin 以 [MIT 许可证](LICENSE) 发布。第三方依赖保留其自身许可证——
+librealsense2、executor、EUI-NEO 为 Apache-2.0，kissfft 为 BSD-3-Clause；
+详见 [`third_party/dependencies.lock`](third_party/dependencies.lock) 与
+[依赖反馈台账](docs/dependency_feedback/README.md)。

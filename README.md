@@ -5,6 +5,7 @@
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![CMake](https://img.shields.io/badge/CMake-%E2%89%A53.25-064F8C?logo=cmake&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux-f96854?logo=linux&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 English | [简体中文](README_zh.md)
 
@@ -128,3 +129,11 @@ every third-party dependency gets a feedback ledger
 ## Changelog
 
 Per-release changes are tracked in [CHANGELOG.md](CHANGELOG.md) (Chinese).
+
+## License
+
+Rin is released under the [MIT License](LICENSE). Third-party dependencies keep
+their own licenses — Apache-2.0 (librealsense2, executor, EUI-NEO) and
+BSD-3-Clause (kissfft); see
+[`third_party/dependencies.lock`](third_party/dependencies.lock) and the
+[dependency ledgers](docs/dependency_feedback/README.md) for details.
