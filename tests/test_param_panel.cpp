@@ -23,6 +23,15 @@
 //  10. canvas_model 参数面（默认目录描述符）：setParam 追加/替换/未知节点、
 //      toGraph 携带、越界赋值经校验标注（BadParam）、合法赋值保持校验通过、
 //      connect 预检携带参数（BadParam 非阻塞）、删除节点参数随节点消失。
+//  11. 裁切 ROI 联动约束（M6-06，DEC-017 控件层防呆）：RoiConstraint::isRoiParam
+//      （x/y/width/height 且带范围 Integer）、effectiveRange 互约束（x∈[0,W−w]、
+//      width∈[1,W−x]、y/h 同理）∩ 声明 range、退化输入/退化声明夹成单点、
+//      无输入尺寸与非 ROI 参数返回 nullopt、兄弟参数取生效值（赋值优先于默认）、
+//      clampValue 闭区间夹取与 llround 取整（非 ROI/非 Integer/无尺寸原样返回）、
+//      valueToSliderInRange/sliderToValueInRange（端点/夹取/取整/零跨度）、
+//      paramScalarAsDouble（标量取值/非标量 0 防御）。pumpNodeOutput 的输入驱动
+//      节点拉取语义（本约束的尺寸源）在 tests/test_run_control.cpp §7 覆盖
+//      （需 eui_neo 链接，headless 纪律同文件头说明）。
 //
 // 测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），main 返回
 // rin_test::exitStatus()。NodeOutputCache 走真引擎契约面（owner 线程直接调用，
@@ -1219,6 +1228,218 @@ void testCanvasParamWithConnectAndDelete() {
 
 }  // namespace
 
+// --- 11. 裁切 ROI 联动约束（M6-06，DEC-017 控件层防呆；param_model.hpp 纯逻辑） ---
+
+namespace {
+
+void testRoiConstraint() {
+    // 目录版 crop schema（与引擎/面板同源）：x/y [0,4096] 默认 0；
+    // width/height [0,4096] 默认 64。
+    const rin::NodeCatalog catalog = rin::workflow_catalog::makeDefaultImageNodeCatalog();
+    const rin::NodeDescriptor* cropDesc = rin::findNodeDescriptor(catalog, "crop");
+    RIN_CHECK(cropDesc != nullptr);
+    if (cropDesc == nullptr) {
+        return;
+    }
+    const rin::ParamDescriptor* x = catalogParam(catalog, "crop", "x");
+    const rin::ParamDescriptor* y = catalogParam(catalog, "crop", "y");
+    const rin::ParamDescriptor* width = catalogParam(catalog, "crop", "width");
+    const rin::ParamDescriptor* height = catalogParam(catalog, "crop", "height");
+    RIN_CHECK(x != nullptr && y != nullptr && width != nullptr && height != nullptr);
+    if (x == nullptr || y == nullptr || width == nullptr || height == nullptr) {
+        return;
+    }
+    const viewer::RoiConstraint roi = viewer::RoiConstraint::forInput(848, 480);
+    const std::vector<rin::ParamAssignment> none;
+
+    // isRoiParam：x/y/width/height 且带范围 Integer；去范围/换种类/换 id 均否。
+    RIN_CHECK(viewer::RoiConstraint::isRoiParam(*x) &&
+              viewer::RoiConstraint::isRoiParam(*y) &&
+              viewer::RoiConstraint::isRoiParam(*width) &&
+              viewer::RoiConstraint::isRoiParam(*height));
+    {
+        rin::ParamDescriptor noRange = *x;
+        noRange.hasRange = false;
+        RIN_CHECK_MSG(!viewer::RoiConstraint::isRoiParam(noRange),
+                      "isRoiParam: Integer without range rejected");
+        rin::ParamDescriptor realX = *x;
+        realX.kind = rin::ParamKind::Real;
+        RIN_CHECK_MSG(!viewer::RoiConstraint::isRoiParam(realX),
+                      "isRoiParam: Real kind rejected");
+        rin::ParamDescriptor other = *x;
+        other.id = "u";
+        RIN_CHECK_MSG(!viewer::RoiConstraint::isRoiParam(other),
+                      "isRoiParam: unrelated id rejected");
+    }
+
+    // effectiveRange 互约束（848x480，兄弟取默认 64/0）：
+    // x∈[0,784]、y∈[0,416]、width∈[1,848]、height∈[1,480]。
+    {
+        const auto xr = roi.effectiveRange(*cropDesc, none, *x);
+        RIN_CHECK(xr.has_value() && nearD(xr->first, 0.0) && nearD(xr->second, 784.0));
+        const auto yr = roi.effectiveRange(*cropDesc, none, *y);
+        RIN_CHECK(yr.has_value() && nearD(yr->first, 0.0) && nearD(yr->second, 416.0));
+        const auto wr = roi.effectiveRange(*cropDesc, none, *width);
+        RIN_CHECK(wr.has_value() && nearD(wr->first, 1.0) && nearD(wr->second, 848.0));
+        const auto hr = roi.effectiveRange(*cropDesc, none, *height);
+        RIN_CHECK(hr.has_value() && nearD(hr->first, 1.0) && nearD(hr->second, 480.0));
+    }
+
+    // 兄弟参数取生效值：赋值优先于声明默认（width=64 显式与默认同域；x=100 →
+    // width∈[1,748]；y=100 → height∈[1,380]；width=100 → x∈[0,748]）。
+    {
+        const std::vector<rin::ParamAssignment> widthDefault = {
+            {"width", rin::ParamValue{static_cast<std::int64_t>(64)}}};
+        const auto xr = roi.effectiveRange(*cropDesc, widthDefault, *x);
+        RIN_CHECK(xr.has_value() && nearD(xr->first, 0.0) && nearD(xr->second, 784.0));
+
+        const std::vector<rin::ParamAssignment> xAssigned = {
+            {"x", rin::ParamValue{static_cast<std::int64_t>(100)}}};
+        const auto wr = roi.effectiveRange(*cropDesc, xAssigned, *width);
+        RIN_CHECK_MSG(wr.has_value() && nearD(wr->first, 1.0) && nearD(wr->second, 748.0),
+                      "effectiveRange: x=100 narrows width to [1,748]");
+
+        const std::vector<rin::ParamAssignment> yAssigned = {
+            {"y", rin::ParamValue{static_cast<std::int64_t>(100)}}};
+        const auto hr = roi.effectiveRange(*cropDesc, yAssigned, *height);
+        RIN_CHECK(hr.has_value() && nearD(hr->first, 1.0) && nearD(hr->second, 380.0));
+
+        const std::vector<rin::ParamAssignment> widthAssigned = {
+            {"width", rin::ParamValue{static_cast<std::int64_t>(100)}}};
+        const auto xr2 = roi.effectiveRange(*cropDesc, widthAssigned, *x);
+        RIN_CHECK_MSG(xr2.has_value() && nearD(xr2->second, 748.0),
+                      "effectiveRange: sibling assignment beats the declared default");
+    }
+
+    // 与声明 range 求交：x 声明 [700,4096] → 有效域 [700,784]。
+    {
+        rin::NodeDescriptor narrow = *cropDesc;
+        narrow.params.clear();
+        rin::ParamDescriptor nx = *x;
+        nx.minValue = 700.0;
+        nx.maxValue = 4096.0;
+        narrow.params = {nx, *y, *width, *height};
+        const auto r = roi.effectiveRange(narrow, none, narrow.params[0]);
+        RIN_CHECK_MSG(r.has_value() && nearD(r->first, 700.0) && nearD(r->second, 784.0),
+                      "effectiveRange: intersects the declared range");
+    }
+
+    // 退化声明夹成单点：x 声明 [800,900] 与互约束上界 784 相交为空 → 夹成
+    // [784,784]（区间保持合法，M4-03 兜底不再可达）。
+    {
+        rin::NodeDescriptor degenerate = *cropDesc;
+        degenerate.params.clear();
+        rin::ParamDescriptor dx = *x;
+        dx.minValue = 800.0;
+        dx.maxValue = 900.0;
+        degenerate.params = {dx, *y, *width, *height};
+        const auto r = roi.effectiveRange(degenerate, none, degenerate.params[0]);
+        RIN_CHECK_MSG(r.has_value() && nearD(r->first, 784.0) && nearD(r->second, 784.0),
+                      "effectiveRange: empty intersection clamps to a single point");
+    }
+
+    // 退化输入夹单点：2x2 输入、默认 64x64 ROI → x/y∈[0,0]、width/height∈[1,2]。
+    {
+        const viewer::RoiConstraint tiny = viewer::RoiConstraint::forInput(2, 2);
+        const auto xr = tiny.effectiveRange(*cropDesc, none, *x);
+        RIN_CHECK(xr.has_value() && nearD(xr->first, 0.0) && nearD(xr->second, 0.0));
+        const auto wr = tiny.effectiveRange(*cropDesc, none, *width);
+        RIN_CHECK(wr.has_value() && nearD(wr->first, 1.0) && nearD(wr->second, 2.0));
+    }
+
+    // 非法形态回退：无输入尺寸（unconstrained）与非 ROI 参数 → nullopt。
+    {
+        const viewer::RoiConstraint free = viewer::RoiConstraint::unconstrained();
+        RIN_CHECK(!free.effectiveRange(*cropDesc, none, *x).has_value());
+        const rin::ParamDescriptor* radius = catalogParam(catalog, "gaussian_blur", "radius");
+        RIN_CHECK(radius != nullptr);
+        if (radius != nullptr) {
+            RIN_CHECK_MSG(!roi.effectiveRange(*cropDesc, none, *radius).has_value(),
+                          "effectiveRange: non-ROI param yields nullopt");
+        }
+        rin::ParamDescriptor realX = *x;
+        realX.kind = rin::ParamKind::Real;
+        RIN_CHECK(!roi.effectiveRange(*cropDesc, none, realX).has_value());
+    }
+
+    // clampValue：Integer 闭区间夹取；取整用 llround（声明端点可带小数）；
+    // 非 ROI 参数/非 Integer 值/无输入尺寸原样返回。
+    {
+        rin::ParamValue v =
+            roi.clampValue(*cropDesc, none, *x, rin::ParamValue{static_cast<std::int64_t>(1000)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{784});
+        v = roi.clampValue(*cropDesc, none, *x, rin::ParamValue{static_cast<std::int64_t>(-5)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{0});
+        v = roi.clampValue(*cropDesc, none, *x, rin::ParamValue{static_cast<std::int64_t>(100)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{100});
+
+        const std::vector<rin::ParamAssignment> xAssigned = {
+            {"x", rin::ParamValue{static_cast<std::int64_t>(100)}}};
+        v = roi.clampValue(*cropDesc, xAssigned, *width,
+                           rin::ParamValue{static_cast<std::int64_t>(2000)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{748});
+        v = roi.clampValue(*cropDesc, xAssigned, *width,
+                           rin::ParamValue{static_cast<std::int64_t>(0)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{1});
+
+        // 声明端点带小数：x ∈ [0.4, 783.6] → llround 端点 [0, 784]。
+        rin::NodeDescriptor frac = *cropDesc;
+        frac.params.clear();
+        rin::ParamDescriptor fx = *x;
+        fx.minValue = 0.4;
+        fx.maxValue = 783.6;
+        frac.params = {fx, *y, *width, *height};
+        const auto fr = roi.effectiveRange(frac, none, frac.params[0]);
+        RIN_CHECK(fr.has_value() && nearD(fr->first, 0.4) && nearD(fr->second, 783.6));
+        v = roi.clampValue(frac, none, frac.params[0],
+                           rin::ParamValue{static_cast<std::int64_t>(5000)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{784});
+        v = roi.clampValue(frac, none, frac.params[0],
+                           rin::ParamValue{static_cast<std::int64_t>(-10)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{0});
+
+        // 非 Integer 值原样返回（种类收窄由校验层负责）。
+        rin::ParamValue real = roi.clampValue(*cropDesc, none, *x, rin::ParamValue{3.5});
+        RIN_CHECK(std::holds_alternative<double>(real) &&
+                  std::get<double>(real) == 3.5);
+        // 非 ROI 参数原样返回。
+        const rin::ParamDescriptor* radius = catalogParam(catalog, "gaussian_blur", "radius");
+        RIN_CHECK(radius != nullptr);
+        if (radius != nullptr) {
+            v = roi.clampValue(*cropDesc, none, *radius,
+                               rin::ParamValue{static_cast<std::int64_t>(99)});
+            RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{99});
+        }
+        // 无输入尺寸原样返回。
+        const viewer::RoiConstraint free = viewer::RoiConstraint::unconstrained();
+        v = free.clampValue(*cropDesc, none, *x,
+                            rin::ParamValue{static_cast<std::int64_t>(99999)});
+        RIN_CHECK_EQ(std::get<std::int64_t>(v), std::int64_t{99999});
+    }
+
+    // 有效域滑条映射：端点/夹取/零跨度；Integer 取整（round half away from zero）。
+    RIN_CHECK(nearD(viewer::valueToSliderInRange(0.0, 784.0, 392.0), 0.5));
+    RIN_CHECK(nearD(viewer::valueToSliderInRange(0.0, 784.0, 784.0), 1.0));
+    RIN_CHECK(nearD(viewer::valueToSliderInRange(0.0, 784.0, -10.0), 0.0));
+    RIN_CHECK(nearD(viewer::valueToSliderInRange(0.0, 784.0, 1000.0), 1.0));
+    RIN_CHECK(nearD(viewer::valueToSliderInRange(5.0, 5.0, 5.0), 0.0));
+    RIN_CHECK(nearD(viewer::sliderToValueInRange(0.0, 784.0, 0.5, true), 392.0));
+    RIN_CHECK(nearD(viewer::sliderToValueInRange(0.0, 784.0, 1.5, true), 784.0));
+    RIN_CHECK(nearD(viewer::sliderToValueInRange(0.0, 784.0, -0.5, true), 0.0));
+    RIN_CHECK(nearD(viewer::sliderToValueInRange(0.0, 5.0, 0.5, true), 3.0));
+    RIN_CHECK(nearD(viewer::sliderToValueInRange(0.0, 5.0, 0.5, false), 2.5));
+
+    // 标量取值防御：Integer/Real 直取；字符串/数组按 0。
+    RIN_CHECK(nearD(viewer::paramScalarAsDouble(rin::ParamValue{static_cast<std::int64_t>(42)}),
+                    42.0));
+    RIN_CHECK(nearD(viewer::paramScalarAsDouble(rin::ParamValue{0.25}), 0.25));
+    RIN_CHECK(nearD(viewer::paramScalarAsDouble(rin::ParamValue{std::string("x")}), 0.0));
+    RIN_CHECK(nearD(viewer::paramScalarAsDouble(rin::ParamValue{std::vector<double>{1.0}}),
+                    0.0));
+}
+
+}  // namespace
+
 int main() {
     runSection("catalog_sanity", [] {
         const rin::NodeCatalog catalog =
@@ -1257,5 +1478,6 @@ int main() {
     runSection("node_failure_marks", testNodeFailureMarks);
     runSection("canvas_param_surface", testCanvasParamSurface);
     runSection("canvas_param_connect_delete", testCanvasParamWithConnectAndDelete);
+    runSection("roi_constraint", testRoiConstraint);
     return rin_test::exitStatus();
 }

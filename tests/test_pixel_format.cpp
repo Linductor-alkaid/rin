@@ -16,6 +16,19 @@
 //    基准、超分位截断纯白）、离群免疫（与去离群帧逐字节一致的频闪回归锁定）、
 //    多档超分位值截断无差异、N<100 小帧退化为绝对最大值（不免疫离群的已知边界）、
 //    固定种子 LCG 随机帧与排序参照逐字节核对、大帧（N>=100）既有不变量回归。
+// 8) convertDepth16ToGray8（M6-02，DEC-017 固定 rendition）：固定区间映射 golden
+//    （近白远黑：near→255、far→0、线性中点 128、区间外截断、raw=0→0）、与
+//    grayscaleColor ramp R 通道逐字节对应、亮度单调不增、紧凑行距 stride=width
+//    （padding 哨兵隔离）、入参校验反例（空指针/零尺寸/stride 不足/scale<=0/
+//    far<=near）且 dst 不被写。
+// 9) convertDepth16ToGray8Adaptive（M6-02）：P99 语义 golden（N=100 边界分位、
+//    N<100 退化最大值、全无效帧全 0、无效像素 0/有效像素 round(t*255)/超分位
+//    255）、与 adaptiveGrayscaleColor R 通道对应（LCG 随机帧 + 排序参照）、
+//    stride 哨兵隔离、空/零尺寸/stride 反例且 dst 不被写。
+// 10) convertDepth16ToGray8Pair（M6-06 采集侧优化，单趟双输出）：与分别调用
+//     两个单 rendition 函数逐字节等价（LCG 随机帧多尺寸/多路径、N<100 退化、
+//     N=100 边界、单有效像素、全无效帧、stride 哨兵、极值混合）；校验反例与
+//     单函数同拒（返回值一致）且 gray/adaptive 双缓冲均不被写。
 #include "test_util.hpp"
 
 #include <algorithm>
@@ -902,6 +915,457 @@ int main() {
         RIN_CHECK(rin::convertDepth16ToRgba8(padded.data(), 64, 64, kStrideUnits, 0.001f,
                                              0.2f, 6.5f, scheme, fromPadded));
         RIN_CHECK(fromPadded == base);  // padding 单元不泄漏、行间不错位
+    }
+
+    // ============ convertDepth16ToGray8（M6-02，DEC-017）============
+
+    // 38) 固定区间映射 golden（scale=0.001、near=1.0、far=3.0）：raw=0 → 0（黑）；
+    //     near 端点 → 255（白）；区间下外截断 → 255；far 端点/上外截断 → 0（黑）；
+    //     中点 raw=2000 → 128（t=0.5 精确：2000*0.001f == 2.0f，(1-0.5)*255+0.5
+    //     截断 128）。输出为紧凑 Gray8（size == w*h）。
+    {
+        constexpr float kScale = 0.001f;
+        constexpr float kNear = 1.0f;
+        constexpr float kFar = 3.0f;
+        const std::uint16_t depth[7] = {0, 500, 1000, 2000, 3000, 65535, 0};
+        std::vector<std::uint8_t> gray;
+        RIN_CHECK(rin::convertDepth16ToGray8(depth, 7, 1, 7, kScale, kNear, kFar, gray));
+        RIN_CHECK_EQ(gray.size(), std::size_t{7});
+        RIN_CHECK_EQ(gray[0], std::uint8_t{0});    // raw=0 无效深度 → 黑。
+        RIN_CHECK_EQ(gray[1], std::uint8_t{255});  // 低于 near：截断 → 近白。
+        RIN_CHECK_EQ(gray[2], std::uint8_t{255});  // 恰在 near：t=0 → 白。
+        RIN_CHECK_EQ(gray[3], std::uint8_t{128});  // t=0.5 中点：round((1-0.5)*255)。
+        RIN_CHECK_EQ(gray[4], std::uint8_t{0});    // 恰在 far：t=1 → 黑。
+        RIN_CHECK_EQ(gray[5], std::uint8_t{0});    // 高于 far：截断 → 远黑。
+        RIN_CHECK_EQ(gray[6], std::uint8_t{0});
+    }
+
+    // 39) 与 grayscaleColor ramp 的单通道对应：同一输入（含 raw=0 与区间外样本）
+    //     下 Gray8 输出逐字节等于 RGBA8 Grayscale 路径的 R（==G==B）通道；实现
+    //     与参照使用同一 float 表达式（(raw*scale - near)/range 后 clamp）。
+    {
+        constexpr float kScale = 0.001f;
+        constexpr float kNear = 0.2f;
+        constexpr float kFar = 6.5f;
+        const std::uint16_t depth[9] = {0,   100,  200,  1000, 3350,
+                                        5000, 6500, 8000, 65535};
+        std::vector<std::uint8_t> gray;
+        std::vector<std::uint8_t> rgba;
+        RIN_CHECK(rin::convertDepth16ToGray8(depth, 9, 1, 9, kScale, kNear, kFar, gray));
+        RIN_CHECK(rin::convertDepth16ToRgba8(depth, 9, 1, 9, kScale, kNear, kFar,
+                                             rin::DepthColorScheme::Grayscale, rgba));
+        const float range = kFar - kNear;  // 与实现同一表达式。
+        for (int p = 0; p < 9; ++p) {
+            const std::size_t offset = static_cast<std::size_t>(p) * 4;
+            // 参照一：RGBA8 Grayscale 的 R/G/B 通道。
+            RIN_CHECK_EQ(gray[static_cast<std::size_t>(p)], rgba[offset + 0]);
+            RIN_CHECK_EQ(rgba[offset + 0], rgba[offset + 1]);
+            RIN_CHECK_EQ(rgba[offset + 1], rgba[offset + 2]);
+            if (depth[static_cast<std::size_t>(p)] == 0) {
+                // 无效深度不走 ramp：Gray8 单通道直接输出 0（无 alpha 层）。
+                RIN_CHECK_EQ(gray[static_cast<std::size_t>(p)], std::uint8_t{0});
+                continue;
+            }
+            // 参照二：grayscaleColor 纯函数以同一 t 重算。
+            const float meters = static_cast<float>(depth[static_cast<std::size_t>(p)]) * kScale;
+            const float clamped = std::clamp((meters - kNear) / range, 0.0f, 1.0f);
+            const Rgba ref = grayAt(clamped);
+            RIN_CHECK_EQ(gray[static_cast<std::size_t>(p)], ref[0]);
+        }
+    }
+
+    // 40) 亮度单调不增（近白远黑）：区间内递增 raw 序列灰度非增；紧凑行距核对
+    //     （2 行输出按行连续，size == w*h）。
+    {
+        constexpr float kScale = 0.001f;
+        constexpr float kNear = 1.0f;
+        constexpr float kFar = 3.0f;
+        constexpr int kSamples = 64;
+        std::vector<std::uint16_t> depth;
+        depth.reserve(kSamples);
+        for (int s = 0; s < kSamples; ++s) {
+            depth.push_back(static_cast<std::uint16_t>(
+                1000 + (3000 - 1000) * s / (kSamples - 1)));
+        }
+        std::vector<std::uint8_t> gray;
+        RIN_CHECK(rin::convertDepth16ToGray8(depth.data(), static_cast<std::uint32_t>(
+                                                          depth.size()),
+                                             1, static_cast<std::uint32_t>(depth.size()),
+                                             kScale, kNear, kFar, gray));
+        RIN_CHECK_EQ(gray.size(), depth.size());
+        for (int s = 1; s < kSamples; ++s) {
+            RIN_CHECK(gray[static_cast<std::size_t>(s)] <=
+                      gray[static_cast<std::size_t>(s) - 1]);
+        }
+    }
+
+    // 41) 行距 padding 哨兵隔离：strideUnits > width 时输出与紧凑输入逐字节一致
+    //     （padding 单元不泄漏、行间不错位）。
+    {
+        constexpr std::uint32_t kWidth = 3;
+        constexpr std::uint32_t kHeight = 2;
+        constexpr std::uint32_t kStrideUnits = 5;
+        const std::uint16_t compact[6] = {0, 1000, 3350, 6500, 200, 40000};
+        std::vector<std::uint16_t> padded(kStrideUnits * kHeight, 0xFFFF);
+        for (std::uint32_t row = 0; row < kHeight; ++row) {
+            for (std::uint32_t col = 0; col < kWidth; ++col) {
+                padded[row * kStrideUnits + col] = compact[row * kWidth + col];
+            }
+        }
+        std::vector<std::uint8_t> fromCompact;
+        std::vector<std::uint8_t> fromPadded;
+        RIN_CHECK(rin::convertDepth16ToGray8(compact, kWidth, kHeight, kWidth, 0.001f,
+                                             0.2f, 6.5f, fromCompact));
+        RIN_CHECK(rin::convertDepth16ToGray8(padded.data(), kWidth, kHeight, kStrideUnits,
+                                             0.001f, 0.2f, 6.5f, fromPadded));
+        RIN_CHECK_EQ(fromCompact.size(), std::size_t{kWidth * kHeight});
+        RIN_CHECK(fromCompact == fromPadded);
+    }
+
+    // 42) 入参校验反例：返回 false 且 dst 不被写（空指针/零宽/零高/stride 不足/
+    //     scale<=0/far<=near，与 RGBA8 路径同规则）。
+    {
+        const std::uint16_t depth[4] = {100, 200, 300, 400};
+        std::vector<std::uint8_t> dst{0x5A, 0x5A};
+        const std::vector<std::uint8_t> sentinel = dst;
+        RIN_CHECK(!rin::convertDepth16ToGray8(nullptr, 2, 1, 2, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 0, 1, 0, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 2, 0, 2, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 3, 1, 2, 0.001f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 2, 1, 2, 0.0f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 2, 1, 2, -1.0f, 1.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 2, 1, 2, 0.001f, 3.0f, 3.0f, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8(depth, 2, 1, 2, 0.001f, 3.0f, 1.0f, dst));
+        RIN_CHECK(dst == sentinel);
+    }
+
+    // ============ convertDepth16ToGray8Adaptive（M6-02，DEC-017）============
+
+    // 43) P99 分位语义 golden（N=100 边界，与 RGBA8 用例 32 同帧）：10x10 全有效
+    //     帧，98 个 1000 + 2000（排名 99 = targetRank → 基准）+ 4000（超分位）。
+    //     frameQuantile=2000：1000 → 128（t=0.5 精确）、2000 → 255、4000 → 255。
+    {
+        std::vector<std::uint16_t> depth(100, 1000);
+        depth[98] = 2000;
+        depth[99] = 4000;
+        std::vector<std::uint8_t> gray;
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(depth.data(), 10, 10, 10, gray));
+        RIN_CHECK_EQ(gray.size(), std::size_t{100});
+        for (int p = 0; p < 98; ++p) {
+            RIN_CHECK_EQ(gray[static_cast<std::size_t>(p)], std::uint8_t{128});
+        }
+        RIN_CHECK_EQ(gray[98], std::uint8_t{255});  // 恰在基准 → 纯白。
+        RIN_CHECK_EQ(gray[99], std::uint8_t{255});  // 超分位截断 → 纯白。
+        // 排序参照：有效值升序 rank-1 下标 = 基准 2000（秩公式与实现独立核对）。
+        std::vector<std::uint16_t> sorted(depth);
+        std::sort(sorted.begin(), sorted.end());
+        RIN_CHECK_EQ(sorted[98], std::uint16_t{2000});
+    }
+
+    // 44) 无效像素与 N<100 退化：3x2 帧 {0, 100, 500, 0, 250, 1000}（4 个有效，
+    //     rank = ceil(0.99*4) = 4 → 基准 = 帧内最大 1000）：无效像素 → 0、
+    //     100 → 26、250 → 64、500 → 128、1000 → 255。
+    {
+        const std::uint16_t depth[6] = {0, 100, 500, 0, 250, 1000};
+        std::vector<std::uint8_t> gray;
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(depth, 3, 2, 3, gray));
+        RIN_CHECK_EQ(gray.size(), std::size_t{6});
+        const std::uint8_t expected[6] = {0, 26, 128, 0, 64, 255};
+        for (int p = 0; p < 6; ++p) {
+            RIN_CHECK_EQ(gray[static_cast<std::size_t>(p)], expected[p]);
+        }
+    }
+
+    // 45) 全帧 raw==0：整帧 0（Gray8 无 alpha 层，输出全黑且 size == w*h），返回
+    //     true（与 RGBA8 版的"不透明黑"区分：字节数即见证）。
+    {
+        std::vector<std::uint16_t> depth(12, 0);  // 3x4 全无效。
+        std::vector<std::uint8_t> gray;
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(depth.data(), 3, 4, 3, gray));
+        RIN_CHECK_EQ(gray.size(), std::size_t{12});
+        for (const std::uint8_t level : gray) {
+            RIN_CHECK_EQ(level, std::uint8_t{0});
+        }
+    }
+
+    // 46) 与 adaptiveGrayscaleColor ramp 的单通道对应：固定种子 LCG 随机帧
+    //     （32x32，约 1/8 置 0）+ 排序参照（rank = N - N/100）逐像素核对 Gray8
+    //     输出等于以 t=raw/quantile 经 adaptiveGrayscaleColor 的 R 通道。
+    {
+        constexpr std::size_t kCount = 1024;  // 32x32
+        std::uint32_t lcg = 20260929u;        // 固定种子，保证可复现
+        std::vector<std::uint16_t> depth(kCount);
+        for (std::size_t i = 0; i < kCount; ++i) {
+            lcg = lcg * 1103515245u + 12345u;
+            const std::uint32_t sample = (lcg >> 16) & 0xFFFFu;
+            depth[i] = (sample == 0 || sample % 8u == 0)
+                           ? std::uint16_t{0}
+                           : static_cast<std::uint16_t>(sample);
+        }
+        std::vector<std::uint16_t> valid;
+        for (const std::uint16_t raw : depth) {
+            if (raw != 0) {
+                valid.push_back(raw);
+            }
+        }
+        std::sort(valid.begin(), valid.end());
+        const std::size_t rank = valid.size() - valid.size() / 100u;
+        const std::uint16_t refQuantile = valid[rank - 1];
+        RIN_CHECK(refQuantile >= 1);
+        std::vector<std::uint8_t> gray;
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(depth.data(), 32, 32, 32, gray));
+        RIN_CHECK_EQ(gray.size(), std::size_t{kCount});
+        for (std::size_t i = 0; i < kCount; ++i) {
+            if (depth[i] == 0) {
+                RIN_CHECK_EQ(gray[i], std::uint8_t{0});
+                continue;
+            }
+            const Rgba ref = adaptiveAt(static_cast<float>(depth[i]) /
+                                        static_cast<float>(refQuantile));
+            RIN_CHECK_EQ(gray[i], ref[0]);
+        }
+    }
+
+    // 47) stride 哨兵隔离：padding 单元 0xFFFF 不入直方图也不出现在输出（紧凑
+    //     与填充输入逐字节一致；若泄漏会推移 validCount/targetRank，等值必失）。
+    {
+        constexpr std::uint32_t kWidth = 3;
+        constexpr std::uint32_t kHeight = 2;
+        constexpr std::uint32_t kStrideUnits = 5;
+        const std::uint16_t compact[6] = {1000, 2000, 4000, 4000, 2000, 1000};
+        std::vector<std::uint16_t> padded(kStrideUnits * kHeight, 0xFFFF);
+        for (std::uint32_t row = 0; row < kHeight; ++row) {
+            for (std::uint32_t col = 0; col < kWidth; ++col) {
+                padded[row * kStrideUnits + col] = compact[row * kWidth + col];
+            }
+        }
+        std::vector<std::uint8_t> fromCompact;
+        std::vector<std::uint8_t> fromPadded;
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(compact, kWidth, kHeight, kWidth,
+                                                     fromCompact));
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(padded.data(), kWidth, kHeight,
+                                                     kStrideUnits, fromPadded));
+        RIN_CHECK_EQ(fromCompact.size(), std::size_t{kWidth * kHeight});
+        RIN_CHECK(fromCompact == fromPadded);
+    }
+
+    // 48) 入参校验反例：返回 false 且 dst 不被写（空指针/零宽/零高/stride 不足；
+    //     自适应路径不消费 scale/near/far，无对应参数）。
+    {
+        const std::uint16_t depth[4] = {100, 200, 300, 400};
+        std::vector<std::uint8_t> dst{0x5A, 0x5A};
+        const std::vector<std::uint8_t> sentinel = dst;
+        RIN_CHECK(!rin::convertDepth16ToGray8Adaptive(nullptr, 2, 1, 2, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8Adaptive(depth, 0, 1, 0, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8Adaptive(depth, 2, 0, 2, dst));
+        RIN_CHECK(!rin::convertDepth16ToGray8Adaptive(depth, 3, 1, 2, dst));
+        RIN_CHECK(dst == sentinel);
+    }
+
+    // ============ convertDepth16ToGray8Pair（M6-06 采集侧优化）============
+
+    // 49) 单趟双输出与"分别调用两个单 rendition 函数"逐字节等价：多帧形态覆盖
+    //     LCG 随机（N>=100 两趟直方图路径 / N<100 退化最大值路径）、N=100 边界
+    //     分位、单有效像素、极值混合（0/1/0xFFFF）、stride 哨兵填充。
+    {
+        // 帧构造器：尺寸 + LCG 种子 + 无效像素占比 + 可选 stride 哨兵。
+        const auto makeCase = [](std::uint32_t width, std::uint32_t height,
+                                 std::uint32_t seed, std::uint32_t zeroMod,
+                                 std::uint32_t strideUnits) {
+            std::vector<std::uint16_t> frame(static_cast<std::size_t>(strideUnits) * height,
+                                             0xABCD);  // padding 哨兵。
+            std::uint32_t lcg = seed;
+            for (std::uint32_t y = 0; y < height; ++y) {
+                for (std::uint32_t x = 0; x < width; ++x) {
+                    lcg = lcg * 1103515245u + 12345u;
+                    const std::uint32_t sample = (lcg >> 16) & 0xFFFFu;
+                    // 约 1/zeroMod 概率置 0（无效像素），其余全值域均匀分布。
+                    frame[static_cast<std::size_t>(y) * strideUnits + x] =
+                        (sample == 0 || (zeroMod != 0 && sample % zeroMod == 0))
+                            ? std::uint16_t{0}
+                            : static_cast<std::uint16_t>(sample ? sample : 1u);
+                }
+            }
+            return frame;
+        };
+
+        struct PairCase {
+            const char* label;
+            std::uint32_t width;
+            std::uint32_t height;
+            std::uint32_t seed;
+            std::uint32_t zeroMod;    // 0 = 不注入无效像素。
+            std::uint32_t strideUnits;
+        };
+        const std::vector<PairCase> cases = {
+            {"lcg 32x32 mixed zeros (N>=100 path)", 32, 32, 20260929u, 8, 32},
+            {"lcg 64x48 sparse zeros", 64, 48, 777u, 32, 70},   // stride > width。
+            {"lcg 7x7 degenerate N<100", 7, 7, 424242u, 4, 7},
+            {"lcg 10x10 N=100 boundary", 10, 10, 99u, 16, 12},
+            {"lcg 3x2 dense zeros", 3, 2, 5u, 2, 5},
+        };
+        constexpr float kScale = 0.001f;
+        constexpr float kNear = 0.2f;
+        constexpr float kFar = 6.5f;
+        for (const PairCase& c : cases) {
+            const std::vector<std::uint16_t> frame =
+                makeCase(c.width, c.height, c.seed, c.zeroMod, c.strideUnits);
+            std::vector<std::uint8_t> pairGray;
+            std::vector<std::uint8_t> pairAdaptive;
+            std::vector<std::uint8_t> refGray;
+            std::vector<std::uint8_t> refAdaptive;
+            const bool pairOk = rin::convertDepth16ToGray8Pair(
+                frame.data(), c.width, c.height, c.strideUnits, kScale, kNear, kFar,
+                pairGray, pairAdaptive);
+            const bool grayOk = rin::convertDepth16ToGray8(
+                frame.data(), c.width, c.height, c.strideUnits, kScale, kNear, kFar,
+                refGray);
+            const bool adaptiveOk = rin::convertDepth16ToGray8Adaptive(
+                frame.data(), c.width, c.height, c.strideUnits, refAdaptive);
+            RIN_CHECK_MSG(pairOk && grayOk && adaptiveOk, std::string("pair: ") + c.label);
+            if (!(pairOk && grayOk && adaptiveOk)) {
+                continue;
+            }
+            RIN_CHECK_EQ(pairGray.size(), static_cast<std::size_t>(c.width) * c.height);
+            RIN_CHECK_EQ(pairAdaptive.size(),
+                         static_cast<std::size_t>(c.width) * c.height);
+            RIN_CHECK_MSG(pairGray == refGray,
+                          std::string("pair gray bytes equal single-call: ") + c.label);
+            RIN_CHECK_MSG(pairAdaptive == refAdaptive,
+                          std::string("pair adaptive bytes equal single-call: ") + c.label);
+        }
+
+        // 单有效像素（1x1）：自适应端点（唯一值 = 分位 → 255）与固定域值一致。
+        {
+            const std::uint16_t lone[1] = {2000};  // 2.0m：t=0.5 → gray 128。
+            std::vector<std::uint8_t> pairGray;
+            std::vector<std::uint8_t> pairAdaptive;
+            std::vector<std::uint8_t> refGray;
+            std::vector<std::uint8_t> refAdaptive;
+            RIN_CHECK(rin::convertDepth16ToGray8Pair(lone, 1, 1, 1, 0.001f, 1.0f, 3.0f,
+                                                     pairGray, pairAdaptive));
+            RIN_CHECK(rin::convertDepth16ToGray8(lone, 1, 1, 1, 0.001f, 1.0f, 3.0f,
+                                                 refGray));
+            RIN_CHECK(rin::convertDepth16ToGray8Adaptive(lone, 1, 1, 1, refAdaptive));
+            RIN_CHECK(pairGray == refGray && pairAdaptive == refAdaptive);
+            RIN_CHECK_EQ(pairGray[0], std::uint8_t{128});
+            RIN_CHECK_EQ(pairAdaptive[0], std::uint8_t{255});  // 唯一有效值 = 分位。
+        }
+        // 极值混合（0/1/0xFFFF 逐像素）：与单函数逐字节等价 + 无效像素 0。
+        {
+            const std::uint16_t extremes[6] = {0, 1, 0xFFFF, 65535, 0, 1};
+            std::vector<std::uint8_t> pairGray;
+            std::vector<std::uint8_t> pairAdaptive;
+            std::vector<std::uint8_t> refGray;
+            std::vector<std::uint8_t> refAdaptive;
+            RIN_CHECK(rin::convertDepth16ToGray8Pair(extremes, 3, 2, 3, 0.001f, 0.2f, 6.5f,
+                                                     pairGray, pairAdaptive));
+            RIN_CHECK(rin::convertDepth16ToGray8(extremes, 3, 2, 3, 0.001f, 0.2f, 6.5f,
+                                                 refGray));
+            RIN_CHECK(rin::convertDepth16ToGray8Adaptive(extremes, 3, 2, 3, refAdaptive));
+            RIN_CHECK(pairGray == refGray && pairAdaptive == refAdaptive);
+            RIN_CHECK_EQ(pairGray[0], std::uint8_t{0});
+            RIN_CHECK_EQ(pairAdaptive[0], std::uint8_t{0});
+            RIN_CHECK_EQ(pairGray[4], std::uint8_t{0});
+            RIN_CHECK_EQ(pairAdaptive[4], std::uint8_t{0});
+            // 1（< near）与 0xFFFF/65535（= 分位/超分位）：固定域下方截断 → 白；
+            // 自适应以 N<100 退化分位 65535 归一：raw=1 → round(255/65535)=0（黑）。
+            for (const std::size_t idx : {std::size_t{1}, std::size_t{5}}) {
+                RIN_CHECK_EQ(pairGray[idx], std::uint8_t{255});
+                RIN_CHECK_EQ(pairAdaptive[idx], std::uint8_t{0});
+            }
+            RIN_CHECK_EQ(pairGray[2], std::uint8_t{0});
+            RIN_CHECK_EQ(pairAdaptive[2], std::uint8_t{255});
+        }
+    }
+
+    // 50) 全帧无效深度：pair 返回 true 且两缓冲全 0（size == w*h），与分别调用
+    //     两个单函数的输出逐字节一致。
+    {
+        std::vector<std::uint16_t> depth(12, 0);  // 3x4 全无效。
+        std::vector<std::uint8_t> pairGray{0x5A};
+        std::vector<std::uint8_t> pairAdaptive{0x5A};
+        std::vector<std::uint8_t> refGray;
+        std::vector<std::uint8_t> refAdaptive;
+        RIN_CHECK(rin::convertDepth16ToGray8Pair(depth.data(), 3, 4, 3, 0.001f, 0.2f, 6.5f,
+                                                 pairGray, pairAdaptive));
+        RIN_CHECK(rin::convertDepth16ToGray8(depth.data(), 3, 4, 3, 0.001f, 0.2f, 6.5f,
+                                             refGray));
+        RIN_CHECK(rin::convertDepth16ToGray8Adaptive(depth.data(), 3, 4, 3, refAdaptive));
+        RIN_CHECK_EQ(pairGray.size(), std::size_t{12});
+        RIN_CHECK_EQ(pairAdaptive.size(), std::size_t{12});
+        RIN_CHECK(pairGray == refGray && pairAdaptive == refAdaptive);
+        for (const std::uint8_t level : pairGray) {
+            RIN_CHECK_EQ(level, std::uint8_t{0});
+        }
+        for (const std::uint8_t level : pairAdaptive) {
+            RIN_CHECK_EQ(level, std::uint8_t{0});
+        }
+    }
+
+    // 51) 校验反例：pair 与单 rendition 函数的拒绝语义——结构性反例（空指针/
+    //     零尺寸/stride 不足）三者同拒且双缓冲均不被写；参数反例（scale<=0/
+    //     far<=near）pair 与 convertDepth16ToGray8 同拒（灰度 rendition 消费
+    //     参数，头文件契约），而 convertDepth16ToGray8Adaptive 按契约不消费
+    //     scale/near/far、对参数不敏感（显式见证这一分歧，防误改）。
+    {
+        const std::uint16_t depth[4] = {100, 200, 300, 400};
+        struct RejectCase {
+            const char* label;
+            const std::uint16_t* src;
+            std::uint32_t width;
+            std::uint32_t height;
+            std::uint32_t strideUnits;
+            float scale;
+            float nearMeters;
+            float farMeters;
+            bool structural;  // true = 亦约束 adaptive 单函数的校验面。
+        };
+        const std::vector<RejectCase> rejects = {
+            {"nullptr", nullptr, 2, 1, 2, 0.001f, 1.0f, 3.0f, true},
+            {"zero width", depth, 0, 1, 0, 0.001f, 1.0f, 3.0f, true},
+            {"zero height", depth, 2, 0, 2, 0.001f, 1.0f, 3.0f, true},
+            {"stride < width", depth, 3, 1, 2, 0.001f, 1.0f, 3.0f, true},
+            {"scale = 0", depth, 2, 1, 2, 0.0f, 1.0f, 3.0f, false},
+            {"scale < 0", depth, 2, 1, 2, -1.0f, 1.0f, 3.0f, false},
+            {"far == near", depth, 2, 1, 2, 0.001f, 3.0f, 3.0f, false},
+            {"far < near", depth, 2, 1, 2, 0.001f, 3.0f, 1.0f, false},
+        };
+        for (const RejectCase& r : rejects) {
+            std::vector<std::uint8_t> pairGray{0x5A, 0x5A};
+            std::vector<std::uint8_t> pairAdaptive{0x5A, 0x5A};
+            const std::vector<std::uint8_t> sentinel = pairGray;
+            const bool pairRejected = !rin::convertDepth16ToGray8Pair(
+                r.src, r.width, r.height, r.strideUnits, r.scale, r.nearMeters, r.farMeters,
+                pairGray, pairAdaptive);
+            std::vector<std::uint8_t> singleGray{0x5A, 0x5A};
+            const bool grayRejected = !rin::convertDepth16ToGray8(
+                r.src, r.width, r.height, r.strideUnits, r.scale, r.nearMeters,
+                r.farMeters, singleGray);
+            RIN_CHECK_MSG(pairRejected, std::string("pair rejects: ") + r.label);
+            RIN_CHECK_MSG(pairRejected == grayRejected,
+                          std::string("pair and gray single agree: ") + r.label);
+            RIN_CHECK_MSG(pairGray == sentinel && pairAdaptive == sentinel,
+                          std::string("pair leaves both buffers untouched: ") + r.label);
+            RIN_CHECK(singleGray == sentinel);
+            if (r.structural) {
+                std::vector<std::uint8_t> singleAdaptive{0x5A, 0x5A};
+                const bool adaptiveRejected = !rin::convertDepth16ToGray8Adaptive(
+                    r.src, r.width, r.height, r.strideUnits, singleAdaptive);
+                RIN_CHECK_MSG(adaptiveRejected,
+                              std::string("structural case rejects adaptive too: ") +
+                                  r.label);
+                RIN_CHECK(singleAdaptive == sentinel);
+            } else {
+                // 参数反例不约束 adaptive（契约：不消费 scale/near/far）。
+                std::vector<std::uint8_t> singleAdaptive;
+                const bool adaptiveRejected = !rin::convertDepth16ToGray8Adaptive(
+                    r.src, r.width, r.height, r.strideUnits, singleAdaptive);
+                RIN_CHECK_MSG(!adaptiveRejected,
+                              std::string("adaptive ignores depth-window params: ") +
+                                  r.label);
+            }
+        }
     }
 
     return rin_test::exitStatus();

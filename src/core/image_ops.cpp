@@ -827,13 +827,18 @@ private:
 
 std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descriptor,
                                                  const NodeInstance& instance) {
-    if (descriptor.typeId == "source") {
-        return nullptr;  // 注入型源节点（M4-07 引擎注入相机帧）。
+    // 注入型源节点（M4-07 引擎注入相机帧；M6-03 深度 rendition 源同型，DEC-017）。
+    if (descriptor.typeId == "source" || descriptor.typeId == "source_depth_jet" ||
+        descriptor.typeId == "source_depth_gray" ||
+        descriptor.typeId == "source_depth_adaptive") {
+        return nullptr;
     }
-    if (descriptor.typeId == "crop") {
+    if (descriptor.typeId == "crop" || descriptor.typeId == "crop_gray") {
+        // 灰度变体（M6-03）与 Rgba8 版共用同一实现：apply 按元素尺寸泛化，
+        // 冻结数值语义逐像素同映射（image_workflow_design.md §7）。
         return std::make_unique<CropImageNode>(descriptor, instance);
     }
-    if (descriptor.typeId == "downscale") {
+    if (descriptor.typeId == "downscale" || descriptor.typeId == "downscale_gray") {
         return std::make_unique<DownscaleImageNode>(descriptor, instance);
     }
     if (descriptor.typeId == "gaussian_blur") {

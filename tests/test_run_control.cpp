@@ -1,13 +1,15 @@
 // M5-06 工作流运行控制 + 假换真集成（ui_workspace_design.md §5.8 / DEC-016）
 // 引擎-UI 集成测试 —— 独立验证（Independent Verification Agent）。
+// M6 扩展（M6-03/04/05/06，DEC-017 工作流相机源四型 + ROI 控件防呆）。
 //
 // 被测面：
 //   1. 相机帧源接缝（apps/viewer/workflow_frame_source.hpp viewer::
 //      makeCameraFrameSource，对脚本化假 ICameraService）：最新帧语义
 //      （"上次已见序号"过滤读取 + 探测即消费）、零拷贝（ImageU8::wrap 与发布
-//      Frame 共享同一像素缓冲，指针相等）、多源分发（图内每个 source 节点按
-//      调用方传入水位独立推进）、无效帧（valid()==false → false）与 service
-//      空指针防御、sourceSequence 透传帧序号、wrap 后格式/尺寸/stride 一致；
+//      Frame/GrayFrame 共享同一像素缓冲，指针相等）、多源分发（图内每个 source
+//      节点按调用方传入水位独立推进）、无效帧（valid()==false → false）与
+//      service 空指针防御、sourceSequence 透传帧序号、wrap 后格式/尺寸/stride
+//      一致；
 //   2. 运行控制状态机（WorkflowCanvasState::afterGraphChange 纯逻辑 + 真引擎）：
 //      Idle 下同步生效无待生效（graphPending==false）、Running 下校验通过入队
 //      置 graphPending、app.cpp pump 契约行内联复刻（GraphApplied 事件清除 +
@@ -26,7 +28,21 @@
 //      有界稳定窗内无新发布）、Running 中直接 stop 数轮稳定收敛；
 //   4. 关闭竞态防御（对齐 test_workflow_engine §11 纪律）：Running 中
 //      executor.shutdown(false) 后 stop() 有界收敛 Idle 不悬挂（确认帧源接缝
-//      存在时引擎自身纪律仍成立）。
+//      存在时引擎自身纪律仍成立）；
+//   5. 相机源 rendition 路由（M6-05，DEC-017）：renditionForSourceType 五映射
+//      + 未知 typeId 回退 RGB；WorkflowSourceRouter 初态/未知节点回退、replace
+//      整体换新对读方生效；makeCameraFrameSource 对路由四 rendition（RGB/深度
+//      伪彩/深度灰度/深度自适应）按节点分发取帧（tryLoadFrame 三 kind +
+//      tryLoadGrayFrame 两 kind）、格式/尺寸/序号正确、Rgba8/Gray8 均零拷贝
+//      （pixels 指针相等）、无效帧 false 且水位不动、灰度通道与 RGB 隔离；
+//   6. 灰度链真引擎端到端（M6-03，DEC-017）：合成 Gray8 帧源 →
+//      source_depth_gray → crop_gray → gaussian_blur：各节点产物 valid、格式
+//      Gray8、尺寸符合冻结公式（源 32x24 / 裁切 16x12 / 模糊 16x12）、
+//      sourceSequence 透传、引擎保持 Running 无失败；
+//   7. pumpNodeOutput 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源）：选中
+//      crop 节点（入边来自 source）Running 后 panel.outputs 同时含选中节点与
+//      驱动节点快照（尺寸可得）；引擎回 Idle 后整体排空（一次 true、幂等
+//      二次 false）。
 //
 // DOD-02 适用性说明（与 tests/test_shutdown_drain.cpp 同纪律，如实取舍）：
 // 正常完成——§3 全链路覆盖（发布→捕获→执行→发布→UI 消费）；任务异常——节点
@@ -46,9 +62,14 @@
 //
 // 测试壳为 tests/test_util.hpp 的 RIN_CHECK*；有界等待用本文件匿名命名空间的
 // pollUntil/quietFor（与 workflow_engine_contract_suite.hpp 同款，不引入该头以
-// 避免契约套件符号混入）。假相机服务为脚本化最小实现：全部 12+1 个纯虚函数，
-// 帧由测试线程同步发布（mutex 保护的最新帧槽，"上次已见序号"语义），不创建
-// std::thread；Executor 线程（引擎帧泵）与测试线程的全部共享经该 mutex。
+// 避免契约套件符号混入）。假相机服务为脚本化最小实现：ICameraService 全部纯虚
+// 函数（含 M6-04 的 tryLoadGrayFrame 灰度 rendition 通道），帧由测试线程同步
+// 发布（按 FrameKind / GrayFrameKind 分槽的最新帧槽，"上次已见序号"语义），
+// 不创建 std::thread；Executor 线程（引擎帧泵）与测试线程的全部共享经该 mutex。
+// DOD-02 适用性说明（文件头"取舍说明"段）：§5/§6/§7 为 M6 新增——§5 路由分发
+// 与 §6 灰度链覆盖正常完成路径；§7 覆盖非 Running 排空消费；失败/拒绝/超时/
+// shutdown 取舍与 §1-§4 既有说明一致（失败归因归 test_workflow_engine §10，
+// stop 排空与关停竞态归 §3/§4，全部等待有界不悬挂）。
 
 #include "param_panel.hpp"  // WorkflowPanelState / pumpNodeOutput（含 node_canvas.hpp）
 
@@ -68,6 +89,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -119,18 +141,26 @@ constexpr std::chrono::milliseconds kQuietWindow{300};
 
 // --- 脚本化假相机服务（测试脚本面 + ICameraService 全纯虚实现） ---
 
-/// 测试线程同步发布最新帧；stop() 后 tryLoadFrame 恒为 false（ICameraService::stop
-/// 排空契约的最小等价：返回后全部数据通道不再有新发布）。帧读取与引擎帧泵线程
-/// 之间的共享经 mutex（帧源契约"非阻塞"指不等待帧到达，mutex 短临界区满足）。
+/// 测试线程同步发布最新帧（RGBA8 rendition 按 FrameKind 分槽；M6-04 起灰度
+/// rendition 按 GrayFrameKind 分槽）；stop() 后 tryLoadFrame/tryLoadGrayFrame
+/// 恒为 false（ICameraService::stop 排空契约的最小等价：返回后全部数据通道
+/// 不再有新发布）。帧读取与引擎帧泵线程之间的共享经 mutex（帧源契约"非阻塞"
+/// 指不等待帧到达，mutex 短临界区满足）。
 class FakeCameraService final : public rin::ICameraService {
 public:
     // --- 测试脚本面（测试主线程同步调用） ---
     void publish(rin::Frame frame) {
         const std::scoped_lock lock(mutex_);
-        latest_ = std::move(frame);
+        latestRgba_[frame.kind] = std::move(frame);
     }
 
-    // --- ICameraService（相机源接缝只经 tryLoadFrame；其余为契约桩） ---
+    void publishGray(rin::GrayFrameKind kind, rin::GrayFrame frame) {
+        const std::scoped_lock lock(mutex_);
+        latestGray_[kind] = std::move(frame);
+    }
+
+    // --- ICameraService（相机源接缝只经 tryLoadFrame/tryLoadGrayFrame；其余为
+    //     契约桩） ---
     rin::StartOutcome start(const rin::StreamRequest&) override {
         const std::scoped_lock lock(mutex_);
         state_ = rin::CameraServiceState::Streaming;
@@ -169,12 +199,30 @@ public:
         if (stopped_) {
             return false;  // 排空契约：stop 返回后不再有新发布。
         }
-        if (!latest_.valid() || latest_.kind != kind ||
-            latest_.sequence <= lastSeenSequence) {
+        const auto it = latestRgba_.find(kind);
+        if (it == latestRgba_.end() || !it->second.valid() ||
+            it->second.sequence <= lastSeenSequence) {
             return false;
         }
-        out = latest_;
-        lastSeenSequence = latest_.sequence;
+        out = it->second;
+        lastSeenSequence = it->second.sequence;
+        return true;
+    }
+
+    [[nodiscard]] bool tryLoadGrayFrame(rin::GrayFrameKind kind,
+                                        std::uint64_t& lastSeenSequence,
+                                        rin::GrayFrame& out) override {
+        const std::scoped_lock lock(mutex_);
+        if (stopped_) {
+            return false;  // 排空契约：stop 返回后不再有新发布。
+        }
+        const auto it = latestGray_.find(kind);
+        if (it == latestGray_.end() || !it->second.valid() ||
+            it->second.sequence <= lastSeenSequence) {
+            return false;
+        }
+        out = it->second;
+        lastSeenSequence = it->second.sequence;
         return true;
     }
 
@@ -199,7 +247,8 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    rin::Frame latest_;
+    std::map<rin::FrameKind, rin::Frame> latestRgba_;
+    std::map<rin::GrayFrameKind, rin::GrayFrame> latestGray_;
     bool stopped_ = false;
     rin::CameraServiceState state_ = rin::CameraServiceState::Idle;
 };
@@ -219,6 +268,40 @@ private:
         static_cast<std::size_t>(frame.stride) * height,
         static_cast<std::uint8_t>(sequence & 0xFF));
     return frame;
+}
+
+/// 确定性 Gray8 帧（紧凑行距 stride=width，M6-04 契约；递增图案逐像素可核对）。
+[[nodiscard]] rin::GrayFrame makeGrayFrame(std::uint64_t sequence, std::uint32_t width,
+                                           std::uint32_t height) {
+    rin::GrayFrame frame;
+    frame.width = width;
+    frame.height = height;
+    frame.stride = width;
+    frame.sequence = sequence;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            pixels[static_cast<std::size_t>(y) * width + x] =
+                static_cast<std::uint8_t>((x + y * width) & 0xFF);
+        }
+    }
+    frame.pixels =
+        std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels));
+    return frame;
+}
+
+/// 将 node → rendition 路由表装入 router（映射表外节点防御性回退 RGB）。
+/// WorkflowSourceRouter 持有 atomic<shared_ptr>（不可拷贝/移动），只能在所属
+/// 作用域就地构造后填充。
+void fillRouter(
+    viewer::WorkflowSourceRouter& router,
+    std::initializer_list<
+        std::pair<const rin::NodeId, viewer::WorkflowSourceRendition>> routes) {
+    auto map = std::make_shared<viewer::WorkflowSourceRouter::RouteMap>();
+    for (const auto& entry : routes) {
+        map->insert_or_assign(entry.first, entry.second);
+    }
+    router.replace(std::move(map));
 }
 
 /// source(id) -> crop -> grayify 标准三节点链（crop 默认 ROI (0,0,64,64) 适配
@@ -247,8 +330,10 @@ void testCameraFrameSourceSeam() {
     // 最新帧语义 + 零拷贝 + sourceSequence 透传 + 格式/尺寸/stride 一致。
     {
         auto service = std::make_shared<FakeCameraService>();
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
         const rin::WorkflowFrameSource source =
-            viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb);
+            viewer::makeCameraFrameSource(service, router);
 
         // 发布 seq 1..3（保留各缓冲 shared_ptr 供零拷贝核对）。
         rin::Frame frame1 = makeFrame(1, 32, 24);
@@ -296,10 +381,13 @@ void testCameraFrameSourceSeam() {
     }
 
     // 多源分发：两个 source 节点各自独立水位（节点 A 消费不推进节点 B 水位）。
+    // 节点 10/20 不在路由表内 → 防御性回退 RGB（路由覆盖与水位语义正交）。
     {
         auto service = std::make_shared<FakeCameraService>();
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {});
         const rin::WorkflowFrameSource source =
-            viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb);
+            viewer::makeCameraFrameSource(service, router);
         service->publish(makeFrame(1, 16, 16));
         service->publish(makeFrame(2, 16, 16));
         service->publish(makeFrame(3, 16, 16));
@@ -330,8 +418,10 @@ void testCameraFrameSourceSeam() {
     // 无效帧防御：width=0（Frame::valid()==false）与空像素缓冲 → false。
     {
         auto service = std::make_shared<FakeCameraService>();
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
         const rin::WorkflowFrameSource source =
-            viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb);
+            viewer::makeCameraFrameSource(service, router);
         rin::Frame zeroWidth = makeFrame(1, 32, 24);
         zeroWidth.width = 0;
         service->publish(zeroWidth);
@@ -355,24 +445,42 @@ void testCameraFrameSourceSeam() {
 
     // service 空指针 → false（引擎停止拉帧前的关闭窗口内安全）。
     {
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
         const rin::WorkflowFrameSource nullSource =
-            viewer::makeCameraFrameSource(nullptr, rin::FrameKind::Rgb);
+            viewer::makeCameraFrameSource(nullptr, router);
         std::uint64_t lastSeen = 0;
         rin::WorkflowFrameInput out;
         RIN_CHECK_MSG(!nullSource(1, lastSeen, out),
                       "seam: null service returns false (no crash)");
     }
 
-    // 深度通道隔离：kind=Depth 时 RGB 帧不交付（帧种类固定语义）。
+    // 灰度 rendition（M6-04）：Gray8 帧经接缝零拷贝包装、sourceSequence 透传。
     {
         auto service = std::make_shared<FakeCameraService>();
-        const rin::WorkflowFrameSource depthSource =
-            viewer::makeCameraFrameSource(service, rin::FrameKind::Depth);
-        service->publish(makeFrame(1, 32, 24));  // RGB 帧。
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {{1, viewer::WorkflowSourceRendition::DepthGray}});
+        const rin::WorkflowFrameSource source =
+            viewer::makeCameraFrameSource(service, router);
+        rin::GrayFrame gray = makeGrayFrame(4, 24, 18);
+        service->publishGray(rin::GrayFrameKind::Depth, gray);
+
         std::uint64_t lastSeen = 0;
         rin::WorkflowFrameInput out;
-        RIN_CHECK_MSG(!depthSource(1, lastSeen, out),
-                      "seam: camera source is bound to its frame kind");
+        RIN_CHECK_MSG(source(1, lastSeen, out),
+                      "seam: gray rendition delivers the latest gray frame");
+        RIN_CHECK_EQ(out.sourceSequence, std::uint64_t{4});
+        RIN_CHECK_EQ(lastSeen, std::uint64_t{4});
+        RIN_CHECK_MSG(out.image.pixels().get() == gray.pixels.get(),
+                      "seam: wrapped gray image shares the published buffer (zero copy)");
+        RIN_CHECK(out.image.format() == rin::PortType::Gray8);
+        RIN_CHECK_EQ(out.image.width(), 24u);
+        RIN_CHECK_EQ(out.image.height(), 18u);
+        RIN_CHECK_EQ(out.image.stride(), 24u);  // 紧凑行距（Gray8 stride >= width）。
+
+        // 再探测：无更新灰度帧 → false。
+        rin::WorkflowFrameInput discarded;
+        RIN_CHECK(!source(1, lastSeen, discarded));
     }
 }
 
@@ -407,10 +515,11 @@ void testRunControlStateMachine() {
         return;
     }
     auto service = std::make_shared<FakeCameraService>();
+    viewer::WorkflowSourceRouter router;
+    fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
     rin::WorkflowEngineConfig config;
     config.pumpInterval = std::chrono::milliseconds{2};
-    config.frameSource =
-        viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb);
+    config.frameSource = viewer::makeCameraFrameSource(service, router);
     std::shared_ptr<rin::IWorkflowEngine> engine =
         rin::createWorkflowEngine(executor, std::move(config));
     RIN_CHECK(static_cast<bool>(engine));
@@ -539,10 +648,11 @@ void testEngineUiEndToEnd() {
         return;
     }
     auto service = std::make_shared<FakeCameraService>();
+    viewer::WorkflowSourceRouter router;
+    fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
     rin::WorkflowEngineConfig config;
     config.pumpInterval = std::chrono::milliseconds{2};
-    config.frameSource =
-        viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb);
+    config.frameSource = viewer::makeCameraFrameSource(service, router);
     std::shared_ptr<rin::IWorkflowEngine> engine =
         rin::createWorkflowEngine(executor, std::move(config));
     RIN_CHECK(static_cast<bool>(engine));
@@ -758,8 +868,7 @@ void testEngineUiEndToEnd() {
         service->stop();
         std::uint64_t seamProbe = 0;
         rin::WorkflowFrameInput seamOut;
-        RIN_CHECK_MSG(!viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb)(
-                          1, seamProbe, seamOut),
+        RIN_CHECK_MSG(!viewer::makeCameraFrameSource(service, router)(1, seamProbe, seamOut),
                       "e2e: stopped service yields no frames through the seam");
         service.reset();  // app.cpp：服务 reset（帧源闭包以 shared_ptr 持有，不悬垂）。
         // 2) 工作流引擎 stop + 释放。
@@ -796,10 +905,11 @@ void testShutdownRaceDefense() {
         return;
     }
     auto service = std::make_shared<FakeCameraService>();
+    viewer::WorkflowSourceRouter router;
+    fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
     rin::WorkflowEngineConfig config;
     config.pumpInterval = std::chrono::milliseconds{2};
-    config.frameSource =
-        viewer::makeCameraFrameSource(service, rin::FrameKind::Rgb);
+    config.frameSource = viewer::makeCameraFrameSource(service, router);
     std::shared_ptr<rin::IWorkflowEngine> engine =
         rin::createWorkflowEngine(executor, std::move(config));
     RIN_CHECK(static_cast<bool>(engine));
@@ -824,6 +934,368 @@ void testShutdownRaceDefense() {
     engine.reset();  // 析构幂等 stop（executor 已 shutdown，不再调 shutdown）。
 }
 
+// --- 5. 相机源 rendition 路由（M6-05，DEC-017） ---
+
+void testCameraSourceRenditionRouting() {
+    using viewer::WorkflowSourceRendition;
+
+    // renditionForSourceType：四个 source 型映射 + 未知 typeId 回退 RGB。
+    RIN_CHECK(viewer::renditionForSourceType("source") ==
+              WorkflowSourceRendition::RgbColor);
+    RIN_CHECK(viewer::renditionForSourceType("source_depth_jet") ==
+              WorkflowSourceRendition::DepthJet);
+    RIN_CHECK(viewer::renditionForSourceType("source_depth_gray") ==
+              WorkflowSourceRendition::DepthGray);
+    RIN_CHECK(viewer::renditionForSourceType("source_depth_adaptive") ==
+              WorkflowSourceRendition::DepthAdaptiveGray);
+    RIN_CHECK_MSG(viewer::renditionForSourceType("") ==
+                      WorkflowSourceRendition::RgbColor,
+                  "routing: empty typeId falls back to RGB");
+    RIN_CHECK_MSG(viewer::renditionForSourceType("source_depth") ==
+                      WorkflowSourceRendition::RgbColor,
+                  "routing: unknown depth typeId falls back to RGB");
+    RIN_CHECK_MSG(viewer::renditionForSourceType("crop") ==
+                      WorkflowSourceRendition::RgbColor,
+                  "routing: non-source typeId falls back to RGB");
+
+    // WorkflowSourceRouter：初态回退、路由命中、未知节点回退、replace 整体换新。
+    {
+        viewer::WorkflowSourceRouter router;  // 未 replace（空快照）：回退 RGB。
+        RIN_CHECK(router.renditionFor(1) == WorkflowSourceRendition::RgbColor);
+        auto routes = std::make_shared<viewer::WorkflowSourceRouter::RouteMap>();
+        (*routes)[7] = WorkflowSourceRendition::DepthGray;
+        router.replace(std::move(routes));
+        RIN_CHECK(router.renditionFor(7) == WorkflowSourceRendition::DepthGray);
+        RIN_CHECK_MSG(router.renditionFor(8) == WorkflowSourceRendition::RgbColor,
+                      "router: unknown node falls back to RGB");
+        auto replaced = std::make_shared<viewer::WorkflowSourceRouter::RouteMap>();
+        (*replaced)[7] = WorkflowSourceRendition::DepthJet;
+        router.replace(std::move(replaced));
+        RIN_CHECK_MSG(router.renditionFor(7) == WorkflowSourceRendition::DepthJet,
+                      "router: replace swaps the whole snapshot for readers");
+    }
+
+    // makeCameraFrameSource 按路由分发四 rendition：各自取对应通道、格式/尺寸/
+    // 序号正确、Rgba8/Gray8 均零拷贝、水位按节点独立。
+    {
+        auto service = std::make_shared<FakeCameraService>();
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router,
+                   {{1, WorkflowSourceRendition::RgbColor},
+                    {2, WorkflowSourceRendition::DepthJet},
+                    {3, WorkflowSourceRendition::DepthGray},
+                    {4, WorkflowSourceRendition::DepthAdaptiveGray}});
+        const rin::WorkflowFrameSource source =
+            viewer::makeCameraFrameSource(service, router);
+
+        rin::Frame rgb = makeFrame(5, 32, 24);
+        rin::Frame jet = makeFrame(6, 32, 24);
+        jet.kind = rin::FrameKind::DepthJet;
+        rin::GrayFrame gray = makeGrayFrame(7, 32, 24);
+        rin::GrayFrame adaptive = makeGrayFrame(8, 32, 24);
+        service->publish(rgb);
+        service->publish(jet);
+        service->publishGray(rin::GrayFrameKind::Depth, gray);
+        service->publishGray(rin::GrayFrameKind::DepthAdaptive, adaptive);
+
+        std::uint64_t seen1 = 0;
+        rin::WorkflowFrameInput out1;
+        RIN_CHECK_MSG(source(1, seen1, out1), "routing: RGB node gets the RGB rendition");
+        RIN_CHECK_EQ(out1.sourceSequence, std::uint64_t{5});
+        RIN_CHECK_EQ(seen1, std::uint64_t{5});
+        RIN_CHECK(out1.image.format() == rin::PortType::Rgba8);
+        RIN_CHECK(out1.image.pixels().get() == rgb.pixels.get());
+        RIN_CHECK_EQ(out1.image.width(), 32u);
+        RIN_CHECK_EQ(out1.image.stride(), 128u);
+
+        std::uint64_t seen2 = 0;
+        rin::WorkflowFrameInput out2;
+        RIN_CHECK_MSG(source(2, seen2, out2),
+                      "routing: DepthJet node gets the fixed jet rendition");
+        RIN_CHECK_EQ(out2.sourceSequence, std::uint64_t{6});
+        RIN_CHECK(out2.image.format() == rin::PortType::Rgba8);
+        RIN_CHECK(out2.image.pixels().get() == jet.pixels.get());
+
+        std::uint64_t seen3 = 0;
+        rin::WorkflowFrameInput out3;
+        RIN_CHECK_MSG(source(3, seen3, out3),
+                      "routing: DepthGray node gets the gray rendition");
+        RIN_CHECK_EQ(out3.sourceSequence, std::uint64_t{7});
+        RIN_CHECK(out3.image.format() == rin::PortType::Gray8);
+        RIN_CHECK_EQ(out3.image.stride(), 32u);
+        RIN_CHECK(out3.image.pixels().get() == gray.pixels.get());
+
+        std::uint64_t seen4 = 0;
+        rin::WorkflowFrameInput out4;
+        RIN_CHECK_MSG(source(4, seen4, out4),
+                      "routing: DepthAdaptive node gets the adaptive rendition");
+        RIN_CHECK_EQ(out4.sourceSequence, std::uint64_t{8});
+        RIN_CHECK(out4.image.format() == rin::PortType::Gray8);
+        RIN_CHECK(out4.image.pixels().get() == adaptive.pixels.get());
+
+        // 探测即消费：各节点再探测无新帧（水位按 rendition 通道独立）。
+        rin::WorkflowFrameInput discarded;
+        RIN_CHECK(!source(1, seen1, discarded));
+        RIN_CHECK(!source(2, seen2, discarded));
+        RIN_CHECK(!source(3, seen3, discarded));
+        RIN_CHECK(!source(4, seen4, discarded));
+
+        // 未知节点回退 RGB：自带水位独立取到当前 RGB 最新帧。
+        std::uint64_t seen9 = 0;
+        rin::WorkflowFrameInput out9;
+        RIN_CHECK_MSG(source(9, seen9, out9),
+                      "routing: unlisted node falls back to the RGB channel");
+        RIN_CHECK_EQ(out9.sourceSequence, std::uint64_t{5});
+        RIN_CHECK(out9.image.pixels().get() == rgb.pixels.get());
+
+        // 无效帧防御（RGBA8 与 Gray8 两路）：false 且水位不动、不吞后续有效帧。
+        rin::Frame badJet = makeFrame(9, 32, 24);
+        badJet.kind = rin::FrameKind::DepthJet;
+        badJet.width = 0;
+        service->publish(badJet);
+        std::uint64_t probe2 = seen2;
+        RIN_CHECK(!source(2, probe2, discarded));
+        RIN_CHECK_EQ(probe2, std::uint64_t{6});
+
+        rin::GrayFrame badGray = makeGrayFrame(9, 32, 24);
+        badGray.stride = 16;  // < width → GrayFrame::valid() == false。
+        service->publishGray(rin::GrayFrameKind::Depth, badGray);
+        std::uint64_t probe3 = seen3;
+        RIN_CHECK(!source(3, probe3, discarded));
+        RIN_CHECK_EQ(probe3, std::uint64_t{7});
+
+        service->publishGray(rin::GrayFrameKind::Depth, makeGrayFrame(10, 32, 24));
+        std::uint64_t seen3b = seen3;
+        rin::WorkflowFrameInput out3b;
+        RIN_CHECK(source(3, seen3b, out3b));
+        RIN_CHECK_EQ(out3b.sourceSequence, std::uint64_t{10});
+    }
+
+    // 通道隔离：灰度节点在仅有 RGB 发布时取不到帧（rendition 固定语义）。
+    {
+        auto service = std::make_shared<FakeCameraService>();
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {{3, WorkflowSourceRendition::DepthGray}});
+        const rin::WorkflowFrameSource source =
+            viewer::makeCameraFrameSource(service, router);
+        service->publish(makeFrame(1, 16, 16));  // 仅 RGB 通道有帧。
+        std::uint64_t seen = 0;
+        rin::WorkflowFrameInput out;
+        RIN_CHECK_MSG(!source(3, seen, out),
+                      "routing: gray rendition is bound to its gray channel");
+        RIN_CHECK_EQ(seen, std::uint64_t{0});
+    }
+
+    // 空指针服务 + 路由 → false（关闭窗口内安全）。
+    {
+        viewer::WorkflowSourceRouter router;
+        fillRouter(router, {{1, WorkflowSourceRendition::DepthJet}});
+        const rin::WorkflowFrameSource nullSource =
+            viewer::makeCameraFrameSource(nullptr, router);
+        std::uint64_t seen = 0;
+        rin::WorkflowFrameInput out;
+        RIN_CHECK(!nullSource(1, seen, out));
+    }
+}
+
+// --- 6. 灰度链真引擎端到端（M6-03，DEC-017） ---
+
+void testGrayChainEndToEnd() {
+    executor::Executor executor;
+    executor::ExecutorConfig executorConfig;
+    const bool initialized = executor.initialize(executorConfig);
+    RIN_CHECK(initialized);
+    if (!initialized) {
+        return;
+    }
+    auto service = std::make_shared<FakeCameraService>();
+    viewer::WorkflowSourceRouter router;
+    fillRouter(router, {{1, viewer::WorkflowSourceRendition::DepthGray}});
+    rin::WorkflowEngineConfig config;
+    config.pumpInterval = std::chrono::milliseconds{2};
+    config.frameSource = viewer::makeCameraFrameSource(service, router);
+    std::shared_ptr<rin::IWorkflowEngine> engine =
+        rin::createWorkflowEngine(executor, std::move(config));
+    RIN_CHECK(static_cast<bool>(engine));
+    if (!engine) {
+        return;
+    }
+
+    // source_depth_gray -> crop_gray(16x12 @ (0,0)) -> gaussian_blur（默认
+    // radius=3/sigma=1.5；Gray8 保持尺寸）。
+    rin::WorkflowGraph graph;
+    {
+        rin::NodeInstance source;
+        source.id = 1;
+        source.typeId = "source_depth_gray";
+        rin::NodeInstance crop;
+        crop.id = 2;
+        crop.typeId = "crop_gray";
+        crop.params = {
+            {"x", rin::ParamValue{static_cast<std::int64_t>(0)}},
+            {"y", rin::ParamValue{static_cast<std::int64_t>(0)}},
+            {"width", rin::ParamValue{static_cast<std::int64_t>(16)}},
+            {"height", rin::ParamValue{static_cast<std::int64_t>(12)}},
+        };
+        rin::NodeInstance blur;
+        blur.id = 3;
+        blur.typeId = "gaussian_blur";
+        graph.nodes = {source, crop, blur};
+        graph.connections = {
+            rin::Connection{{1, rin::PortDirection::Output, 0},
+                            {2, rin::PortDirection::Input, 0}},
+            rin::Connection{{2, rin::PortDirection::Output, 0},
+                            {3, rin::PortDirection::Input, 0}},
+        };
+    }
+    RIN_CHECK_MSG(engine->applyGraph(graph).ok, "gray chain: graph is admitted");
+    const rin::AdmissionResult admission = engine->start();
+    RIN_CHECK_MSG(admission.admitted, "gray chain: start admitted");
+    if (!admission.admitted) {
+        engine->stop();
+        engine.reset();
+        (void)executor.shutdown(true);
+        return;
+    }
+
+    // 合成 Gray8 帧源（32x24 递增图案，发布 3 帧后停止 → 最新帧语义收敛 seq3）。
+    service->publishGray(rin::GrayFrameKind::Depth, makeGrayFrame(1, 32, 24));
+    service->publishGray(rin::GrayFrameKind::Depth, makeGrayFrame(2, 32, 24));
+    service->publishGray(rin::GrayFrameKind::Depth, makeGrayFrame(3, 32, 24));
+
+    // 各节点产物：valid、格式 Gray8、尺寸符合冻结公式、sourceSequence 透传。
+    {
+        std::uint64_t seen1 = 0;
+        rin::NodeOutputSnapshot out1;
+        RIN_CHECK_MSG(pollUntil([&] {
+                          return engine->tryLoadNodeOutput(1, seen1, out1) &&
+                                 out1.valid() && out1.sourceSequence == 3;
+                      }),
+                      "gray chain: source_depth_gray carries the camera frame sequence");
+        RIN_CHECK(out1.format == rin::PortType::Gray8);
+        RIN_CHECK_EQ(out1.width, 32u);
+        RIN_CHECK_EQ(out1.height, 24u);
+
+        std::uint64_t seen2 = 0;
+        rin::NodeOutputSnapshot out2;
+        RIN_CHECK_MSG(pollUntil([&] {
+                          return engine->tryLoadNodeOutput(2, seen2, out2) &&
+                                 out2.valid() && out2.sourceSequence == 3;
+                      }),
+                      "gray chain: crop_gray executes on the gray rendition");
+        RIN_CHECK(out2.format == rin::PortType::Gray8);
+        RIN_CHECK_EQ(out2.width, 16u);  // 冻结 ROI 公式：(x+w, y+h) = (16, 12)。
+        RIN_CHECK_EQ(out2.height, 12u);
+
+        std::uint64_t seen3 = 0;
+        rin::NodeOutputSnapshot out3;
+        RIN_CHECK_MSG(pollUntil([&] {
+                          return engine->tryLoadNodeOutput(3, seen3, out3) &&
+                                 out3.valid() && out3.sourceSequence == 3;
+                      }),
+                      "gray chain: gaussian_blur consumes crop_gray output");
+        RIN_CHECK(out3.format == rin::PortType::Gray8);
+        RIN_CHECK_EQ(out3.width, 16u);  // 高斯模糊保持尺寸。
+        RIN_CHECK_EQ(out3.height, 12u);
+    }
+
+    // 灰度链合法执行：引擎保持 Running、无 Failed。
+    RIN_CHECK_MSG(engine->state() == rin::WorkflowEngineState::Running,
+                  "gray chain: engine stays Running after executing the gray chain");
+
+    engine->stop();
+    RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
+    engine.reset();
+    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+}
+
+// --- 7. pumpNodeOutput 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源） ---
+
+void testPumpNodeOutputDriverPull() {
+    executor::Executor executor;
+    executor::ExecutorConfig executorConfig;
+    const bool initialized = executor.initialize(executorConfig);
+    RIN_CHECK(initialized);
+    if (!initialized) {
+        return;
+    }
+    auto service = std::make_shared<FakeCameraService>();
+    viewer::WorkflowSourceRouter router;
+    fillRouter(router, {{1, viewer::WorkflowSourceRendition::RgbColor}});
+    rin::WorkflowEngineConfig config;
+    config.pumpInterval = std::chrono::milliseconds{2};
+    config.frameSource = viewer::makeCameraFrameSource(service, router);
+    std::shared_ptr<rin::IWorkflowEngine> engine =
+        rin::createWorkflowEngine(executor, std::move(config));
+    RIN_CHECK(static_cast<bool>(engine));
+    if (!engine) {
+        return;
+    }
+
+    // 画布：source(1) -> crop(2)，选中 crop（入边来自 source）。
+    WorkflowCanvasState canvas;
+    canvas.model.catalog = &engine->catalog();
+    RIN_CHECK(canvas.model.createNode("source", {0.0f, 0.0f}).ok);
+    RIN_CHECK(canvas.model.createNode("crop", {300.0f, 0.0f}).ok);
+    // 32x24 帧下默认 64x64 ROI 会被真实 crop 算子运行期拒绝：显式给合法 ROI。
+    RIN_CHECK(canvas.model.setParam(2, {"x", rin::ParamValue{static_cast<std::int64_t>(0)}}).ok);
+    RIN_CHECK(canvas.model.setParam(2, {"y", rin::ParamValue{static_cast<std::int64_t>(0)}}).ok);
+    RIN_CHECK(
+        canvas.model.setParam(2, {"width", rin::ParamValue{static_cast<std::int64_t>(16)}})
+            .ok);
+    RIN_CHECK(
+        canvas.model.setParam(2, {"height", rin::ParamValue{static_cast<std::int64_t>(12)}})
+            .ok);
+    RIN_CHECK(canvas.model
+                  .connect({1, rin::PortDirection::Output, 0},
+                           {2, rin::PortDirection::Input, 0})
+                  .ok);
+    canvas.afterGraphChange(engine.get());
+    RIN_CHECK(canvas.model.validation.ok);
+    canvas.model.selection.assign(1, 2);
+
+    const rin::AdmissionResult admission = engine->start();
+    RIN_CHECK(admission.admitted);
+    if (!admission.admitted) {
+        engine->stop();
+        engine.reset();
+        (void)executor.shutdown(true);
+        return;
+    }
+
+    // Running 后 pump：panel.outputs 同时含选中节点（crop 16x12）与输入驱动
+    // 节点（source 32x24）快照——驱动拉取即 ROI 联动约束的尺寸源。
+    WorkflowPanelState panel;
+    std::uint64_t publishSeq = 0;
+    RIN_CHECK_MSG(pollUntil([&] {
+                      service->publish(makeFrame(++publishSeq, 32, 24));
+                      (void)viewer::pumpNodeOutput(canvas, panel, *engine);
+                      const rin::NodeOutputSnapshot* driver = panel.outputs.find(1);
+                      return driver != nullptr && driver->valid() &&
+                             driver->width == 32 && driver->height == 24;
+                  }),
+                  "pump: driver node output (input size source) is cached");
+    const rin::NodeOutputSnapshot* selected = panel.outputs.find(2);
+    RIN_CHECK_MSG(selected != nullptr && selected->valid(),
+                  "pump: selected node output cached alongside the driver");
+    if (selected != nullptr) {
+        RIN_CHECK_EQ(selected->width, 16u);
+        RIN_CHECK_EQ(selected->height, 12u);
+    }
+    RIN_CHECK(panel.outputs.size() >= 1);
+
+    // 引擎回 Idle：pumpNodeOutput 整体排空（一次 true、幂等二次 false）。
+    engine->stop();
+    RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
+    RIN_CHECK_MSG(viewer::pumpNodeOutput(canvas, panel, *engine),
+                  "pump: leaving Running drains the panel cache once");
+    RIN_CHECK_EQ(panel.outputs.size(), std::size_t{0});
+    RIN_CHECK(!viewer::pumpNodeOutput(canvas, panel, *engine));
+
+    engine.reset();
+    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+}
+
 }  // namespace
 
 int main() {
@@ -831,5 +1303,8 @@ int main() {
     runSection("run_control_state_machine", testRunControlStateMachine);
     runSection("engine_ui_end_to_end", testEngineUiEndToEnd);
     runSection("shutdown_race_defense", testShutdownRaceDefense);
+    runSection("camera_source_rendition_routing", testCameraSourceRenditionRouting);
+    runSection("gray_chain_end_to_end", testGrayChainEndToEnd);
+    runSection("pump_node_output_driver_pull", testPumpNodeOutputDriverPull);
     return rin_test::exitStatus();
 }

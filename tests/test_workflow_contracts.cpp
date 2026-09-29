@@ -24,6 +24,15 @@
 //    SelfLoop/MultipleDrivers——含"完全相同的重复连线按 MultipleDrivers 计"；
 //    DanglingInput 逐端口报告；直接环与 3 节点间接环 Cycle 且 node 为
 //    kInvalidNode）+ 连线校验 first-issue-continue 短路语义 + 多问题累积。
+// 8) M6-03/M6-05 默认目录扩展（DEC-017，src/workflow/default_catalog.hpp 单一
+//    事实源）：四相机源型（source/source_depth_jet/source_depth_gray/
+//    source_depth_adaptive）descriptor valid + 端口签名（无输入、Rgba8/Gray8
+//    输出）+ source 居首（契约套件泛式构图依赖）；crop_gray/downscale_gray
+//    descriptor valid 且参数 schema 与 Rgba8 版逐字一致；makeDefaultImageNode
+//    工厂：四 source 型返回 nullptr（注入语义）、crop_gray/downscale_gray 返回
+//    实现且 Gray8 apply golden（裁切子矩形 / nearest 面积覆盖采样）、未知
+//    typeId 仍抛 invalid_argument；跨类型连线：source_depth_gray→grayify 报
+//    TypeMismatch、source_depth_gray→crop_gray→gaussian_blur 合法图通过。
 //
 // DOD-02 适用性说明：本契约面全部为单线程纯逻辑值语义（valid() 判定与
 // validateWorkflowGraph 纯函数，无任务提交/队列/取消/超时/shutdown 语义，
@@ -39,15 +48,24 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "rin/workflow_types.hpp"
+#include "default_catalog.hpp"
+
+#include <rin/image_ops.hpp>
+#include <rin/image_types.hpp>
+#include <rin/workflow_types.hpp>
 
 namespace {
 
 using rin::Connection;
+using rin::findNodeDescriptor;
+using rin::IImageNode;
+using rin::ImageU8;
 using rin::kInvalidNode;
 using rin::NodeCatalog;
 using rin::NodeDescriptor;
@@ -204,6 +222,39 @@ bool hasKind(const WorkflowValidation& v, ValidationIssueKind kind) {
         }
     }
     return false;
+}
+
+// 参数 schema 逐字段相等（ParamDescriptor 无 operator==，逐字段比较）。
+bool paramSchemasEqual(const std::vector<ParamDescriptor>& lhs,
+                       const std::vector<ParamDescriptor>& rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        const ParamDescriptor& a = lhs[i];
+        const ParamDescriptor& b = rhs[i];
+        if (a.id != b.id || a.label != b.label || a.kind != b.kind ||
+            !(a.defaultValue == b.defaultValue) || a.hasRange != b.hasRange ||
+            a.minValue != b.minValue || a.maxValue != b.maxValue ||
+            a.enumOptions != b.enumOptions) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 确定性 Gray8 小图（pixel(y,x) = y*width + x 的低 8 位，递增图案）。
+ImageU8 makeGrayImage(std::uint32_t width, std::uint32_t height) {
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            pixels[static_cast<std::size_t>(y) * width + x] =
+                static_cast<std::uint8_t>((y * width + x) & 0xFF);
+        }
+    }
+    return ImageU8::wrap(PortType::Gray8, width, height, width,
+                         std::make_shared<const std::vector<std::uint8_t>>(
+                             std::move(pixels)));
 }
 
 }  // namespace
@@ -791,6 +842,196 @@ int main() {
         RIN_CHECK_EQ(countIssues(v, ValidationIssueKind::DanglingInput, 3), std::size_t{0});
         RIN_CHECK_EQ(countIssues(v, ValidationIssueKind::Cycle, kInvalidNode), std::size_t{1});
         RIN_CHECK(v.ok == v.issues.empty());
+    }
+
+    // --- 15) M6-03/M6-05 默认目录扩展（DEC-017）：四相机源型 + 灰度域算子 ---
+    {
+        const NodeCatalog def = rin::workflow_catalog::makeDefaultImageNodeCatalog();
+        RIN_CHECK(def.valid());
+
+        // source 居首（契约套件按"目录首个无输入节点"泛式构图，依赖此序）；
+        // 新类型一律追加于既有条目之后。
+        RIN_CHECK(!def.nodes.empty());
+        RIN_CHECK_MSG(!def.nodes.empty() && def.nodes.front().typeId == "source",
+                      "catalog: source stays first in the default catalog");
+
+        struct SourceExpect {
+            const char* typeId;
+            PortType output;
+        };
+        const std::vector<SourceExpect> sources = {
+            {"source", PortType::Rgba8},
+            {"source_depth_jet", PortType::Rgba8},
+            {"source_depth_gray", PortType::Gray8},
+            {"source_depth_adaptive", PortType::Gray8},
+        };
+        for (const SourceExpect& expect : sources) {
+            const NodeDescriptor* d = findNodeDescriptor(def, expect.typeId);
+            RIN_CHECK_MSG(d != nullptr,
+                          std::string("catalog: source type present: ") + expect.typeId);
+            if (d == nullptr) {
+                continue;
+            }
+            RIN_CHECK(d->valid());
+            RIN_CHECK_MSG(d->inputs.empty(),
+                          std::string(expect.typeId) + ": injection source has no inputs");
+            RIN_CHECK(d->outputs.size() == 1);
+            RIN_CHECK(d->outputs.size() == 1 && d->outputs.front() == expect.output);
+            RIN_CHECK(!d->displayName.empty());
+            RIN_CHECK_MSG(d->params.empty(),
+                          std::string(expect.typeId) +
+                              ": camera sources declare no params (resolution is a "
+                              "global stream property)");
+        }
+
+        // 灰度域算子 descriptor valid；参数 schema 与 Rgba8 版逐字一致；
+        // 端口签名为 Gray8 → Gray8。
+        const NodeDescriptor* crop = findNodeDescriptor(def, "crop");
+        const NodeDescriptor* cropGray = findNodeDescriptor(def, "crop_gray");
+        const NodeDescriptor* down = findNodeDescriptor(def, "downscale");
+        const NodeDescriptor* downGray = findNodeDescriptor(def, "downscale_gray");
+        RIN_CHECK(crop != nullptr && cropGray != nullptr && down != nullptr &&
+                  downGray != nullptr);
+        if (crop != nullptr && cropGray != nullptr && down != nullptr &&
+            downGray != nullptr) {
+            RIN_CHECK(cropGray->valid() && downGray->valid());
+            RIN_CHECK(cropGray->typeId == "crop_gray" && downGray->typeId == "downscale_gray");
+            RIN_CHECK(!cropGray->displayName.empty() && !downGray->displayName.empty());
+            const std::vector<PortType> grayPort{PortType::Gray8};
+            RIN_CHECK(cropGray->inputs == grayPort && cropGray->outputs == grayPort);
+            RIN_CHECK(downGray->inputs == grayPort && downGray->outputs == grayPort);
+            RIN_CHECK_MSG(paramSchemasEqual(crop->params, cropGray->params),
+                          "catalog: crop_gray param schema is verbatim crop");
+            RIN_CHECK_MSG(paramSchemasEqual(down->params, downGray->params),
+                          "catalog: downscale_gray param schema is verbatim downscale");
+        }
+
+        // 工厂：四个 source 型返回 nullptr（注入型语义）；未知 typeId 仍抛
+        // std::invalid_argument（不静默）。
+        for (const SourceExpect& expect : sources) {
+            const NodeDescriptor* d = findNodeDescriptor(def, expect.typeId);
+            if (d == nullptr) {
+                continue;
+            }
+            const NodeInstance instance = makeNode(100, expect.typeId);
+            RIN_CHECK_MSG(rin::makeDefaultImageNode(*d, instance) == nullptr,
+                          std::string("factory: ") + expect.typeId +
+                              " returns nullptr (injection semantics)");
+        }
+        {
+            NodeDescriptor unknown;
+            unknown.typeId = "nope_gray";
+            unknown.displayName = "未知";
+            unknown.outputs = {PortType::Gray8};
+            const NodeInstance unknownInstance = makeNode(101, "nope_gray");
+            bool rejected = false;
+            try {
+                (void)rin::makeDefaultImageNode(unknown, unknownInstance);
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            RIN_CHECK_MSG(rejected, "factory: unknown typeId still throws invalid_argument");
+        }
+
+        // crop_gray apply golden：8x6 输入、ROI (2,1,3,2) → 输出像素 = 源区域
+        // 逐像素搬运（与 Rgba8 版同映射，1 字节/像素）。
+        {
+            const NodeDescriptor* d = findNodeDescriptor(def, "crop_gray");
+            RIN_CHECK(d != nullptr);
+            if (d != nullptr) {
+                NodeInstance instance =
+                    makeNode(20, "crop_gray",
+                             {assign("x", ParamValue{static_cast<std::int64_t>(2)}),
+                              assign("y", ParamValue{static_cast<std::int64_t>(1)}),
+                              assign("width", ParamValue{static_cast<std::int64_t>(3)}),
+                              assign("height", ParamValue{static_cast<std::int64_t>(2)})});
+                const std::unique_ptr<IImageNode> node =
+                    rin::makeDefaultImageNode(*d, instance);
+                RIN_CHECK(node != nullptr &&
+                          node->descriptor().typeId == "crop_gray");
+                if (node != nullptr) {
+                    const ImageU8 input = makeGrayImage(8, 6);
+                    const std::vector<ImageU8> outputs = node->apply({input});
+                    RIN_CHECK(outputs.size() == 1 && outputs[0].valid());
+                    RIN_CHECK(outputs.size() == 1 &&
+                              outputs[0].format() == PortType::Gray8);
+                    RIN_CHECK_EQ(outputs[0].width(), std::uint32_t{3});
+                    RIN_CHECK_EQ(outputs[0].height(), std::uint32_t{2});
+                    for (std::uint32_t y = 0; y < 2; ++y) {
+                        for (std::uint32_t x = 0; x < 3; ++x) {
+                            const std::uint8_t got =
+                                outputs[0].row(y)[x];  // 输出紧凑（stride == width）。
+                            const std::uint8_t want =
+                                static_cast<std::uint8_t>(((1 + y) * 8 + (2 + x)) & 0xFF);
+                            RIN_CHECK_EQ(got, want);
+                        }
+                    }
+                }
+            }
+        }
+
+        // downscale_gray nearest golden：4x4 → 2x2（面积覆盖采样：src = 1, 3；
+        // pixel(y,x) = y*4+x → out(0,0)=in(1,1)=5、out(1,0)=in(1,3)=7、
+        // out(0,1)=in(3,1)=13、out(1,1)=in(3,3)=15）。
+        {
+            const NodeDescriptor* d = findNodeDescriptor(def, "downscale_gray");
+            RIN_CHECK(d != nullptr);
+            if (d != nullptr) {
+                NodeInstance instance =
+                    makeNode(21, "downscale_gray",
+                             {assign("interpolation", ParamValue{std::string("nearest")}),
+                              assign("scale", ParamValue{0.5})});
+                const std::unique_ptr<IImageNode> node =
+                    rin::makeDefaultImageNode(*d, instance);
+                RIN_CHECK(node != nullptr &&
+                          node->descriptor().typeId == "downscale_gray");
+                if (node != nullptr) {
+                    const ImageU8 input = makeGrayImage(4, 4);
+                    const std::vector<ImageU8> outputs = node->apply({input});
+                    RIN_CHECK(outputs.size() == 1 && outputs[0].valid());
+                    RIN_CHECK(outputs.size() == 1 &&
+                              outputs[0].format() == PortType::Gray8);
+                    RIN_CHECK_EQ(outputs[0].width(), std::uint32_t{2});
+                    RIN_CHECK_EQ(outputs[0].height(), std::uint32_t{2});
+                    const std::uint8_t expected[2][2] = {{5, 7}, {13, 15}};
+                    for (std::uint32_t y = 0; y < 2; ++y) {
+                        for (std::uint32_t x = 0; x < 2; ++x) {
+                            RIN_CHECK_EQ(outputs[0].row(y)[x], expected[y][x]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 跨类型连线：source_depth_gray（Gray8 输出）→ grayify（声明 Rgba8 输入）
+        // 报 TypeMismatch（挂到消费节点）。
+        {
+            WorkflowGraph g;
+            g.nodes = {makeNode(1, "source_depth_gray"), makeNode(2, "grayify")};
+            g.connections = {conn(1, 0, 2, 0)};
+            const WorkflowValidation v = validateWorkflowGraph(g, def);
+            RIN_CHECK(!v.ok);
+            RIN_CHECK_EQ(countIssues(v, ValidationIssueKind::TypeMismatch, 2),
+                         std::size_t{1});
+        }
+
+        // 合法灰度链：source_depth_gray → crop_gray → gaussian_blur 通过校验。
+        {
+            WorkflowGraph g;
+            g.nodes = {
+                makeNode(1, "source_depth_gray"),
+                makeNode(2, "crop_gray",
+                         {assign("x", ParamValue{static_cast<std::int64_t>(0)}),
+                          assign("y", ParamValue{static_cast<std::int64_t>(0)}),
+                          assign("width", ParamValue{static_cast<std::int64_t>(16)}),
+                          assign("height", ParamValue{static_cast<std::int64_t>(12)})}),
+                makeNode(3, "gaussian_blur"),
+            };
+            g.connections = {conn(1, 0, 2, 0), conn(2, 0, 3, 0)};
+            const WorkflowValidation v = validateWorkflowGraph(g, def);
+            RIN_CHECK_MSG(v.ok, "catalog: gray chain source_depth_gray->crop_gray->"
+                                "gaussian_blur validates");
+        }
     }
 
     return rin_test::exitStatus();

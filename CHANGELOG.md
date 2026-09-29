@@ -60,6 +60,15 @@
   运行控制 + 有界最新态数据通道）——UI 与引擎间的唯一契约面，公开头零第三方
   类型；`M5-08` 假引擎与 `M4-07` 真引擎实现同一契约并共用契约测试套件，完成
   判据随 `M4-08` 关闭全部满足。
+- 工作流输入扩展（M6，[DEC-017](docs/decisions/DEC-017-workflow-camera-sources.md)，
+  用户真机验收反馈）：相机源四型——RGB 与深度伪彩（Rgba8）/深度灰度/深度自适应
+  （Gray8）固定 rendition，语义与预览配色解耦（相机契约加性扩展
+  `FrameKind::DepthJet` 与 `GrayFrame`/`tryLoadGrayFrame`）；灰度域新增
+  `crop_gray`/`downscale_gray`（与 Rgba8 版同参数 schema、同冻结数值语义）；
+  裁切 ROI 控件联动夹取防呆（已知输入尺寸时 x/y/width/height 按互约束有效域
+  夹取并呈现，M4-03 apply 期拒绝保持兜底）；相机源面板分辨率入口（与预览
+  选择器共享同一档位/状态/命令，全局 restream 明示）；采集侧深度灰度
+  rendition 以单趟双输出转换发布（与单 rendition 函数逐字节等价）。
 - 工作流运行控制与假换真集成（M5，`M5-06`，[DEC-016](docs/decisions/DEC-016-contract-first-workbench-order.md)
   交错策略终点）：工作台工作流页改接 `M4-07` 真引擎（`createWorkflowEngine`），
   新增相机帧源接缝（RGB 彩色流"上次已见序号"非阻塞过滤读取 + RGBA8 共享缓冲

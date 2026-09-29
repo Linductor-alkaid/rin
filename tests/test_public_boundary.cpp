@@ -30,6 +30,11 @@ public:
     rin::CameraServiceState state() const override { return rin::CameraServiceState::Idle; }
     std::string lastError() const override { return {}; }
     bool tryLoadFrame(rin::FrameKind, std::uint64_t&, rin::Frame&) override { return false; }
+    // M6-04（DEC-017）：灰度 rendition 通道同样是公开契约纯虚——无生产者桩恒 false。
+    bool tryLoadGrayFrame(rin::GrayFrameKind, std::uint64_t&, rin::GrayFrame&) override
+    {
+        return false;
+    }
     bool tryLoadIntrinsics(std::uint64_t&, rin::IntrinsicsSnapshot&) override { return false; }
     bool tryLoadMotion(std::uint64_t&, rin::MotionSample&) override { return false; }
     bool tryLoadPose(std::uint64_t&, rin::ImuSnapshot&) override { return false; }
@@ -121,6 +126,28 @@ int main() {
         RIN_CHECK_EQ(poseSequence, std::uint64_t{7});
         RIN_CHECK_EQ(pose.sequence, std::uint64_t{888});
         RIN_CHECK_EQ(pose.orientation[0], 1.0f);  // 默认恒等姿态未被触碰
+    }
+
+    // M6-04 灰度 rendition 通道（经公开接口多态调用，同时实例化 GrayFrame 契约
+    // 类型）：无生产者桩语义与 RGBA8 通道一致——false 且出参/序号不动；附带
+    // GrayFrame::valid() 的最小形态核对（M6-04 契约类型实例化）。
+    {
+        rin::GrayFrame gray;
+        gray.width = 8;
+        gray.height = 4;
+        gray.stride = 8;
+        RIN_CHECK(!gray.valid());  // pixels 缺失 → 无效（stride==width 已满足）。
+        gray.pixels = std::make_shared<const std::vector<std::uint8_t>>(8 * 4, 0);
+        RIN_CHECK(gray.valid());
+
+        std::uint64_t graySequence = 13;
+        rin::GrayFrame probe;
+        probe.sequence = 777;
+        RIN_CHECK(!service->tryLoadGrayFrame(rin::GrayFrameKind::Depth, graySequence, probe));
+        RIN_CHECK(!service->tryLoadGrayFrame(rin::GrayFrameKind::DepthAdaptive, graySequence,
+                                             probe));
+        RIN_CHECK_EQ(graySequence, std::uint64_t{13});
+        RIN_CHECK_EQ(probe.sequence, std::uint64_t{777});
     }
 
     // M4-09 工作流视图契约（经公开接口多态调用，同时实例化契约类型）：

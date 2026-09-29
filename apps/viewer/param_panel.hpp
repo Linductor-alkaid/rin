@@ -49,6 +49,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -79,15 +80,30 @@ struct WorkflowPanelState {
     rin::NodeId boundNode = rin::kInvalidNode;
     std::map<std::string, ParamControlState> controls;
     /// 选中节点中间产物有界缓存（§5.6）与缩略图上传视图（§4 停止排空清空）。
+    /// M6-06 起同时缓存选中节点输入驱动节点的最新产物（ROI 联动约束的尺寸源）。
     NodeOutputCache outputs;
     GpuFrameView thumbnail;
     std::string thumbMeta;
+    /// 相机分辨率下拉开合（M6-06，EUI-20260923-002 外接开合纪律）。
+    eui::Signal<bool> cameraResolutionOpen{false};
 
     /// 丢弃全部控件绑定（选择变更/关闭排空）。
     void resetBindings() {
         boundNode = rin::kInvalidNode;
         controls.clear();
+        cameraResolutionOpen.set(false);
     }
+};
+
+/// 相机分辨率入口绑定（M6-06，DEC-017）：分辨率是相机流全局属性——工作流
+/// 源面板与预览页选择器共享同一档位列表、同一选择状态（ViewerContext）与
+/// 同一 `requestResolution` 命令（全局 restream）。labels/index 由 app.cpp
+/// 组装期绑定（仅 compose 调用期有效）。
+struct CameraResolutionBinding {
+    const std::vector<std::string>* labels = nullptr;
+    int selectedIndex = -1;
+    eui::Signal<bool>* open = nullptr;
+    std::function<void(int)> onPick;
 };
 
 namespace {
@@ -367,9 +383,10 @@ inline void composeWorkflowOverview(eui::Ui& ui, const WorkflowPerfState& perf,
 }  // namespace
 
 /// pump 边界的中间结果消费（RULE-05：渲染线程只做有界取快照与提交）。引擎
-/// Running 时拉取单选节点的最新产物并上传缩略图（GL 当前线程）；非 Running
-/// 整体排空（§4 停止/关闭排空）。返回 true 表示有可见变更（调用方需
-/// requestUpdate）。
+/// Running 时拉取单选节点的最新产物并上传缩略图（GL 当前线程）；M6-06 起同
+/// 址拉取选中节点的输入驱动节点产物（ROI 联动约束的输入尺寸源，同 LRU 有界
+/// 缓存）；非 Running 整体排空（§4 停止/关闭排空）。返回 true 表示有可见变更
+/// （调用方需 requestUpdate）。
 inline bool pumpNodeOutput(WorkflowCanvasState& canvas, WorkflowPanelState& panel,
                            rin::IWorkflowEngine& engine) {
     if (engine.state() != rin::WorkflowEngineState::Running) {
@@ -385,16 +402,28 @@ inline bool pumpNodeOutput(WorkflowCanvasState& canvas, WorkflowPanelState& pane
     if (node == nullptr) {
         return false;
     }
-    if (!panel.outputs.pull(engine, node->id)) {
-        return false;
+    bool changed = panel.outputs.pull(engine, node->id);
+    // 输入驱动节点产物（M6-06）：ROI 联动约束读取其输出尺寸；无入边（源
+    // 节点被选中）或驱动不在画布图内则无此消费。
+    rin::NodeId driver = rin::kInvalidNode;
+    for (const rin::Connection& connection : canvas.model.connections) {
+        if (connection.to.node == node->id &&
+            connection.to.direction == rin::PortDirection::Input &&
+            connection.to.index == 0) {
+            driver = connection.from.node;
+            break;
+        }
+    }
+    if (driver != rin::kInvalidNode && driver != node->id) {
+        changed = panel.outputs.pull(engine, driver) || changed;
     }
     const rin::NodeOutputSnapshot* snapshot = panel.outputs.find(node->id);
     if (snapshot == nullptr) {
-        return false;
+        return changed;
     }
     rin::Frame thumb;
     if (!thumbnailRgbaFromSnapshot(*snapshot, kThumbnailMaxDim, thumb)) {
-        return false;
+        return changed;
     }
     panel.thumbnail.update(thumb);
     panel.thumbMeta = std::to_string(snapshot->width) + " x " +
@@ -407,6 +436,7 @@ inline bool pumpNodeOutput(WorkflowCanvasState& canvas, WorkflowPanelState& pane
 /// §4）；无选中保持 M5-02 空态文案（工作流总览归 M5-05 性能面板）。
 inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                                    WorkflowPanelState& panel, rin::IWorkflowEngine* engine,
+                                   const CameraResolutionBinding* cameraResolution,
                                    const float x, const float y, const float width,
                                    const float height) {
     const theme::ThemeTokens& tokens = theme::dark();
@@ -521,6 +551,27 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                 rowY += 20.0f + kSpace1;
             }
 
+            // ROI 联动约束（M6-06，DEC-017 控件层防呆）：输入尺寸取自输入驱动
+            // 节点最新产物快照（pumpNodeOutput 同址消费）；无快照（引擎未运行/
+            // 非选中入边）回退声明范围，M4-03 apply 期拒绝保持兜底。
+            rin::NodeId roiDriver = rin::kInvalidNode;
+            for (const rin::Connection& connection : canvas.model.connections) {
+                if (connection.to.node == nodeId &&
+                    connection.to.direction == rin::PortDirection::Input &&
+                    connection.to.index == 0) {
+                    roiDriver = connection.from.node;
+                    break;
+                }
+            }
+            RoiConstraint roi = RoiConstraint::unconstrained();
+            if (roiDriver != rin::kInvalidNode) {
+                if (const rin::NodeOutputSnapshot* driverOutput =
+                        panel.outputs.find(roiDriver);
+                    driverOutput != nullptr) {
+                    roi = RoiConstraint::forInput(driverOutput->width, driverOutput->height);
+                }
+            }
+
             // 常驻提示（§5.5）：运行中参数编辑"下一帧生效"。
             ui.text("workflow.context.hotHint")
                 .position(pad, rowY)
@@ -530,6 +581,75 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                 .color(tokens.fgSubtlest)
                 .build();
             rowY += kFontXs + kSpace2;
+
+            // 相机分辨率入口（M6-06，DEC-017）：相机源节点展示全局流分辨率
+            // 下拉——分辨率是相机流全局属性（单 pipeline），与预览页选择器共享
+            // 同一档位列表/选择状态/requestResolution 命令（全局 restream），
+            // 不做 per-source 分辨率。
+            if (node->typeId.rfind("source", 0) == 0 && cameraResolution != nullptr &&
+                cameraResolution->labels != nullptr &&
+                !cameraResolution->labels->empty() && cameraResolution->open != nullptr) {
+                ui.text("workflow.context.cameraRes.label")
+                    .position(pad, rowY)
+                    .size(innerWidth * 0.5f, kFontSm + kSpace1)
+                    .text("Camera resolution")
+                    .fontSize(kFontSm)
+                    .color(tokens.fgSubtle)
+                    .build();
+                ui.text("workflow.context.cameraRes.hint")
+                    .position(pad, rowY)
+                    .size(innerWidth, kFontSm + kSpace1)
+                    .text("global - rebuilds the camera stream")
+                    .fontSize(kFontXs)
+                    .color(tokens.fgSubtlest)
+                    .horizontalAlign(eui::HorizontalAlign::Right)
+                    .build();
+                rowY += kFontSm + kSpace1;
+                const int resolutionCount =
+                    static_cast<int>(cameraResolution->labels->size());
+                const int selectedIndex =
+                    std::clamp(cameraResolution->selectedIndex, 0,
+                               std::max(0, resolutionCount - 1));
+                components::DropdownStyle dropdownStyle;
+                dropdownStyle.field = tokens.input;
+                dropdownStyle.fieldHover = tokens.input;
+                dropdownStyle.fieldPressed = tokens.input;
+                dropdownStyle.popup = tokens.menu;
+                dropdownStyle.optionHover = tokens.menuHover;
+                dropdownStyle.optionPressed = tokens.menuHover;
+                dropdownStyle.selected = tokens.accentSurface;
+                dropdownStyle.text = tokens.fg;
+                dropdownStyle.mutedText = tokens.fgSubtlest;
+                dropdownStyle.accent = tokens.brand;
+                dropdownStyle.border = tokens.inputBorder;
+                dropdownStyle.shadow = core::Shadow{true, {0.0f, 10.0f}, 18.0f, 8.0f,
+                                                    {0.0f, 0.0f, 0.0f, 0.35f}};
+                dropdownStyle.radius = kRadiusLg;
+                // 包裹 stack 持有定位与弹层层级（同枚举参数行接线纪律）。
+                ui.stack("workflow.context.cameraRes.wrap")
+                    .position(pad, rowY)
+                    .size(innerWidth, 26.0f)
+                    .zIndex(cameraResolution->open->get() ? 40 : 0)
+                    .content([&] {
+                        components::dropdown(ui, "workflow.context.cameraRes.dropdown")
+                            .size(innerWidth, 26.0f)
+                            .itemHeight(24.0f)
+                            .items(*cameraResolution->labels)
+                            .selected(selectedIndex)
+                            .bindOpen(*cameraResolution->open)
+                            .style(dropdownStyle)
+                            .onChange([cameraResolution](const int index) {
+                                if (index >= 0 &&
+                                    index < static_cast<int>(
+                                                cameraResolution->labels->size())) {
+                                    cameraResolution->onPick(index);
+                                }
+                            })
+                            .build();
+                    })
+                    .build();
+                rowY += 26.0f + kSpace2;
+            }
 
             const components::InputStyle inputStyle = panelInputStyle(tokens);
 
@@ -564,8 +684,14 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                     break;
                 }
 
-                // 标签行：label 左，区间/类型呈现右（§5.5"显示区间"）。
-                std::string rangeText = paramRangeText(pd);
+                // 标签行：label 左，区间/类型呈现右（§5.5"显示区间"）；ROI
+                // 参数在已知输入尺寸时呈现联动有效域（M6-06，DEC-017）。
+                const std::optional<std::pair<double, double>> roiRange =
+                    roi.effectiveRange(*descriptor, node->params, pd);
+                std::string rangeText =
+                    roiRange ? (formatRealText(roiRange->first) + ".." +
+                                formatRealText(roiRange->second))
+                             : paramRangeText(pd);
                 if (rangeText.empty()) {
                     if (pd.kind == rin::ParamKind::Enumeration) {
                         rangeText = "enum";
@@ -627,10 +753,22 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                     case rin::ParamKind::Real: {
                         if (pd.hasRange) {
                             // 滑条：归一化值域映射，Integer 就近取整（§5.5 夹取）。
-                            const float normalized = static_cast<float>(
-                                valueToSlider(
-                                    pd, *effectiveParamValue(*descriptor, node->params, pd.id))
-                                    .value_or(0.0));
+                            // ROI 参数在已知输入尺寸时映射到联动有效域（M6-06）。
+                            const rin::ParamValue* current =
+                                effectiveParamValue(*descriptor, node->params, pd.id);
+                            const double currentValue =
+                                current != nullptr ? paramScalarAsDouble(*current)
+                                                   : roiRange
+                                                       ? roiRange->first
+                                                       : paramScalarAsDouble(pd.defaultValue);
+                            float normalized = 0.0f;
+                            if (roiRange) {
+                                normalized = static_cast<float>(valueToSliderInRange(
+                                    roiRange->first, roiRange->second, currentValue));
+                            } else if (current != nullptr) {
+                                normalized = static_cast<float>(
+                                    valueToSlider(pd, *current).value_or(0.0));
+                            }
                             components::SliderStyle sliderStyle;
                             sliderStyle.track = tokens.input;
                             sliderStyle.fill = tokens.brand;
@@ -643,18 +781,26 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                                         .size(innerWidth, 18.0f)
                                         .value(normalized)
                                         .style(sliderStyle)
-                                        .onChange([&canvas, engine, nodeId, &pd,
-                                                   &control](const float t) {
-                                            const std::optional<double> value =
-                                                sliderToValue(pd, t);
+                                        .onChange([&canvas, engine, nodeId, &pd, &control,
+                                                   roiRange](const float t) {
+                                            // 取值：ROI 有效域映射（Integer 取整，
+                                            // 域内天然合法）否则声明域映射。
+                                            std::optional<double> value;
+                                            if (roiRange) {
+                                                value = sliderToValueInRange(
+                                                    roiRange->first, roiRange->second, t,
+                                                    pd.kind == rin::ParamKind::Integer);
+                                            } else {
+                                                value = sliderToValue(pd, t);
+                                            }
                                             if (!value) {
                                                 return;
                                             }
                                             if (pd.kind == rin::ParamKind::Integer) {
                                                 const auto integer = static_cast<std::int64_t>(
                                                     std::llround(*value));
-                                                if (submitParamAssignment(canvas, engine,
-                                                                          nodeId, pd, integer,
+                                                if (submitParamAssignment(canvas, engine, nodeId, pd,
+                                                                          integer,
                                                                           control)) {
                                                     control.text.set(std::to_string(integer));
                                                 }
@@ -670,6 +816,10 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                             rowY += 18.0f + kSpace1;
                         }
                         // 数值输入：即输即校验（§5.5 就地报错；合法即提交）。
+                        // ROI 参数在已知输入尺寸时对整数文本先行有效域夹取并
+                        // 回显夹取结果（M6-06 控件层防呆）；兄弟参数取 compose
+                        // 期值拷贝（回调不持画布节点指针，param_panel 纪律）。
+                        const std::vector<rin::ParamAssignment> roiSiblings = node->params;
                         components::input(ui, base + ".input")
                             .position(pad, rowY)
                             .size(innerWidth, 26.0f)
@@ -678,9 +828,27 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
                             .fontSize(kFontSm)
                             .inset(kSpace2)
                             .style(inputStyle)
-                            .onChange([&canvas, engine, nodeId, &pd,
-                                       &control](const std::string& text) {
+                            .onChange([&canvas, engine, nodeId, &descriptor, &pd, &control,
+                                       roiRange, roi, roiSiblings](const std::string& text) {
                                 control.text.set(text);
+                                if (roiRange && pd.kind == rin::ParamKind::Integer) {
+                                    const std::optional<std::int64_t> parsed =
+                                        parseIntegerText(text);
+                                    if (!parsed) {
+                                        control.error = "not an integer";
+                                        return;
+                                    }
+                                    const rin::ParamValue clamped =
+                                        roi.clampValue(*descriptor, roiSiblings, pd,
+                                                       rin::ParamValue{*parsed});
+                                    const std::int64_t clampedInteger =
+                                        std::get<std::int64_t>(clamped);
+                                    if (submitParamAssignment(canvas, engine, nodeId, pd,
+                                                              clampedInteger, control)) {
+                                        control.text.set(std::to_string(clampedInteger));
+                                    }
+                                    return;
+                                }
                                 const ParamEditResult result =
                                     paramAssignmentFromText(pd, text);
                                 if (!result.ok) {
@@ -879,6 +1047,7 @@ inline void composeWorkflowContext(eui::Ui& ui, WorkflowCanvasState& canvas,
 // 底部列表之上） ---
 inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
                                 WorkflowPanelState& panel, rin::IWorkflowEngine* engine,
+                                const CameraResolutionBinding* cameraResolution,
                                 const float x, const float y, const float width,
                                 const float height) {
     const float gap = theme::kSpace3;
@@ -895,8 +1064,8 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
     composeWorkflowCanvas(ui, state, engine, x + paletteWidth + gap, bodyTop, canvasWidth,
                           bodyHeight);
     composeWorkflowIssues(ui, state, x, y + height - bottomHeight, width, bottomHeight);
-    composeWorkflowContext(ui, state, panel, engine, x + width - contextWidth, bodyTop,
-                           contextWidth, bodyHeight);
+    composeWorkflowContext(ui, state, panel, engine, cameraResolution,
+                           x + width - contextWidth, bodyTop, contextWidth, bodyHeight);
 }
 
 }  // namespace viewer

@@ -247,6 +247,119 @@ struct ParamEditResult {
     return nullptr;
 }
 
+// --- 裁切 ROI 联动约束（M6-06，DEC-017 控件层防呆） ---
+
+/// 裁切 ROI 参数的联动约束：已知输入尺寸（输入驱动节点最新产物快照）时，
+/// x/y/width/height 按互约束有效域夹取（x∈[0,W−w]、width∈[1,W−x]、y/h 同理，
+/// 再与声明 range 求交），使越界 ROI 从控件不可达；未知尺寸回退声明范围——
+/// M4-03 冻结的 apply 期显式拒绝保持为兜底语义，控件层只消除可达的非法状态。
+struct RoiConstraint {
+    double inputWidth = 0.0;
+    double inputHeight = 0.0;
+    bool hasInputSize = false;
+
+    [[nodiscard]] static RoiConstraint unconstrained() { return {}; }
+    [[nodiscard]] static RoiConstraint forInput(std::uint32_t width,
+                                                std::uint32_t height) {
+        return {static_cast<double>(width), static_cast<double>(height), true};
+    }
+
+    /// pd 是否为 ROI 联动参数（x/y/width/height 且声明为带范围 Integer）。
+    [[nodiscard]] static bool isRoiParam(const rin::ParamDescriptor& pd) {
+        return pd.kind == rin::ParamKind::Integer && pd.hasRange &&
+               (pd.id == "x" || pd.id == "y" || pd.id == "width" || pd.id == "height");
+    }
+
+    /// ROI 参数的当前有效闭区间 [min, max]：互约束（兄弟参数取生效值，未赋值
+    /// 取声明默认）∩ 声明 range；非 ROI 参数或无输入尺寸返回 nullopt（调用方
+    /// 回退声明范围呈现）。
+    [[nodiscard]] std::optional<std::pair<double, double>> effectiveRange(
+        const rin::NodeDescriptor& descriptor,
+        const std::vector<rin::ParamAssignment>& assignments,
+        const rin::ParamDescriptor& pd) const {
+        if (!hasInputSize || !isRoiParam(pd)) {
+            return std::nullopt;
+        }
+        const double width = siblingValue(descriptor, assignments, "width");
+        const double height = siblingValue(descriptor, assignments, "height");
+        const double x = siblingValue(descriptor, assignments, "x");
+        const double y = siblingValue(descriptor, assignments, "y");
+        double lo = pd.minValue;
+        double hi = pd.maxValue;
+        if (pd.id == "x") {
+            hi = std::min(hi, std::max(0.0, inputWidth - width));
+        } else if (pd.id == "y") {
+            hi = std::min(hi, std::max(0.0, inputHeight - height));
+        } else if (pd.id == "width") {
+            lo = std::max(lo, 1.0);
+            hi = std::min(hi, std::max(1.0, inputWidth - x));
+        } else {  // height
+            lo = std::max(lo, 1.0);
+            hi = std::min(hi, std::max(1.0, inputHeight - y));
+        }
+        if (lo > hi) {
+            lo = hi;  // 退化（如输入小于下限）：夹成单点，保持区间合法。
+        }
+        return std::pair<double, double>{lo, hi};
+    }
+
+    /// 值夹取进 ROI 参数的有效域（Integer 闭区间取整）；非 ROI 参数或无输入
+    /// 尺寸原样返回。
+    [[nodiscard]] rin::ParamValue clampValue(
+        const rin::NodeDescriptor& descriptor,
+        const std::vector<rin::ParamAssignment>& assignments,
+        const rin::ParamDescriptor& pd, rin::ParamValue value) const {
+        const std::optional<std::pair<double, double>> range =
+            effectiveRange(descriptor, assignments, pd);
+        if (!range || pd.kind != rin::ParamKind::Integer) {
+            return value;
+        }
+        auto* number = std::get_if<std::int64_t>(&value);
+        if (number == nullptr) {
+            return value;
+        }
+        const auto lo = static_cast<std::int64_t>(std::llround(range->first));
+        const auto hi = static_cast<std::int64_t>(std::llround(range->second));
+        *number = std::clamp(*number, lo, hi);
+        return value;
+    }
+
+private:
+    /// 兄弟参数生效值（未赋值取声明默认；缺失/种类异常按 0 防御）。
+    [[nodiscard]] double siblingValue(
+        const rin::NodeDescriptor& descriptor,
+        const std::vector<rin::ParamAssignment>& assignments,
+        const std::string& paramId) const {
+        if (const rin::ParamValue* value =
+                effectiveParamValue(descriptor, assignments, paramId)) {
+            if (const auto* number = std::get_if<std::int64_t>(value)) {
+                return static_cast<double>(*number);
+            }
+        }
+        return 0.0;
+    }
+};
+
+/// 指定值域的滑条归一化（M6-06 ROI 有效域变体；与声明域版本同语义）。
+[[nodiscard]] inline double valueToSliderInRange(double lo, double hi, double value) {
+    const double span = hi - lo;
+    if (span <= 0.0) {
+        return 0.0;
+    }
+    return std::clamp((value - lo) / span, 0.0, 1.0);
+}
+
+/// 滑条归一化 → 指定值域取值（integer 时就近取整；t 夹取到 [0,1]）。
+[[nodiscard]] inline double sliderToValueInRange(double lo, double hi, double t,
+                                                 bool integer) {
+    t = std::clamp(t, 0.0, 1.0);
+    double value = lo + t * (hi - lo);
+    if (integer) {
+        value = std::round(value);
+    }
+    return value;
+}
+
 /// 生效值 → 控件初值文本（面板重建绑定时用）：Boolean "on"/"off"，Enumeration
 /// 原文，Integer/Real 统一 %.6g，RealArray 不适用（矩阵单元单独取值）。
 [[nodiscard]] inline std::string paramValueText(const rin::ParamValue& value) {
@@ -263,6 +376,17 @@ struct ParamEditResult {
             return {};
     }
     return {};
+}
+
+/// 标量参数值 → double（ROI 有效域滑条映射用；非标量返回 0 防御）。
+[[nodiscard]] inline double paramScalarAsDouble(const rin::ParamValue& value) {
+    if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+        return static_cast<double>(*integer);
+    }
+    if (const auto* real = std::get_if<double>(&value)) {
+        return *real;
+    }
+    return 0.0;
 }
 
 // --- RealArray 矩阵网格（§5.5 自研矩阵网格编辑器的数据模型） ---

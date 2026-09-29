@@ -184,6 +184,14 @@ public:
         return frameMailbox(kind).try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
     }
 
+    // 深度灰度 rendition 通道（M6-04，DEC-017：固定语义，与预览配色解耦）。
+    [[nodiscard]] bool tryLoadGrayFrame(GrayFrameKind kind,
+                                        std::uint64_t& lastSeenSequence,
+                                        GrayFrame& out) override {
+        return grayFrameMailbox(kind).try_load_newer_than(lastSeenSequence, out,
+                                                          lastSeenSequence);
+    }
+
     [[nodiscard]] bool tryLoadIntrinsics(std::uint64_t& lastSeenSequence,
                                          IntrinsicsSnapshot& out) override {
         return intrinsics_.try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
@@ -213,6 +221,11 @@ public:
     // --- 以下成员供 CaptureLoop 在 worker 线程使用（单 worker，无并发） ---
     [[nodiscard]] LatestMailbox<Frame>& rgbMailbox() { return rgbFrames_; }
     [[nodiscard]] LatestMailbox<Frame>& depthMailbox() { return depthFrames_; }
+    [[nodiscard]] LatestMailbox<Frame>& depthJetMailbox() { return depthJetFrames_; }
+    [[nodiscard]] LatestMailbox<GrayFrame>& depthGrayMailbox() { return depthGrayFrames_; }
+    [[nodiscard]] LatestMailbox<GrayFrame>& depthAdaptiveGrayMailbox() {
+        return depthAdaptiveGrayFrames_;
+    }
     [[nodiscard]] LatestMailbox<IntrinsicsSnapshot>& intrinsicsMailbox() { return intrinsics_; }
     [[nodiscard]] LatestMailbox<MotionSample>& motionMailbox() { return motion_; }
     [[nodiscard]] LatestMailbox<ImuSnapshot>& poseMailbox() { return pose_; }
@@ -270,7 +283,13 @@ public:
 
 private:
     [[nodiscard]] LatestMailbox<Frame>& frameMailbox(FrameKind kind) {
-        return kind == FrameKind::Rgb ? rgbFrames_ : depthFrames_;
+        return kind == FrameKind::Rgb      ? rgbFrames_
+               : kind == FrameKind::DepthJet ? depthJetFrames_
+                                             : depthFrames_;
+    }
+
+    [[nodiscard]] LatestMailbox<GrayFrame>& grayFrameMailbox(GrayFrameKind kind) {
+        return kind == GrayFrameKind::Depth ? depthGrayFrames_ : depthAdaptiveGrayFrames_;
     }
 
     void failFromCaller(const std::string& message) {
@@ -284,6 +303,10 @@ private:
 
     LatestMailbox<Frame> rgbFrames_{"rin.frames.rgb"};
     LatestMailbox<Frame> depthFrames_{"rin.frames.depth"};
+    // 工作流深度 rendition 通道（M6-04，DEC-017：固定语义，与预览配色解耦）。
+    LatestMailbox<Frame> depthJetFrames_{"rin.frames.depth.jet"};
+    LatestMailbox<GrayFrame> depthGrayFrames_{"rin.frames.depth.gray"};
+    LatestMailbox<GrayFrame> depthAdaptiveGrayFrames_{"rin.frames.depth.adaptive"};
     LatestMailbox<IntrinsicsSnapshot> intrinsics_{"rin.intrinsics"};
     LatestMailbox<MotionSample> motion_{"rin.motion"};
     LatestMailbox<ImuSnapshot> pose_{"rin.pose"};
@@ -432,6 +455,44 @@ void publishFrame(LatestMailbox<Frame>& mailbox,
     frame.width = width;
     frame.height = height;
     frame.stride = stride;
+    frame.sequence = sequence;
+    frame.deviceTimestampMs = timestampMs;
+    frame.pixels = std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels));
+    mailbox.publish(std::move(frame));
+}
+
+/// 共享缓冲发布（M6-04）：预览 scheme==Jet 时伪彩 rendition 与预览通道共用
+/// 同一份不可变像素（Frame 契约：像素提交后不可变，消费方共享所有权）。
+void publishFrame(LatestMailbox<Frame>& mailbox,
+                  FrameKind kind,
+                  std::uint32_t width,
+                  std::uint32_t height,
+                  std::uint32_t stride,
+                  std::uint64_t sequence,
+                  double timestampMs,
+                  const std::shared_ptr<const std::vector<std::uint8_t>>& pixels) {
+    Frame frame;
+    frame.kind = kind;
+    frame.width = width;
+    frame.height = height;
+    frame.stride = stride;
+    frame.sequence = sequence;
+    frame.deviceTimestampMs = timestampMs;
+    frame.pixels = pixels;
+    mailbox.publish(std::move(frame));
+}
+
+/// 灰度 rendition 发布（M6-04，DEC-017）：Gray8 紧凑行距（stride = width）。
+void publishGrayFrame(LatestMailbox<GrayFrame>& mailbox,
+                      std::uint32_t width,
+                      std::uint32_t height,
+                      std::uint64_t sequence,
+                      double timestampMs,
+                      std::vector<std::uint8_t>&& pixels) {
+    GrayFrame frame;
+    frame.width = width;
+    frame.height = height;
+    frame.stride = width;
     frame.sequence = sequence;
     frame.deviceTimestampMs = timestampMs;
     frame.pixels = std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels));
@@ -812,12 +873,47 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
         const auto depthHeight = static_cast<std::uint32_t>(depth.get_height());
         const auto depthStrideUnits =
             static_cast<std::uint32_t>(depth.get_stride_in_bytes() / sizeof(std::uint16_t));
+        const auto* depthData = reinterpret_cast<const std::uint16_t*>(depth.get_data());
+        const auto depthTimestamp = depth.get_timestamp();
+
+        // 工作流深度 rendition（M6-04，DEC-017）：固定语义通道，与预览配色
+        // 解耦——伪彩恒 jet、灰度恒固定区间近白远黑、自适应恒 P99 近黑远白。
+        // 灰度 + 自适应经单趟双输出转换（M6-06 采集侧优化，逐字节等价于分别
+        // 调用）；预览 scheme==Jet 时伪彩通道与预览共享同一份像素缓冲。
+        std::vector<std::uint8_t> depthGray;
+        std::vector<std::uint8_t> depthAdaptive;
+        if (convertDepth16ToGray8Pair(depthData, depthWidth, depthHeight,
+                                      depthStrideUnits, depthScale, kDepthNearMeters,
+                                      kDepthFarMeters, depthGray, depthAdaptive)) {
+            publishGrayFrame(owner_.depthGrayMailbox(), depthWidth, depthHeight, sequence,
+                             depthTimestamp, std::move(depthGray));
+            publishGrayFrame(owner_.depthAdaptiveGrayMailbox(), depthWidth, depthHeight,
+                             sequence, depthTimestamp, std::move(depthAdaptive));
+        }
+        if (depthColorScheme_ != DepthColorScheme::Jet) {
+            std::vector<std::uint8_t> jetRgba;
+            if (convertDepth16ToRgba8Jet(depthData, depthWidth, depthHeight,
+                                         depthStrideUnits, depthScale, kDepthNearMeters,
+                                         kDepthFarMeters, jetRgba)) {
+                publishFrame(owner_.depthJetMailbox(), FrameKind::DepthJet, depthWidth,
+                             depthHeight, depthWidth * 4u, sequence, depthTimestamp,
+                             std::move(jetRgba));
+            }
+        }
         if (convertDepth16ToRgba8(reinterpret_cast<const std::uint16_t*>(depth.get_data()),
                                   depthWidth, depthHeight, depthStrideUnits, depthScale,
                                   kDepthNearMeters, kDepthFarMeters, depthColorScheme_,
                                   rgba)) {
+            auto pixels =
+                std::make_shared<const std::vector<std::uint8_t>>(std::move(rgba));
             publishFrame(owner_.depthMailbox(), FrameKind::Depth, depthWidth, depthHeight,
-                         depthWidth * 4u, sequence, depth.get_timestamp(), std::move(rgba));
+                         depthWidth * 4u, sequence, depthTimestamp, pixels);
+            if (depthColorScheme_ == DepthColorScheme::Jet) {
+                // 预览即伪彩：Jet rendition 与预览共享同一缓冲。
+                publishFrame(owner_.depthJetMailbox(), FrameKind::DepthJet, depthWidth,
+                             depthHeight, depthWidth * 4u, sequence, depthTimestamp,
+                             pixels);
+            }
         }
     }
     return StreamExit::Stopped;
