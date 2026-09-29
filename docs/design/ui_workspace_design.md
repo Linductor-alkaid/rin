@@ -240,6 +240,21 @@ UI 状态（DEC-014 决策 5：不入契约）。缩放=滚轮（以指针为锚
   应用关闭走 `DslAppConfig::onShutdown` 既有顺序（先停工作流引擎与相机
   服务，再回收，EXEC-04），新增通道与任务纳入关闭回归。
 
+> M5-06 实施补记（2026-09-29）：运行控制随假换真集成落地。工具栏新增
+> Start/Stop（Fit 左侧）：启动可用条件 = 当前图校验通过（§4 唯一判据）且引擎
+> Idle/Failed——Failed 恢复路径为"修复后重新启动"，点击序内先 stop 回 Idle
+> 再 start（契约"Failed 为运行终态，stop 后可重启"）；停止可用条件 =
+> Running/Failed（幂等；owner 线程同步调用、有界排空 ≤ maxInFlight 帧任务，
+> 与 onShutdown 同纪律）；Stopping 全禁用。启动准入失败经 `AdmissionResult.error`
+> 写工具栏反馈行。"待生效"标注（§4）落地为 `WorkflowCanvasState.graphPending`：
+> Running 下图结构变更经 `applyGraph` 校验入队后置位，pump 消费 `GraphApplied`
+> 事件或引擎离开 Running 清除；帧边界拒绝（Info 事件）时如实保持（画布图与
+> 生效图确实不一致），工具栏 warning 色 "pending - applies next frame"。
+> 帧源绑定：相机源节点取 RGB 彩色流（`apps/viewer/workflow_frame_source.hpp`
+> 接缝，非阻塞"上次已见序号"过滤 + RGBA8 零拷贝 wrap；多源图各 source 节点
+> 独立水位）；深度伪彩通道不进工作流，如需深度输入按决策扩展目录。契约假引擎
+> （`M5-08`）随集成按计划移除，`M4-09` 契约与共用测试套件由真引擎延续。
+
 ## 6. EUI-NEO 原语映射
 
 | UI 元素 | 原语/组件 | 纪律与已知风险 |

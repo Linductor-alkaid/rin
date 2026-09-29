@@ -7,7 +7,7 @@
 > [DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)）；完成依赖
 > M4 真引擎集成
 > 建议发布点：v0.5.0
-> 更新日期：2026-09-28
+> 更新日期：2026-09-29
 
 ## 目标
 
@@ -70,7 +70,7 @@
       控件-参数绑定与中间结果路径测试通过。
 - [x] `M5-05` 性能面板：每节点耗时（滚动窗口）、端到端 FPS、丢弃计数；数据源为
       引擎与 `executor::comm` 统计。完成判据：统计管道单测 + UI 展示集成。
-- [ ] `M5-06` 工作流运行控制：启动 / 停止、参数热更新语义（下一帧生效）、图结构
+- [x] `M5-06` 工作流运行控制：启动 / 停止、参数热更新语义（下一帧生效）、图结构
       变更时排空与重建。完成判据：引擎-UI 集成测试（含 `onShutdown` 关闭顺序
       回归）通过。
 - [ ] `M5-07` M5 测试矩阵、真机验收与文档回写：全预设测试通过；D435if 真机端到
@@ -106,7 +106,7 @@
 - [ ] `ctest`（debug/asan/ubsan/tsan）全绿，新增：导航状态、画布几何 / 命中 /
       图同步、参数绑定、统计管道、引擎-UI 集成与关闭回归测试、`M5-08` 假引擎
       与 `M4-07` 真引擎共用的契约测试。
-- [ ] `M5-06` 假换真集成回归记录（含 `onShutdown` 关闭顺序）。
+- [x] `M5-06` 假换真集成回归记录（含 `onShutdown` 关闭顺序）。
 - [ ] `DEC-014`/`DEC-015`/`DEC-016` 记录生效并被实现引用。
 - [ ] `ui_workspace_design.md` 完成且与实现一致（页面拓扑树逐项可对应）。
 - [ ] 真机端到端验收记录或规范化未执行记录（`M5-07`）。
@@ -347,3 +347,48 @@ processed 增长、选中节点 last 1.7 ms · avg 1.6 ms · 129 frames、stop �
 冲突，全程无崩溃。环境：x86_64 Linux（GNOME/XWayland），GCC 13。面板交互与
 视觉验收按既定纪律归 `M5-07` 真机端到端。`M5-06`（工作流运行控制）为下一
 工作项。
+
+2026-09-29：`M5-06` 完成关闭——工作流运行控制 + 假换真集成落地（§5.8 +
+DEC-016 交错策略终点）。**假换真**：viewer 弃用 `M5-08` 契约假引擎，改接
+`M4-07` 真引擎 `createWorkflowEngine`；新增 `apps/viewer/workflow_frame_source.hpp`
+相机帧源接缝（engine.hpp `WorkflowFrameSource` 的应用层实现）——`ICameraService`
+RGB 彩色流经"上次已见序号"过滤非阻塞读取（引擎帧泵 tick 为唯一调用方），
+RGBA8 共享缓冲 `ImageU8::wrap` 零拷贝接管（预览与工作流共享同一缓冲），
+无效帧/服务失效按"无新帧"防御；多源图各 source 节点独立水位（引擎按节点
+分发）；服务以 shared_ptr 值捕获——关闭顺序中服务先停、引擎后回收的窗口内
+残余 tick 取帧恒为"无新帧"，闭包不悬垂（EXEC-04 关闭顺序保持不变）。
+深度伪彩通道不进工作流（如需深度输入按决策扩展目录，不在接缝内隐式分流）。
+**运行控制（§5.8）**：工具栏新增 Start/Stop（Fit 左侧）——启动可用条件 =
+当前图校验通过（§4 唯一判据）且引擎 Idle/Failed（Failed 恢复路径 = stop 回
+Idle 后重启，点击序内完成；契约"Failed 为运行终态，stop 后可重启"）；停止
+可用条件 = Running/Failed（幂等，owner 线程同步有界排空 ≤ maxInFlight 帧
+任务，与 onShutdown 同纪律）；Stopping 全禁用，无暂停（契约无暂停语义）；
+启动准入失败以 `AdmissionResult.error` 写反馈行显式呈现。**待生效标注（§4）**：
+`WorkflowCanvasState.graphPending`——Running 下图结构变更经 `applyGraph` 校验
+入队后置位，pump 消费 `GraphApplied` 事件或引擎离开 Running（stop 排空待生效
+队列）清除；帧边界拒绝（Info 事件）时如实保持（画布图与生效图确实不一致）；
+工具栏 warning 色 "pending - applies next frame"。**假引擎移除**：`rin_workflow_fake`
+目标与 `fake_engine.{hpp,cpp}`、`test_workflow_fake_engine` 按既定计划随本次
+集成删除（DEC-016 使命终结；假引擎 peek 缺陷连带消亡）；契约套件
+`workflow_engine_contract_suite.hpp` 保留，真引擎独跑（`M4-09` 契约面不变）。
+测试（Independent-Verification-Agent 独立编写执行）：适配 `test_workflow_engine`
+（目录一致性改对 `makeDefaultImageNodeCatalog` 单一事实源逐字段）、
+`test_param_panel`/`test_perf_panel`（fixture 换真引擎 + 合成帧源；crop 节点
+显式携带合法 ROI——真实算子越界 ROI 运行期拒绝；perf 耗时断言从仿真常数改
+实测区间 + 源节点恒 0（M4-07 源节点记账语义）；失败注入改 `requestParamUpdate`
+热更越界 ROI 下一帧生效路径）；新增 `tests/test_run_control.cpp` 4 分区 126 项
+检查——帧源接缝（最新帧水位/零拷贝指针相等/双源独立水位/无效帧防御）、运行
+控制状态机（Idle 同步生效、Running 待生效置位/清除、校验拒绝不置位、stop
+收敛）、端到端（假相机 → 接缝 → 真引擎 → NodeOutputCache/pumpNodeOutput/
+参数热更新下一帧生效/停止排空）、**onShutdown 同构全序回归**（服务 stop →
+引擎 stop+reset → 面板排空 → `shutdown(true)` Completed）与关停竞态防御。
+1605 项检查 debug/asan/ubsan/tsan 四预设 26/26 全绿（0 消毒器诊断、0 tsan
+警告；测试数量对照 master 仅减 fake_engine 仅增 run_control）。真机冒烟
+（D435if 直连，临时本地补丁预置 source→downscale→grayify 三节点链 + 脚本化
+启动/停止，验证后已回退不入库；截图存档 `screenshots/m5-06/`）：start 准入
+后 Running，真相机 30fps 进真引擎（10s 处理 283–285 帧、零丢弃、29.8–30.0 fps），
+灰度化节点实测 last 0.2 ms · avg 0.2 ms · 161→284 frames，缩略图 424x240 随
+sourceSequence 推进，stop 收敛 Idle、缩略图排空空态、统计冻结末次值、
+[stopped] 事件行，与 §4 排空语义逐项一致；全程无崩溃（工具栏交互与视觉细节
+归 `M5-07` 真机端到端）。环境：x86_64 Linux（GNOME/XWayland），GCC 13。
+`M5-07`（M5 测试矩阵、真机验收与文档回写）为下一工作项。
