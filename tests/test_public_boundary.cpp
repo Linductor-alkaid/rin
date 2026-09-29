@@ -320,5 +320,37 @@ int main() {
         RIN_CHECK(convNode != nullptr);
         RIN_CHECK(convNode != nullptr && convNode->descriptor().typeId == "conv_kernel");
     }
+
+    // M4-05 直方图均衡与灰度化算子工厂（仅公开头可见性 + 最小实例化，RULE-01）：
+    // grayify（Rgba8→Gray8）/ hist_eq（Gray8→Gray8）均无参数（§6 表格），无参数
+    // 节点无构造期拒绝分支——声明不含参数直接实例化即返回实现（数值 golden 归
+    // test_image_ops_histogram.cpp）。
+    {
+        rin::NodeDescriptor grayify;
+        grayify.typeId = "grayify";
+        grayify.displayName = "灰度化";
+        grayify.inputs = {rin::PortType::Rgba8};
+        grayify.outputs = {rin::PortType::Gray8};
+        rin::NodeInstance grayifyInstance;
+        grayifyInstance.id = 1;
+        grayifyInstance.typeId = "grayify";
+        const std::unique_ptr<rin::IImageNode> grayifyNode =
+            rin::makeDefaultImageNode(grayify, grayifyInstance);
+        RIN_CHECK(grayifyNode != nullptr);
+        RIN_CHECK(grayifyNode != nullptr && grayifyNode->descriptor().typeId == "grayify");
+
+        rin::NodeDescriptor histEq;
+        histEq.typeId = "hist_eq";
+        histEq.displayName = "直方图均衡";
+        histEq.inputs = {rin::PortType::Gray8};
+        histEq.outputs = {rin::PortType::Gray8};
+        rin::NodeInstance histEqInstance;
+        histEqInstance.id = 2;
+        histEqInstance.typeId = "hist_eq";
+        const std::unique_ptr<rin::IImageNode> histEqNode =
+            rin::makeDefaultImageNode(histEq, histEqInstance);
+        RIN_CHECK(histEqNode != nullptr);
+        RIN_CHECK(histEqNode != nullptr && histEqNode->descriptor().typeId == "hist_eq");
+    }
     return rin_test::exitStatus();
 }

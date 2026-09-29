@@ -5,9 +5,11 @@
 //
 // 被测面与范围（对应设计文档 §7 conv_kernel/gaussian_blur golden 项）：
 // 1) 工厂 makeDefaultImageNode："gaussian_blur"/"conv_kernel" 返回实现且
-//    descriptor().typeId 与请求一致；仍未实现类型（grayify/hist_eq/fft_lowpass）
-//    抛 std::invalid_argument 且错误消息含 "(M4-05..06 operators are not
-//    implemented yet)"（目录声明与工厂能力偏差显式暴露，不静默）；
+//    descriptor().typeId 与请求一致；仍未实现类型（M4-06 FFT 族 fft_lowpass/
+//    fft_highpass；M4-05 起 grayify/hist_eq 已实现并归
+//    test_image_ops_histogram.cpp）抛 std::invalid_argument 且错误消息含
+//    "(M4-06 FFT operators are not implemented yet)"（目录声明与工厂能力偏差
+//    显式暴露，不静默）；
 // 2) conv_kernel（Gray8→Gray8，相关语义核不翻转，double 累加后 floor(v+0.5)
 //    饱和量化，核不自动归一化）：
 //   - 构造期拒绝全分支：size 非法枚举/种类错位、kernel 缺失/种类错位/长度≠K²
@@ -483,13 +485,14 @@ int main() {
                   blur->descriptor().outputs == std::vector<PortType>{PortType::Gray8});
     }
 
-    // 未实现类型（M4-05..06）工厂仍抛 invalid_argument，且错误消息冻结为
-    // "(M4-05..06 operators are not implemented yet)"。
-    for (const char* typeId : {"grayify", "hist_eq", "fft_lowpass", "fft_highpass"}) {
-        const NodeDescriptor descriptor = makeUnimplementedDescriptor(typeId, PortType::Rgba8);
+    // 未实现类型（M4-06 FFT 族；M4-05 起 grayify/hist_eq 已实现并归
+    // test_image_ops_histogram.cpp）工厂仍抛 invalid_argument，且错误消息冻结为
+    // "(M4-06 FFT operators are not implemented yet)"。
+    for (const char* typeId : {"fft_lowpass", "fft_highpass"}) {
+        const NodeDescriptor descriptor = makeUnimplementedDescriptor(typeId, PortType::Gray8);
         const std::string message = factoryError(descriptor, makeInstance(1, typeId));
         RIN_CHECK_MSG(!message.empty(), std::string("未实现类型应抛 invalid_argument：") + typeId);
-        RIN_CHECK_MSG(message.find("(M4-05..06 operators are not implemented yet)") !=
+        RIN_CHECK_MSG(message.find("(M4-06 FFT operators are not implemented yet)") !=
                           std::string::npos,
                       std::string("未实现类型错误消息冻结：") + typeId);
     }
