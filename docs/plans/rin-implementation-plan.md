@@ -110,6 +110,12 @@ tryLoadGrayFrame）。2026-09-29 用户再反馈三项立项
 [M7](m7-workbench-usability.md)：运行中改图产物陈旧（引擎产物邮箱改同 id
 跨代共享 + 过代帧跳过发布）、分辨率下拉悬垂指针（绑定移入 ViewerContext）、
 调色板滚动与五区 docking 可调（scrollView 组件 + mouseArea 分隔条）。
+2026-09-29 `M5-07` 完成关闭、M5 里程碑收口：全预设测试矩阵 debug/asan/
+ubsan/tsan 26/26 全绿（真机硬件四预设实跑，零消毒器诊断）；D435if 真机
+端到端验收通过（拖拽搭图→连线→运行→中间结果→性能面板→停止排空，交互
+接缝注入时序，截图 `screenshots/m5-07/`）；`ui_workspace_design.md` 拓扑
+树逐项核对、CHANGELOG 回写、`SCOPE-09` 关闭。M4/M5/M6/M7 全部交付，
+v0.5.0 发布点待用户发布。
 
 ## 交付边界（SCOPE）
 
@@ -138,12 +144,15 @@ tryLoadGrayFrame）。2026-09-29 用户再反馈三项立项
       逐节点中间产物、每节点耗时与端到端 FPS 统计，执行经 Executor）（M4，
       [DEC-012](../decisions/)、[DEC-013](../decisions/)；2026-09-29 随
       `M4-08` 关闭，见 [m4-cv-node-workflow.md](m4-cv-node-workflow.md)）。
-- [ ] `SCOPE-09` 工作台 UI：页面导航（预览 / 位姿 / 图像工作流 / 设置）、拖拽式
+- [x] `SCOPE-09` 工作台 UI：页面导航（预览 / 位姿 / 图像工作流 / 设置）、拖拽式
       节点编辑器（调色板、连线、参数面板、中间结果查看）、性能面板与运行控制，
       界面信息架构与操作逻辑拓扑树设计文档（M5，
       [DEC-014](../decisions/)、[DEC-015](../decisions/)、
       [DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)；
-      按 DEC-016 骨架对契约假引擎先行，完成后与 M4 真引擎集成）。
+      按 DEC-016 骨架对契约假引擎先行，完成后与 M4 真引擎集成；
+      2026-09-29 随 `M5-07` 收口关闭，见
+      [m5-ui-workbench.md](m5-ui-workbench.md) 验证记录；M6 输入扩展与
+      M7 可用性修复已先行合入 master）。
 
 ## 不可破坏的架构约束（RULE）
 

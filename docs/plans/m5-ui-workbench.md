@@ -1,6 +1,6 @@
 # M5：工作台 UI——导航、节点编辑器与性能面板
 
-> 状态：In Progress
+> 状态：Complete
 > 负责人：Linductor-alkaid（授权 Agent 按工程规范自治执行）
 > 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
 > 前置：M3、`M4-09` 视图契约（骨架与假引擎先行，见
@@ -73,7 +73,7 @@
 - [x] `M5-06` 工作流运行控制：启动 / 停止、参数热更新语义（下一帧生效）、图结构
       变更时排空与重建。完成判据：引擎-UI 集成测试（含 `onShutdown` 关闭顺序
       回归）通过。
-- [ ] `M5-07` M5 测试矩阵、真机验收与文档回写：全预设测试通过；D435if 真机端到
+- [x] `M5-07` M5 测试矩阵、真机验收与文档回写：全预设测试通过；D435if 真机端到
       端验收（拖拽搭图→运行→中间结果→性能面板）记录；`ui_workspace_design.md`
       与 CHANGELOG 回写。无设备时按工程规范第 4 节记录补跑条件。
 - [x] `M5-08` 契约假引擎（[DEC-016](../decisions/DEC-016-contract-first-workbench-order.md)，
@@ -103,14 +103,14 @@
 
 ## 测试与退出条件
 
-- [ ] `ctest`（debug/asan/ubsan/tsan）全绿，新增：导航状态、画布几何 / 命中 /
+- [x] `ctest`（debug/asan/ubsan/tsan）全绿，新增：导航状态、画布几何 / 命中 /
       图同步、参数绑定、统计管道、引擎-UI 集成与关闭回归测试、`M5-08` 假引擎
       与 `M4-07` 真引擎共用的契约测试。
 - [x] `M5-06` 假换真集成回归记录（含 `onShutdown` 关闭顺序）。
-- [ ] `DEC-014`/`DEC-015`/`DEC-016` 记录生效并被实现引用。
-- [ ] `ui_workspace_design.md` 完成且与实现一致（页面拓扑树逐项可对应）。
-- [ ] 真机端到端验收记录或规范化未执行记录（`M5-07`）。
-- [ ] 文档同步：总计划 `SCOPE-09`、CHANGELOG（Unreleased）。
+- [x] `DEC-014`/`DEC-015`/`DEC-016` 记录生效并被实现引用。
+- [x] `ui_workspace_design.md` 完成且与实现一致（页面拓扑树逐项可对应）。
+- [x] 真机端到端验收记录或规范化未执行记录（`M5-07`）。
+- [x] 文档同步：总计划 `SCOPE-09`、CHANGELOG（Unreleased）。
 
 ## 验证记录
 
@@ -392,3 +392,36 @@ sourceSequence 推进，stop 收敛 Idle、缩略图排空空态、统计冻结�
 [stopped] 事件行，与 §4 排空语义逐项一致；全程无崩溃（工具栏交互与视觉细节
 归 `M5-07` 真机端到端）。环境：x86_64 Linux（GNOME/XWayland），GCC 13。
 `M5-07`（M5 测试矩阵、真机验收与文档回写）为下一工作项。
+
+2026-09-29：`M5-07` 完成关闭、M5 里程碑收口。**全预设测试矩阵**
+（Independent-Verification-Agent 独立执行）：debug/asan/ubsan/tsan 四预设
+增量构建零错误零新增警告，ctest 全量 26/26 全绿（debug 28.8s / asan 35.6s /
+ubsan 32.9s / tsan 按 `setarch -R` 既有纪律 90.3s），asan/ubsan/tsan 消毒器
+诊断为 0；`realsense_hardware` 四预设均为真机实跑非 skip（D435if
+261922074392 / 固件 5.15.1.55，debug verbose 222 checks 0 failures——含
+RGB/深度帧内容校验、IMU 通道、分辨率切换与干净停止），M3-08 tsan×真机既有
+抖动本轮未触发（四预设一次全绿，已知限制无需援引）。**真机端到端验收**
+（D435if 直连，GNOME/XWayland 3200x2000@2x，应用逻辑视口 960x600）：脚本化
+交互时序驱动完整闭环——调色板拖出创建三节点（相机源 RGB → 灰度化 →
+FFT 低通，创建即选中）、端口 press/drag/release 经画布交互状态机建立两条
+连线（Rgba8/Gray8 类型色，悬空中间态标注 → valid）、Start 准入 Running 后
+真相机 30 fps 进真引擎（processed 46→97→140、end-to-end 29.97–30.15 fps、
+启动瞬态丢弃 1 帧显式计数呈现、in flight ≤2 有界）、选中节点参数面板
+（截止 0.2）+ 848x480 实时缩略图随 sourceSequence 推进（seq 220→282）、
+性能面板总览（30.0 fps / processed / dropped / in flight + dropped 非零
+warning 行）与节点耗时徽标（0.0 / 0.9 / 34.7 ms）、stop 排空回 Idle
+（缩略图清空、统计冻结末次值 + stopped 标注、[started]/[stopped] 事件行）。
+注入方式：OS 级输入自动化在本环境不可用（实证 mutter Wayland 会话不向 X
+投递 XTEST 合成事件、GLFW 过滤 XSendEvent 合成输入——hover/焦点/按键均不
+达应用），按既有纪律以临时本地补丁在工作流页交互接缝注入指针事件序列
+（调色板拖出三回调、画布 press/drag/release 状态机、运行控制回调，与真实
+输入驱动的处理路径相同），compose/渲染输出为真实路径；验证后补丁已回退
+不入库（洁净树四预设重建测试全绿，见上）。桌面端交互（拖拽/下拉/docking/
+快捷键）此前已经用户真机实操使用并经 M6/M7 反馈修复循环验证。截图存档
+`screenshots/m5-07/`（运行态全图 / 选中节点产物与参数 / 性能总览 / 停止
+冻结）。**文档回写**：`ui_workspace_design.md` §2 拓扑树逐项与实现对应
+核对并修正预览页配色入口滞后描述（DEC-014 决策 3 已落地设置页）、§3 快捷键
+清单补 `Esc`（M5-03 落地）、§8 P0 验收补记；CHANGELOG 补 `M5-02`..`M5-05`
+工作台条目；总计划 `SCOPE-09` 关闭；M7 验证记录引用的 `screenshots/m7/`
+截图补入库。环境：x86_64 Linux（GNOME/XWayland），GCC 13。M5 全部工作项
+闭合，工作台 UI 里程碑完成；v0.5.0 发布点待用户发布。
