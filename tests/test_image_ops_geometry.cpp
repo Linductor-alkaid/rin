@@ -5,10 +5,9 @@
 //
 // 被测面与范围（对应设计文档 §7 crop/downscale golden 项）：
 // 1) 工厂 makeDefaultImageNode："source" → nullptr（注入型）；"crop"/"downscale"
-//    返回实现且 descriptor().typeId 与请求一致；未实现类型（fft_lowpass，M4-04 起
-//    gaussian_blur/conv_kernel 已实现并归 test_image_ops_convolution.cpp；M4-05 起
-//    grayify/hist_eq 已实现并归 test_image_ops_histogram.cpp）抛
-//    std::invalid_argument；
+//    返回实现且 descriptor().typeId 与请求一致；M4-06 起 FFT 族（fft_lowpass 等）
+//    已实现并归 test_image_ops_fft.cpp，"未实现类型抛异常"见证由真正未知的
+//    typeId（fft_lowpass_nonexistent 等）承担，抛 std::invalid_argument；
 // 2) crop：像素级 golden（4×3 逐像素唯一，crop(1,1,2,2)）；全图裁切恒等；输入带
 //    padding stride 时逐行 memcpy 正确且输出紧凑（stride = width×4，不继承输入
 //    stride，padding 字节不泄漏）；越界拒绝（x+width > 输入宽 / y+height > 输入高 /
@@ -30,8 +29,10 @@
 // 4) 图集成（自建 source/crop/downscale 三类型小目录，schema 照抄设计文档 §6）：
 //    source→crop→downscale 链（注入 4×4 已知帧，crop(1,1,2,2) 中间产物与最终
 //    1×1 逐字节 golden）；图执行中 crop 越界 → runNodeGraph 原样抛
-//    std::invalid_argument；目录含未实现类型（fft_lowpass）时 buildNodeGraph
-//    显式失败（validation.ok == false，issues 含 BadParam，graph 为 null）。
+//    std::invalid_argument；M4-06 起 FFT 族已实现、目录不再含未实现类型，目录内
+//    类型经工厂抛异常的见证改用参数矛盾（fft_bandpass 实例 lowCut > highCut
+//    构造期拒绝）→ buildNodeGraph 显式失败（validation.ok == false，issues 含
+//    BadParam，graph 为 null）。
 //
 // golden 独立性说明：两组以上小图 golden 以字面字节向量写出，附手推过程注释
 // （只依赖 §7 冻结公式）；大图用例由测试内自写的 refNearest/refBilinear double
@@ -98,6 +99,18 @@ ParamDescriptor integerParam(const std::string& id, std::int64_t defaultValue, d
     return p;
 }
 
+ParamDescriptor realParam(const std::string& id, double defaultValue, double min, double max) {
+    ParamDescriptor p;
+    p.id = id;
+    p.label = id;
+    p.kind = ParamKind::Real;
+    p.defaultValue = defaultValue;
+    p.hasRange = true;
+    p.minValue = min;
+    p.maxValue = max;
+    return p;
+}
+
 NodeDescriptor makeSourceDescriptor() {
     NodeDescriptor d;
     d.typeId = "source";
@@ -142,10 +155,12 @@ NodeDescriptor makeDownscaleDescriptor() {
     return d;
 }
 
-// §6 的 fft_lowpass / gaussian_blur 声明（fft_lowpass 仅用于"工厂未实现该类型"与
-// 图准入路径，M4-05 起 grayify/hist_eq 已实现归 test_image_ops_histogram.cpp；
-// gaussian_blur 自 M4-04 起已实现，此处仅作 1c 实现签名见证）。图准入见证需
-// Gray8 源（fft_lowpass 声明输入为 Gray8，Rgba8 源会在工厂前被 TypeMismatch 拒绝）。
+// §6 的 fft_lowpass / fft_bandpass / gaussian_blur 声明（M4-06 起 FFT 族已实现：
+// fft_lowpass 仅作"工厂返回实现"最小见证（完整 golden 归
+// test_image_ops_fft.cpp）；fft_bandpass 供 4c"目录内类型经工厂抛异常 → BadParam"
+// 参数矛盾见证。gaussian_blur 自 M4-04 起已实现，此处仅作 1c 实现签名见证）。
+// 图准入见证需 Gray8 源（FFT 族声明输入为 Gray8，Rgba8 源会在工厂前被
+// TypeMismatch 拒绝）。
 NodeDescriptor makeSourceGrayDescriptor() {
     NodeDescriptor d;
     d.typeId = "source";
@@ -169,6 +184,19 @@ NodeDescriptor makeFftLowpassDescriptor() {
     cutoff.minValue = 0.0;
     cutoff.maxValue = 1.0;
     d.params.push_back(std::move(cutoff));
+    return d;
+}
+
+// §6：fft_bandpass 带通 Gray8→Gray8，lowCut: Real 0.2 [0,1]；highCut: Real 0.6 [0,1]
+// （4c 参数矛盾见证用：lowCut > highCut 由工厂构造期拒绝）。
+NodeDescriptor makeFftBandpassDescriptor() {
+    NodeDescriptor d;
+    d.typeId = "fft_bandpass";
+    d.displayName = "FFT 带通";
+    d.inputs = {PortType::Gray8};
+    d.outputs = {PortType::Gray8};
+    d.params.push_back(std::move(realParam("lowCut", 0.2, 0.0, 1.0)));
+    d.params.push_back(std::move(realParam("highCut", 0.6, 0.0, 1.0)));
     return d;
 }
 
@@ -409,11 +437,13 @@ int main() {
         RIN_CHECK(downscale != nullptr && downscale->descriptor().typeId == "downscale");
     }
 
-    // --- 1c) 实现签名见证扩展与未实现类型抛 std::invalid_argument（目录声明与
+    // --- 1c) 实现签名见证扩展与未知类型抛 std::invalid_argument（目录声明与
     //     工厂能力偏差显式暴露）：M4-04 起 gaussian_blur/conv_kernel 已实现
     //     （golden 归 test_image_ops_convolution.cpp）；M4-05 起 grayify/hist_eq
-    //     已实现（golden 归 test_image_ops_histogram.cpp）；"未实现类型抛异常"
-    //     见证改用仍在 M4-06 的 fft_lowpass 与未知 typeId 两例 ---
+    //     已实现（golden 归 test_image_ops_histogram.cpp）；M4-06 起 FFT 族已
+    //     实现（golden 归 test_image_ops_fft.cpp）——原"fft_lowpass 未实现"见证
+    //     改为"返回实现"见证，"抛异常"见证由真正未知的 typeId 承担（错误消息
+    //     冻结为无后缀新口径）---
     {
         const NodeDescriptor gaussian = makeGaussianBlurDescriptor();
         const std::unique_ptr<IImageNode> blur =
@@ -421,9 +451,10 @@ int main() {
         RIN_CHECK(blur != nullptr);
         RIN_CHECK(blur != nullptr && blur->descriptor().typeId == "gaussian_blur");
         const NodeDescriptor fftLowpass = makeFftLowpassDescriptor();
-        RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(fftLowpass, makeInstance(1, "fft_lowpass"));
-        }));
+        const std::unique_ptr<IImageNode> fft =
+            rin::makeDefaultImageNode(fftLowpass, makeInstance(1, "fft_lowpass"));
+        RIN_CHECK(fft != nullptr);
+        RIN_CHECK(fft != nullptr && fft->descriptor().typeId == "fft_lowpass");
         NodeDescriptor ghost;
         ghost.typeId = "fft_lowpass_nonexistent";
         RIN_CHECK(throwsAs<std::invalid_argument>([&] {
@@ -1101,15 +1132,19 @@ int main() {
         }
     }
 
-    // --- 4c) 目录含未实现类型（fft_lowpass）：buildNodeGraph 显式失败（BadParam）---
-    // （M4-05 起 grayify/hist_eq 已实现，见证链改用仍在 M4-06 的 fft_lowpass；
-    // 源声明 Gray8 输出以通过端口类型核对、精确触达工厂异常路径。）
+    // --- 4c) 目录内类型经工厂抛异常：buildNodeGraph 显式失败（BadParam）---
+    // （M4-06 起 FFT 族已实现、目录不再含"声明了但未实现"的类型；见证改用参数
+    // 矛盾路径：fft_bandpass 实例 lowCut=0.6 > highCut=0.2 在图校验看来是范围内
+    // 合法赋值，工厂构造期拒绝 → buildNodeGraph 显式化为 BadParam。源声明 Gray8
+    // 输出以通过端口类型核对、精确触达工厂异常路径。）
     {
         NodeCatalog catalog;
-        catalog.nodes = {makeSourceGrayDescriptor(), makeFftLowpassDescriptor()};
+        catalog.nodes = {makeSourceGrayDescriptor(), makeFftBandpassDescriptor()};
 
+        NodeInstance bandpass = makeInstance(2, "fft_bandpass");
+        bandpass.params = {assign("lowCut", 0.6), assign("highCut", 0.2)};
         WorkflowGraph graph;
-        graph.nodes = {makeInstance(1, "source"), makeInstance(2, "fft_lowpass")};
+        graph.nodes = {makeInstance(1, "source"), bandpass};
         graph.connections = {conn(1, 0, 2, 0)};
 
         const ImageNodeFactory factory = [](const NodeDescriptor& descriptor,
@@ -1123,7 +1158,7 @@ int main() {
         for (const auto& issue : build.validation.issues) {
             hasBadParam = hasBadParam || issue.kind == ValidationIssueKind::BadParam;
         }
-        RIN_CHECK_MSG(hasBadParam, "未实现类型经工厂异常显式化为 BadParam");
+        RIN_CHECK_MSG(hasBadParam, "工厂构造期参数矛盾异常显式化为 BadParam");
     }
 
     return rin_test::exitStatus();

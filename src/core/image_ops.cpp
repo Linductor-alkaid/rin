@@ -4,11 +4,17 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+// FFT 后端（DEC-012，M4-06）：pinned kissfft float 静态库，调用面收敛在本文件的
+// FFT 滤波节点实现内；仅实现细节，不进公开头（RULE-01）。
+#include <kiss_fft.h>
+#include <kiss_fftndr.h>
 
 namespace rin {
 
@@ -657,6 +663,166 @@ private:
     NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
 };
 
+/// kissfft 计划句柄：kiss_fftndr_alloc 以 malloc 自管内存（mem = nullptr），析构
+/// 经 kiss_fft_free 归还；apply 期构造/释放（节点逻辑只读、可被并发调用，§4.1，
+/// 不做实例内缓存），分配失败为系统故障，显式抛出不静默。
+struct KissFftCfgDeleter {
+    void operator()(kiss_fftndr_cfg cfg) const noexcept { kiss_fft_free(cfg); }
+};
+using KissFftCfg = std::unique_ptr<kiss_fftndr_state, KissFftCfgDeleter>;
+
+/// FFT 填充尺寸：向上取 2 幂且下界 2——kissfft 实数半谱维（dims 最后一维）须为
+/// 偶数，1 像素宽/高的图同样填到 2；输入受 kMaxImageBytes 预算（尺寸 < 2²⁵），
+/// 无溢出。
+std::uint32_t fftPadSize(std::uint32_t size) {
+    std::uint32_t padded = 2;
+    while (padded < size) {
+        padded <<= 1;
+    }
+    return padded;
+}
+
+/// FFT 滤波节点族（M4-06）：Gray8 → Gray8，理想锐截止频域掩膜（DEC-012）。内部
+/// 零填充到 2 幂（宽高各自，848×480 → 1024×512；512×512 原生），掩膜按归一化
+/// 频率在填充分辨率上构造，IFFT 后裁回原尺寸；数值语义见
+/// image_workflow_design.md §7（掩膜代数：高通 = 低通补、带通 = 低通掩膜差）。
+class FftFilterImageNode final : public IImageNode {
+public:
+    enum class Mode {
+        LowPass,   /// 保留 ρ ≤ cutoff。
+        HighPass,  /// 保留 ρ > cutoff（低通的逐点补；DC 恒移除）。
+        BandPass,  /// 保留 lowCut < ρ ≤ highCut（低通(highCut) − 低通(lowCut)）。
+    };
+
+    FftFilterImageNode(const NodeDescriptor& descriptor, const NodeInstance& instance,
+                       Mode mode)
+        : descriptor_(descriptor), mode_(mode) {
+        // 参数按目录 schema 读取：bandpass 只声明 lowCut/highCut（§6），无 cutoff——
+        // 读取未声明参数会误伤按冻结 schema 的默认值构造。
+        if (mode_ == Mode::BandPass) {
+            lowCut_ = requireUnitFrequency(descriptor_, instance, "lowCut");
+            highCut_ = requireUnitFrequency(descriptor_, instance, "highCut");
+            if (lowCut_ >= highCut_) {
+                throw std::invalid_argument(
+                    "'" + descriptor_.typeId + "': empty passband (lowCut " +
+                    std::to_string(lowCut_) + " >= highCut " + std::to_string(highCut_) + ")");
+            }
+        } else {
+            cutoff_ = requireUnitFrequency(descriptor_, instance, "cutoff");
+        }
+    }
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
+        const ImageU8& source = singleInput(descriptor_, inputs);
+        const std::uint32_t width = source.width();
+        const std::uint32_t height = source.height();
+        const std::uint32_t padW = fftPadSize(width);
+        const std::uint32_t padH = fftPadSize(height);
+
+        // 填充实图缓冲（float，行主序 padH×padW，填充区零）。
+        std::vector<float> padded(static_cast<std::size_t>(padW) * padH, 0.0f);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const std::uint8_t* srcRow = source.row(y);
+            float* dstRow = padded.data() + static_cast<std::size_t>(y) * padW;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                dstRow[x] = static_cast<float>(srcRow[x]);
+            }
+        }
+
+        // 正变换：dims = {padH, padW}（实数半谱维为内存最快维 padW，须偶数），
+        // 半谱 padH×(padW/2+1) 复数（未归一化）。
+        const int dims[2] = {static_cast<int>(padH), static_cast<int>(padW)};
+        const KissFftCfg forward(kiss_fftndr_alloc(dims, 2, 0, nullptr, nullptr));
+        if (!forward) {
+            throw std::runtime_error("'" + descriptor_.typeId +
+                                     "': kissfft forward plan allocation failed");
+        }
+        const std::size_t specWidth = static_cast<std::size_t>(padW) / 2 + 1;
+        std::vector<kiss_fft_cpx> spectrum(static_cast<std::size_t>(padH) * specWidth);
+        kiss_fftndr(forward.get(), padded.data(), spectrum.data());
+
+        // 掩膜乘（原地）：归一化频率为每像素周期数——fx = u/padW（半谱非负）、
+        // fy 带符号折返；ρ = √(fx²+fy²)。2 幂填充下归一化频率为二进有理数，
+        // 与 cutoff 的比较在 double 内精确；掩膜关于 (u,v) → (−u,−v) 对称，共轭
+        // 对称保持（逆变换为实图）。
+        for (std::uint32_t v = 0; v < padH; ++v) {
+            const double fy = (v <= padH / 2)
+                                  ? static_cast<double>(v) / padH
+                                  : (static_cast<double>(v) - padH) / padH;
+            kiss_fft_cpx* specRow = spectrum.data() + static_cast<std::size_t>(v) * specWidth;
+            for (std::size_t u = 0; u < specWidth; ++u) {
+                const double fx = static_cast<double>(u) / padW;
+                if (!passes(std::sqrt(fx * fx + fy * fy))) {
+                    specRow[u].r = 0.0f;
+                    specRow[u].i = 0.0f;
+                }
+            }
+        }
+
+        // 逆变换（未归一化）+ 显式 1/(padW·padH)，裁回原尺寸左上 W×H 后
+        // round-half-up 饱和量化（与卷积/高斯族同款量化纪律）。
+        const KissFftCfg inverse(kiss_fftndr_alloc(dims, 2, 1, nullptr, nullptr));
+        if (!inverse) {
+            throw std::runtime_error("'" + descriptor_.typeId +
+                                     "': kissfft inverse plan allocation failed");
+        }
+        kiss_fftndri(inverse.get(), spectrum.data(), padded.data());
+        const double inverseScale =
+            1.0 / (static_cast<double>(padW) * static_cast<double>(padH));
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height);
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const float* srcRow = padded.data() + static_cast<std::size_t>(y) * padW;
+            std::uint8_t* dstRow = buffer.data() + static_cast<std::size_t>(y) * width;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                dstRow[x] = quantizeU8(static_cast<double>(srcRow[x]) * inverseScale);
+            }
+        }
+        return {freezeImage(PortType::Gray8, width, height, std::move(buffer))};
+    }
+
+private:
+    /// 构造期参数读取：Real、有限且 ∈ [0,1]（归一化频率；图准入范围与目录声明
+    /// 一致，此处防御运行期直接构造的实例）。
+    [[nodiscard]] static double
+    requireUnitFrequency(const NodeDescriptor& descriptor, const NodeInstance& instance,
+                         const std::string& paramId) {
+        const std::optional<double> value = paramReal(descriptor, instance, paramId);
+        if (!value) {
+            throw std::invalid_argument("'" + descriptor.typeId + "': parameter '" + paramId +
+                                        "' is missing or has a mismatched kind");
+        }
+        if (!std::isfinite(*value) || *value < 0.0 || *value > 1.0) {
+            throw std::invalid_argument("'" + descriptor.typeId + "': parameter '" + paramId +
+                                        "' must be finite in [0, 1], got " +
+                                        std::to_string(*value));
+        }
+        return *value;
+    }
+
+    /// 掩膜判据（理想锐截止；边界归属与掩膜代数恒等式见 §7）。
+    [[nodiscard]] bool passes(double rho) const noexcept {
+        switch (mode_) {
+        case Mode::LowPass:
+            return rho <= cutoff_;
+        case Mode::HighPass:
+            return rho > cutoff_;
+        case Mode::BandPass:
+            return rho > lowCut_ && rho <= highCut_;
+        }
+        return false;
+    }
+
+    NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
+    Mode mode_ = Mode::LowPass;
+    double cutoff_ = 0.2;
+    double lowCut_ = 0.2;
+    double highCut_ = 0.6;
+};
+
 }  // namespace
 
 std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descriptor,
@@ -682,8 +848,20 @@ std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descripto
     if (descriptor.typeId == "hist_eq") {
         return std::make_unique<HistEqImageNode>(descriptor);
     }
+    if (descriptor.typeId == "fft_lowpass") {
+        return std::make_unique<FftFilterImageNode>(descriptor, instance,
+                                                    FftFilterImageNode::Mode::LowPass);
+    }
+    if (descriptor.typeId == "fft_highpass") {
+        return std::make_unique<FftFilterImageNode>(descriptor, instance,
+                                                    FftFilterImageNode::Mode::HighPass);
+    }
+    if (descriptor.typeId == "fft_bandpass") {
+        return std::make_unique<FftFilterImageNode>(descriptor, instance,
+                                                    FftFilterImageNode::Mode::BandPass);
+    }
     throw std::invalid_argument("no core implementation for node type '" + descriptor.typeId +
-                                "' (M4-06 FFT operators are not implemented yet)");
+                                "'");
 }
 
 }  // namespace rin

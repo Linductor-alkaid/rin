@@ -31,6 +31,14 @@
   （Rgba8 → Gray8 BT.601 定点亮度 Y = (77·R + 150·G + 29·B + 128) >> 8，alpha
   不参与）；目录 schema 无变更，数值语义冻结于
   `docs/design/image_workflow_design.md` §7。
+- FFT 滤波节点族（M4，`M4-06`）：`rin::makeDefaultImageNode` 工厂扩展
+  `fft_lowpass`/`fft_highpass`/`fft_bandpass`（Gray8 → Gray8，理想锐截止频域
+  滤波：内部零填充到 2 幂（宽高各自，848×480 → 1024×512），掩膜按归一化频率
+  （每像素周期数，∈ [0,1]）在填充分辨率上构造——高通为低通逐点补、带通为
+  低通掩膜差，IFFT 显式 1/(padW·padH) 归一化后裁回原尺寸、round-half-up 饱和
+  量化；FFT 后端为 pinned kissfft 131.2.0 float，`rin_core` 私有链接、公开头
+  零第三方类型）；目录 schema 无变更，数值语义冻结于
+  `docs/design/image_workflow_design.md` §7。
 
 ## [0.3.0] - 2026-09-24（M3：IMU 位姿视图与 20.04 适配）
 
