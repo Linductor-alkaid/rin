@@ -24,7 +24,21 @@ enum class CameraServiceState {
 
 enum class FrameKind {
     Rgb,
+    /// 预览深度通道（DEC-007：RGBA8 伪彩/灰度，配色跟随全局配色命令）。
     Depth,
+    /// 深度伪彩固定 rendition（M6-04，DEC-017）：恒为 jet 伪彩 RGBA8，不随
+    /// 预览配色命令变化；工作流 `source_depth_jet` 源消费。
+    DepthJet,
+};
+
+/// 深度灰度固定 rendition 种类（M6-04，DEC-017）：语义与预览配色解耦。
+enum class GrayFrameKind {
+    /// 深度灰度：固定区间 [near, far] 近白远黑（DEC-007 Grayscale 的单通道
+    /// 对应层）；0（无效深度）为 0（黑）。
+    Depth,
+    /// 深度自适应灰度：帧内有效深度 P99 归一化近黑远白（DEC-007
+    /// AdaptiveGrayscale 的单通道对应层）；0（无效深度）为 0（黑）。
+    DepthAdaptive,
 };
 
 /// 深度图输出配色（DEC-007）：Z16 → RGBA8 的视觉映射风格。
@@ -69,6 +83,24 @@ struct Frame {
     [[nodiscard]] bool valid() const noexcept {
         return pixels != nullptr && width > 0 && height > 0 &&
                stride >= width * 4u && pixels->size() >= static_cast<std::size_t>(stride) * height;
+    }
+};
+
+/// 一帧已转换为单通道 Gray8 的图像（M6-04，DEC-017 固定 rendition）：
+/// 深度灰度/自适应灰度工作流输入。stride 为字节（>= width）；像素提交后
+/// 内容不可变（消费方共享所有权）。
+struct GrayFrame {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t stride = 0;  // 字节
+    std::uint64_t sequence = 0;
+    double deviceTimestampMs = 0.0;
+    /// Gray8 打包像素；提交后内容不可变（消费方共享所有权）。
+    std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return pixels != nullptr && width > 0 && height > 0 && stride >= width &&
+               pixels->size() >= static_cast<std::size_t>(stride) * height;
     }
 };
 

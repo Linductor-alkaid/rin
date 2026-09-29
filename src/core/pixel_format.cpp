@@ -226,4 +226,228 @@ bool convertDepth16ToRgba8Jet(const std::uint16_t* src,
                                  nearMeters, farMeters, DepthColorScheme::Jet, dst);
 }
 
+bool convertDepth16ToGray8(const std::uint16_t* src,
+                           std::uint32_t width,
+                           std::uint32_t height,
+                           std::uint32_t srcStrideUnits,
+                           float depthScaleMeters,
+                           float nearMeters,
+                           float farMeters,
+                           std::vector<std::uint8_t>& dst) {
+    if (src == nullptr || width == 0 || height == 0) {
+        return false;
+    }
+    if (srcStrideUnits < width) {
+        return false;
+    }
+    if (!(depthScaleMeters > 0.0f) || !(farMeters > nearMeters)) {
+        return false;
+    }
+    dst.resize(static_cast<std::size_t>(width) * height);
+    const float range = farMeters - nearMeters;
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        std::uint8_t* dstRow = dst.data() + static_cast<std::size_t>(row) * width;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw == 0) {
+                dstRow[column] = 0;  // 无效深度：黑（Gray8 无 alpha 层）。
+                continue;
+            }
+            // 与 grayscaleColor ramp 同式：level = round((1−t)·255)，近白远黑。
+            const float meters = static_cast<float>(raw) * depthScaleMeters;
+            const float normalized = (meters - nearMeters) / range;
+            const float clamped = std::clamp(normalized, 0.0f, 1.0f);
+            dstRow[column] =
+                static_cast<std::uint8_t>((1.0f - clamped) * 255.0f + 0.5f);
+        }
+    }
+    return true;
+}
+
+bool convertDepth16ToGray8Adaptive(const std::uint16_t* src,
+                                   std::uint32_t width,
+                                   std::uint32_t height,
+                                   std::uint32_t srcStrideUnits,
+                                   std::vector<std::uint8_t>& dst) {
+    if (src == nullptr || width == 0 || height == 0) {
+        return false;
+    }
+    if (srcStrideUnits < width) {
+        return false;
+    }
+    // P99 分位与 RGBA8 自适应路径同语义（kAdaptiveFramePercentile，整数秩）。
+    std::uint32_t histHigh[256] = {};
+    std::uint64_t validCount = 0;
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw != 0) {
+                ++histHigh[raw >> 8];
+                ++validCount;
+            }
+        }
+    }
+    dst.resize(static_cast<std::size_t>(width) * height);
+    if (validCount == 0) {
+        // 全帧无效深度：与逐像素 raw==0 分支同语义，输出黑。
+        std::fill(dst.begin(), dst.end(), 0);
+        return true;
+    }
+    const std::uint64_t targetRank =
+        (validCount * kAdaptiveFramePercentile + 99u) / 100u;
+    std::uint32_t belowTarget = 0;
+    unsigned highBin = 255;
+    for (unsigned bin = 0; bin < 256; ++bin) {
+        if (belowTarget + histHigh[bin] >= targetRank) {
+            highBin = bin;
+            break;
+        }
+        belowTarget += histHigh[bin];
+    }
+    std::uint32_t histLow[256] = {};
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw != 0 && (raw >> 8) == highBin) {
+                ++histLow[raw & 0xFF];
+            }
+        }
+    }
+    const std::uint32_t inBinRank =
+        static_cast<std::uint32_t>(targetRank - belowTarget);
+    std::uint32_t lowCumulative = 0;
+    unsigned lowBin = 255;
+    for (unsigned bin = 0; bin < 256; ++bin) {
+        lowCumulative += histLow[bin];
+        if (lowCumulative >= inBinRank) {
+            lowBin = bin;
+            break;
+        }
+    }
+    const std::uint16_t frameQuantile =
+        static_cast<std::uint16_t>((highBin << 8) | lowBin);
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        std::uint8_t* dstRow = dst.data() + static_cast<std::size_t>(row) * width;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw == 0) {
+                dstRow[column] = 0;
+                continue;
+            }
+            // 与 adaptiveGrayscaleColor ramp 同式：level = round(t·255)，近黑远白。
+            const float normalized =
+                static_cast<float>(raw) / static_cast<float>(frameQuantile);
+            const float clamped = std::clamp(normalized, 0.0f, 1.0f);
+            dstRow[column] = static_cast<std::uint8_t>(clamped * 255.0f + 0.5f);
+        }
+    }
+    return true;
+}
+
+bool convertDepth16ToGray8Pair(const std::uint16_t* src,
+                               std::uint32_t width,
+                               std::uint32_t height,
+                               std::uint32_t srcStrideUnits,
+                               float depthScaleMeters,
+                               float nearMeters,
+                               float farMeters,
+                               std::vector<std::uint8_t>& gray,
+                               std::vector<std::uint8_t>& adaptive) {
+    if (src == nullptr || width == 0 || height == 0) {
+        return false;
+    }
+    if (srcStrideUnits < width) {
+        return false;
+    }
+    if (!(depthScaleMeters > 0.0f) || !(farMeters > nearMeters)) {
+        return false;
+    }
+    gray.resize(static_cast<std::size_t>(width) * height);
+    adaptive.resize(static_cast<std::size_t>(width) * height);
+    // P99 分位（与 convertDepth16ToGray8Adaptive 同一整数秩计算）。
+    std::uint32_t histHigh[256] = {};
+    std::uint64_t validCount = 0;
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw != 0) {
+                ++histHigh[raw >> 8];
+                ++validCount;
+            }
+        }
+    }
+    if (validCount == 0) {
+        // 全帧无效深度：两 rendition 同语义输出黑。
+        std::fill(gray.begin(), gray.end(), 0);
+        std::fill(adaptive.begin(), adaptive.end(), 0);
+        return true;
+    }
+    const std::uint64_t targetRank =
+        (validCount * kAdaptiveFramePercentile + 99u) / 100u;
+    std::uint32_t belowTarget = 0;
+    unsigned highBin = 255;
+    for (unsigned bin = 0; bin < 256; ++bin) {
+        if (belowTarget + histHigh[bin] >= targetRank) {
+            highBin = bin;
+            break;
+        }
+        belowTarget += histHigh[bin];
+    }
+    std::uint32_t histLow[256] = {};
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw != 0 && (raw >> 8) == highBin) {
+                ++histLow[raw & 0xFF];
+            }
+        }
+    }
+    const std::uint32_t inBinRank =
+        static_cast<std::uint32_t>(targetRank - belowTarget);
+    std::uint32_t lowCumulative = 0;
+    unsigned lowBin = 255;
+    for (unsigned bin = 0; bin < 256; ++bin) {
+        lowCumulative += histLow[bin];
+        if (lowCumulative >= inBinRank) {
+            lowBin = bin;
+            break;
+        }
+    }
+    const std::uint16_t frameQuantile =
+        static_cast<std::uint16_t>((highBin << 8) | lowBin);
+    // 单趟写出：两 rendition 逐字节等于分别调用两个单 rendition 函数。
+    const float range = farMeters - nearMeters;
+    for (std::uint32_t row = 0; row < height; ++row) {
+        const std::uint16_t* srcRow = src + static_cast<std::size_t>(row) * srcStrideUnits;
+        std::uint8_t* grayRow = gray.data() + static_cast<std::size_t>(row) * width;
+        std::uint8_t* adaptiveRow =
+            adaptive.data() + static_cast<std::size_t>(row) * width;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const std::uint16_t raw = srcRow[column];
+            if (raw == 0) {
+                grayRow[column] = 0;
+                adaptiveRow[column] = 0;
+                continue;
+            }
+            const float fixedNormalized =
+                (static_cast<float>(raw) * depthScaleMeters - nearMeters) / range;
+            const float fixedClamped = std::clamp(fixedNormalized, 0.0f, 1.0f);
+            grayRow[column] =
+                static_cast<std::uint8_t>((1.0f - fixedClamped) * 255.0f + 0.5f);
+            const float adaptiveNormalized =
+                static_cast<float>(raw) / static_cast<float>(frameQuantile);
+            const float adaptiveClamped = std::clamp(adaptiveNormalized, 0.0f, 1.0f);
+            adaptiveRow[column] =
+                static_cast<std::uint8_t>(adaptiveClamped * 255.0f + 0.5f);
+        }
+    }
+    return true;
+}
+
 }  // namespace rin

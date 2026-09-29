@@ -9,20 +9,40 @@
 
 namespace rin::workflow_catalog {
 
-/// M4 节点目录构建（两引擎共享的单一事实源，DEC-013）：source / crop /
-/// downscale / grayify / gaussian_blur / conv_kernel / hist_eq / fft_lowpass /
-/// fft_highpass / fft_bandpass。签名与参数 schema 按 M5-08 假目录冻结基线
-/// （image_workflow_design.md §6，schema 演进随算子工作项双向落盘）；假引擎
-/// （makeDefaultFakeCatalog）与真引擎默认目录均委托本函数，算子数值语义由
-/// M4 真实现提供（假引擎只产出合成图案）。
+/// M4/M6 节点目录构建（两引擎共享的单一事实源，DEC-013）：source（RGB）/
+/// source_depth_jet / source_depth_gray / source_depth_adaptive（M6-03 深度
+/// rendition 源，DEC-017）/ crop / downscale / crop_gray / downscale_gray
+/// （M6-03 灰度变体，逐像素同语义）/ grayify / gaussian_blur / conv_kernel /
+/// hist_eq / fft_lowpass / fft_highpass / fft_bandpass。签名与参数 schema 按
+/// M5-08 假目录冻结基线（image_workflow_design.md §6，schema 演进随算子工作项
+/// 双向落盘）；算子数值语义由 M4 真实现提供。新类型一律追加于既有条目之后
+/// （契约套件按"目录首个无输入节点"泛式构图，依赖 source 居首）。
 [[nodiscard]] inline NodeCatalog makeDefaultImageNodeCatalog() {
     NodeCatalog catalog;
 
     NodeDescriptor source;
     source.typeId = "source";
-    source.displayName = "相机源";
+    source.displayName = "相机源 RGB";
     source.outputs = {PortType::Rgba8};
     catalog.nodes.push_back(std::move(source));
+
+    NodeDescriptor sourceDepthJet;
+    sourceDepthJet.typeId = "source_depth_jet";
+    sourceDepthJet.displayName = "相机源 深度伪彩";
+    sourceDepthJet.outputs = {PortType::Rgba8};
+    catalog.nodes.push_back(std::move(sourceDepthJet));
+
+    NodeDescriptor sourceDepthGray;
+    sourceDepthGray.typeId = "source_depth_gray";
+    sourceDepthGray.displayName = "相机源 深度灰度";
+    sourceDepthGray.outputs = {PortType::Gray8};
+    catalog.nodes.push_back(std::move(sourceDepthGray));
+
+    NodeDescriptor sourceDepthAdaptive;
+    sourceDepthAdaptive.typeId = "source_depth_adaptive";
+    sourceDepthAdaptive.displayName = "相机源 深度自适应";
+    sourceDepthAdaptive.outputs = {PortType::Gray8};
+    catalog.nodes.push_back(std::move(sourceDepthAdaptive));
 
     NodeDescriptor crop;
     crop.typeId = "crop";
@@ -50,6 +70,16 @@ namespace rin::workflow_catalog {
     crop.params = {cropX, cropY, cropW, cropH};
     catalog.nodes.push_back(std::move(crop));
 
+    // 灰度域裁切（M6-03，DEC-017）：与 crop 同参数 schema、同冻结数值语义
+    // （逐像素同映射，1 字节/像素，image_workflow_design.md §7）。
+    NodeDescriptor cropGray;
+    cropGray.typeId = "crop_gray";
+    cropGray.displayName = "裁切（灰度）";
+    cropGray.inputs = {PortType::Gray8};
+    cropGray.outputs = {PortType::Gray8};
+    cropGray.params = {cropX, cropY, cropW, cropH};
+    catalog.nodes.push_back(std::move(cropGray));
+
     NodeDescriptor downscale;
     downscale.typeId = "downscale";
     downscale.displayName = "降分辨率";
@@ -71,6 +101,16 @@ namespace rin::workflow_catalog {
     scale.maxValue = 1.0;
     downscale.params = {interpolation, scale};
     catalog.nodes.push_back(std::move(downscale));
+
+    // 灰度域降分辨率（M6-03，DEC-017）：与 downscale 同参数 schema、同冻结
+    // 数值语义（nearest 面积覆盖 / bilinear 中心对齐，1 字节/像素）。
+    NodeDescriptor downscaleGray;
+    downscaleGray.typeId = "downscale_gray";
+    downscaleGray.displayName = "降分辨率（灰度）";
+    downscaleGray.inputs = {PortType::Gray8};
+    downscaleGray.outputs = {PortType::Gray8};
+    downscaleGray.params = {interpolation, scale};
+    catalog.nodes.push_back(std::move(downscaleGray));
 
     NodeDescriptor grayify;
     grayify.typeId = "grayify";

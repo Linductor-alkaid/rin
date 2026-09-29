@@ -43,9 +43,19 @@ public:
     [[nodiscard]] virtual std::string lastError() const = 0;
 
     /// 取 kind 流中 sequence > lastSeenSequence 的最新帧；无新帧返回 false。
+    /// kind 覆盖全部 RGBA8 rendition：Rgb（彩色）、Depth（预览深度通道，
+    /// 配色跟随 DEC-007 命令）、DepthJet（深度伪彩固定 rendition，M6-04
+    /// DEC-017，不随预览配色变化）。
     [[nodiscard]] virtual bool tryLoadFrame(FrameKind kind,
                                             std::uint64_t& lastSeenSequence,
                                             Frame& out) = 0;
+
+    /// 取 kind 灰度 rendition 中 sequence > lastSeenSequence 的最新帧
+    /// （M6-04，DEC-017：Depth = 固定区间近白远黑，DepthAdaptive = P99 近黑
+    /// 远白；语义与预览配色解耦，工作流灰度源消费）。无新帧返回 false。
+    [[nodiscard]] virtual bool tryLoadGrayFrame(GrayFrameKind kind,
+                                                std::uint64_t& lastSeenSequence,
+                                                GrayFrame& out) = 0;
 
     [[nodiscard]] virtual bool tryLoadIntrinsics(std::uint64_t& lastSeenSequence,
                                                  IntrinsicsSnapshot& out) = 0;
