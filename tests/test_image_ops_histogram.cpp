@@ -7,9 +7,11 @@
 // 被测面与范围（对应设计文档 §7 grayify/hist_eq golden 项）：
 // 1) 工厂 makeDefaultImageNode："grayify"/"hist_eq" 返回实现且 descriptor().typeId
 //    与请求一致、端口签名与 §6 目录一致（grayify Rgba8→Gray8、hist_eq Gray8→Gray8，
-//    均无参数——无参数节点无构造期拒绝分支，不发明参数）；仍未实现类型（M4-06
-//    FFT 族 fft_lowpass）抛 std::invalid_argument 且错误消息冻结为 "(M4-06 FFT
-//    operators are not implemented yet)"（目录声明与工厂能力偏差显式暴露，不静默）；
+//    均无参数——无参数节点无构造期拒绝分支，不发明参数）；M4-06 起 FFT 族
+//    （fft_lowpass 等）已实现并归 test_image_ops_fft.cpp，未知 typeId 抛
+//    std::invalid_argument 且错误消息冻结为无后缀新口径
+//    "no core implementation for node type 'X'"（目录声明与工厂能力偏差显式暴露，
+//    不静默）；
 // 2) grayify（Rgba8→Gray8，BT.601 定点亮度 Y = (77·R + 150·G + 29·B + 128) >> 8，
 //    +128 右移 8 位即对 Y/256 的 round-half-up，Σ系数 = 256 保证 [0,255] 自然有界，
 //    纯整数无浮点，alpha 不参与）：
@@ -135,8 +137,8 @@ NodeDescriptor makeHistEqDescriptor() {
     return d;
 }
 
-// §6：fft_lowpass FFT 低通 Gray8→Gray8，cutoff: Real 0.2 [0,1]（M4-06 未实现，
-// 仅用于"工厂偏差显式暴露"路径见证）。
+// §6：fft_lowpass FFT 低通 Gray8→Gray8，cutoff: Real 0.2 [0,1]（M4-06 起已实现，
+// 此处仅作"工厂返回实现"的最小见证；完整 golden 归 test_image_ops_fft.cpp）。
 NodeDescriptor makeFftLowpassDescriptor() {
     NodeDescriptor d;
     d.typeId = "fft_lowpass";
@@ -388,19 +390,20 @@ int main() {
         RIN_CHECK(histEq != nullptr && histEq->descriptor().params.empty());
     }
 
-    // --- 1b) 未实现类型（M4-06 FFT 族）工厂抛 invalid_argument，错误消息冻结 ---
+    // --- 1b) 未知类型工厂抛 invalid_argument，错误消息冻结（M4-06 起 FFT 族
+    //     已实现：原"(M4-06 FFT operators are not implemented yet)"见证过时，
+    //     fft_lowpass 改为"返回实现"见证，未知类型消息冻结为无后缀新口径）---
     {
         const NodeDescriptor fftLowpass = makeFftLowpassDescriptor();
-        const std::string message = factoryError(fftLowpass, makeInstance(1, "fft_lowpass"));
-        RIN_CHECK_MSG(!message.empty(), "未实现类型应抛 invalid_argument：fft_lowpass");
-        RIN_CHECK_MSG(message.find("(M4-06 FFT operators are not implemented yet)") !=
-                          std::string::npos,
-                      "未实现类型错误消息冻结：fft_lowpass");
+        const std::unique_ptr<IImageNode> fftNode = makeNode(fftLowpass, 3);
+        RIN_CHECK(fftNode != nullptr);
+        RIN_CHECK(fftNode != nullptr && fftNode->descriptor().typeId == "fft_lowpass");
         NodeDescriptor ghost;
         ghost.typeId = "no_such_operator";
-        RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(ghost, makeInstance(1, "no_such_operator"));
-        }));
+        const std::string message = factoryError(ghost, makeInstance(1, "no_such_operator"));
+        RIN_CHECK_MSG(!message.empty(), "未知类型应抛 invalid_argument：no_such_operator");
+        RIN_CHECK_MSG(message == "no core implementation for node type 'no_such_operator'",
+                      "未知类型错误消息冻结（无后缀新口径）：no_such_operator");
     }
 
     // ===================================================================

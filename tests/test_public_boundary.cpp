@@ -3,6 +3,8 @@
 #include "test_util.hpp"
 
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -351,6 +353,62 @@ int main() {
             rin::makeDefaultImageNode(histEq, histEqInstance);
         RIN_CHECK(histEqNode != nullptr);
         RIN_CHECK(histEqNode != nullptr && histEqNode->descriptor().typeId == "hist_eq");
+    }
+
+    // M4-06 FFT 滤波族工厂（仅公开头可见性 + 最小实例化，RULE-01）：三类型按
+    // §6 表格声明完整 schema（Real 参数 + [0,1] 闭区间）后经 makeDefaultImageNode
+    // 返回实现且 typeId 一致；实例不赋值 → 构造期取声明默认值（cutoff/lowCut
+    // 0.2、highCut 0.6）。构造期参数缺失抛 std::invalid_argument 是冻结契约，
+    // 以无参数声明的变体做最小拒绝见证（数值 golden 归 test_image_ops_fft.cpp）。
+    {
+        struct FftCase {
+            const char* typeId;
+            std::vector<const char*> paramIds;
+        };
+        const std::vector<FftCase> fftCases = {
+            {"fft_lowpass", {"cutoff"}},
+            {"fft_highpass", {"cutoff"}},
+            {"fft_bandpass", {"lowCut", "highCut"}},
+        };
+        std::size_t instanceId = 1;
+        for (const FftCase& fftCase : fftCases) {
+            rin::NodeDescriptor descriptor;
+            descriptor.typeId = fftCase.typeId;
+            descriptor.displayName = fftCase.typeId;
+            descriptor.inputs = {rin::PortType::Gray8};
+            descriptor.outputs = {rin::PortType::Gray8};
+            for (const char* id : fftCase.paramIds) {
+                rin::ParamDescriptor param;
+                param.id = id;
+                param.label = id;
+                param.kind = rin::ParamKind::Real;
+                param.defaultValue = std::string(id) == "highCut" ? 0.6 : 0.2;
+                param.hasRange = true;
+                param.minValue = 0.0;
+                param.maxValue = 1.0;
+                descriptor.params.push_back(std::move(param));
+            }
+            rin::NodeInstance instance;
+            instance.id = instanceId;
+            instance.typeId = fftCase.typeId;
+            const std::unique_ptr<rin::IImageNode> fftNode =
+                rin::makeDefaultImageNode(descriptor, instance);
+            RIN_CHECK(fftNode != nullptr);
+            RIN_CHECK(fftNode != nullptr && fftNode->descriptor().typeId == fftCase.typeId);
+
+            // 缺参拒绝见证：声明不含参数 → 实例无赋值且无默认可读 → 构造抛。
+            rin::NodeDescriptor stripped = descriptor;
+            stripped.params.clear();
+            bool rejected = false;
+            try {
+                (void)rin::makeDefaultImageNode(stripped, instance);
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            RIN_CHECK_MSG(rejected,
+                          std::string("FFT 工厂缺参构造拒绝：") + fftCase.typeId);
+            ++instanceId;
+        }
     }
     return rin_test::exitStatus();
 }

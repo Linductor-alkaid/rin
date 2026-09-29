@@ -340,3 +340,31 @@ target_link_libraries(test_image_ops_histogram PRIVATE rin::core)
 target_include_directories(test_image_ops_histogram PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME image_ops_histogram COMMAND test_image_ops_histogram)
 set_tests_properties(image_ops_histogram PROPERTIES LABELS "unit")
+
+# M4-06 FFT 滤波节点族 golden 数值测试（Core 纯逻辑，image_workflow_design.md §7
+# 2026-09-29 M4-06 冻结数值语义）：工厂 makeDefaultImageNode（fft_lowpass/
+# fft_highpass/fft_bandpass 实现签名一致、未知类型抛 invalid_argument 且消息冻结为
+# 无后缀新口径）；构造期拒绝全分支（cutoff/lowCut/highCut 缺失/种类错位/NaN/±inf/
+# −0.1/1.1、bandpass lowCut ≥ highCut（含相等）空通带矛盾构造拒绝、0/1 边界
+# 合法）、默认参数生效（单频探针夹逼 0.2/0.2+0.6）；正弦注入单频滤除/保留（512×512
+# 原生路径谱线精确落 bin → 解析期望：低通滤除→均值、高通/带通保留→输入−均值、
+# 全阻→0；848×480 填充路径零填充截断谱扩展属冻结语义→测试内自写 double 参考；
+# 二维对角单频 fx=fy=1/16）；填充/裁剪往返（cutoff ≥ √0.5 低通恒等：848×480/
+# 512×512/5×3 pad 8×4/1×5 pad 2×8 下界 2、c=√0.5 角点 bin 边界）；掩膜代数
+# （LP+HP 掩膜补相加≈恒等、BP≡LP(hi)−LP(lo) 掩膜差按 8bit 饱和语义、实现内部
+# 饱和感知形式）；DC 语义（原生常值图低通恒等/高通全黑精确、c=0 低通=均值、
+# 斜坡 c=0 高通=斜坡−均值逐像素解析、填充路径 c=0 单 bin：848×480 常值 128 →
+# Σ/524288 = 99.375 → 99 均匀精确、c=0 高通 28.625 → 29）；归一化频率跨尺寸不变
+# （64²/128²/848×480 同 f 同 cutoff）；防御路径（数量 0/2、无效图、Rgba8 喂
+# Gray8 声明）；stride padding 输入/紧凑输出/不共享源像素；掩膜边界 ≤/> 语义
+# （c=0.125 恰在谱线上：低通保留、高通移除、BP 严格下界/闭上界）与 lowCut ==
+# highCut 空通带构造拒绝（empty passband）；图集成（source→fft_lowpass == 直接
+# apply == 参考、lowCut>highCut 经工厂异常显式化 BadParam）。golden 期望由 §7 冻结
+# 公式独立手推/测试内自写
+# double 参考实现（自含 radix-2 FFT，参考自检先行）推导，不参考实现代码。
+# 单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_image_ops_fft test_image_ops_fft.cpp)
+target_link_libraries(test_image_ops_fft PRIVATE rin::core)
+target_include_directories(test_image_ops_fft PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME image_ops_fft COMMAND test_image_ops_fft)
+set_tests_properties(image_ops_fft PROPERTIES LABELS "unit")

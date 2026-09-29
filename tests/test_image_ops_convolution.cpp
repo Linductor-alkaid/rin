@@ -5,10 +5,11 @@
 //
 // 被测面与范围（对应设计文档 §7 conv_kernel/gaussian_blur golden 项）：
 // 1) 工厂 makeDefaultImageNode："gaussian_blur"/"conv_kernel" 返回实现且
-//    descriptor().typeId 与请求一致；仍未实现类型（M4-06 FFT 族 fft_lowpass/
-//    fft_highpass；M4-05 起 grayify/hist_eq 已实现并归
-//    test_image_ops_histogram.cpp）抛 std::invalid_argument 且错误消息含
-//    "(M4-06 FFT operators are not implemented yet)"（目录声明与工厂能力偏差
+//    descriptor().typeId 与请求一致；M4-06 起 FFT 族（fft_lowpass/fft_highpass/
+//    fft_bandpass）已实现并归 test_image_ops_fft.cpp（M4-05 起 grayify/hist_eq
+//    已实现并归 test_image_ops_histogram.cpp），未知 typeId 抛
+//    std::invalid_argument 且错误消息冻结为无后缀新口径
+//    "no core implementation for node type 'X'"（目录声明与工厂能力偏差
 //    显式暴露，不静默）；
 // 2) conv_kernel（Gray8→Gray8，相关语义核不翻转，double 累加后 floor(v+0.5)
 //    饱和量化，核不自动归一化）：
@@ -181,7 +182,8 @@ NodeDescriptor makeGaussianBlurDescriptor() {
     return d;
 }
 
-// §6 其余"未实现类型"声明（仅用于工厂偏差显式暴露路径）。
+// 基础 descriptor 构造（typeId + 输入端口 + Gray8 输出；FFT 族见证在此之上补
+// §6 参数 schema——M4-06 起 FFT 族已实现，工厂要求声明完整参数面）。
 NodeDescriptor makeUnimplementedDescriptor(const char* typeId, PortType input) {
     NodeDescriptor d;
     d.typeId = typeId;
@@ -485,23 +487,35 @@ int main() {
                   blur->descriptor().outputs == std::vector<PortType>{PortType::Gray8});
     }
 
-    // 未实现类型（M4-06 FFT 族；M4-05 起 grayify/hist_eq 已实现并归
-    // test_image_ops_histogram.cpp）工厂仍抛 invalid_argument，且错误消息冻结为
-    // "(M4-06 FFT operators are not implemented yet)"。
-    for (const char* typeId : {"fft_lowpass", "fft_highpass"}) {
-        const NodeDescriptor descriptor = makeUnimplementedDescriptor(typeId, PortType::Gray8);
-        const std::string message = factoryError(descriptor, makeInstance(1, typeId));
-        RIN_CHECK_MSG(!message.empty(), std::string("未实现类型应抛 invalid_argument：") + typeId);
-        RIN_CHECK_MSG(message.find("(M4-06 FFT operators are not implemented yet)") !=
-                          std::string::npos,
-                      std::string("未实现类型错误消息冻结：") + typeId);
+    // M4-06 起 FFT 族已实现（golden 归 test_image_ops_fft.cpp）：按 §6 schema
+    // 声明后经工厂返回实现（typeId 见证）；未知 typeId 抛 invalid_argument 且
+    // 错误消息冻结为无后缀新口径（原"(M4-06 FFT operators are not implemented
+    // yet)"见证随 FFT 族落地而过时）。
+    {
+        NodeDescriptor lowpass = makeUnimplementedDescriptor("fft_lowpass", PortType::Gray8);
+        {
+            ParamDescriptor cutoff;
+            cutoff.id = "cutoff";
+            cutoff.label = "cutoff";
+            cutoff.kind = ParamKind::Real;
+            cutoff.defaultValue = 0.2;
+            cutoff.hasRange = true;
+            cutoff.minValue = 0.0;
+            cutoff.maxValue = 1.0;
+            lowpass.params.push_back(std::move(cutoff));
+        }
+        const std::unique_ptr<IImageNode> fftNode =
+            rin::makeDefaultImageNode(lowpass, makeInstance(1, "fft_lowpass"));
+        RIN_CHECK(fftNode != nullptr);
+        RIN_CHECK(fftNode != nullptr && fftNode->descriptor().typeId == "fft_lowpass");
     }
     {
         NodeDescriptor ghost;
         ghost.typeId = "no_such_operator";
-        RIN_CHECK(throwsAs<std::invalid_argument>([&] {
-            (void)rin::makeDefaultImageNode(ghost, makeInstance(1, "no_such_operator"));
-        }));
+        const std::string message = factoryError(ghost, makeInstance(1, "no_such_operator"));
+        RIN_CHECK_MSG(!message.empty(), "未知类型应抛 invalid_argument：no_such_operator");
+        RIN_CHECK_MSG(message == "no core implementation for node type 'no_such_operator'",
+                      "未知类型错误消息冻结（无后缀新口径）：no_such_operator");
     }
 
     // ===================================================================
