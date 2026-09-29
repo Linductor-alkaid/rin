@@ -106,7 +106,10 @@ M4 目录构建提取为两引擎共享单一事实源；引擎测试 431 项（
 配色解耦）、灰度域裁切/降分辨率（crop_gray/downscale_gray，复用泛格式实现）、
 裁切 ROI 控件联动夹取防呆（apply 期拒绝语义不变）、相机源面板分辨率入口
 （与预览共享全局命令）；相机契约加性扩展（FrameKind::DepthJet + GrayFrame/
-tryLoadGrayFrame）。
+tryLoadGrayFrame）。2026-09-29 用户再反馈三项立项
+[M7](m7-workbench-usability.md)：运行中改图产物陈旧（引擎产物邮箱改同 id
+跨代共享 + 过代帧跳过发布）、分辨率下拉悬垂指针（绑定移入 ViewerContext）、
+调色板滚动与五区 docking 可调（scrollView 组件 + mouseArea 分隔条）。
 
 ## 交付边界（SCOPE）
 
@@ -195,6 +198,7 @@ tryLoadGrayFrame）。
 | M4 图像处理节点与工作流引擎 | [m4-cv-node-workflow.md](m4-cv-node-workflow.md) | 无（建议 M3 后） | v0.4.0 |
 | M5 工作台 UI（导航 / 节点编辑器 / 性能面板） | [m5-ui-workbench.md](m5-ui-workbench.md) | M3、M4-09（骨架先行，DEC-016）；完成依赖 M4 | v0.5.0 |
 | M6 工作流输入扩展（深度源 / 灰度算子 / 控件防呆） | [m6-workflow-input-expansion.md](m6-workflow-input-expansion.md) | M4、M5-06 | v0.5.0（随 M5） |
+| M7 工作台可用性（改图产物刷新 / 分辨率入口 / 滚动与可调 docking） | [m7-workbench-usability.md](m7-workbench-usability.md) | M6 | v0.5.0（随 M5） |
 
 ## 暂定决策（未冻结）
 
