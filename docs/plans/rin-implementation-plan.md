@@ -115,7 +115,7 @@ ubsan/tsan 26/26 全绿（真机硬件四预设实跑，零消毒器诊断）；
 端到端验收通过（拖拽搭图→连线→运行→中间结果→性能面板→停止排空，交互
 接缝注入时序，截图 `screenshots/m5-07/`）；`ui_workspace_design.md` 拓扑
 树逐项核对、CHANGELOG 回写、`SCOPE-09` 关闭。M4/M5/M6/M7 全部交付，
-v0.5.0 发布点待用户发布。2026-09-30 用户需求立项
+v0.5.0 已于 2026-09-29 发布。2026-09-30 用户需求立项
 [M8](m8-depth-policy-preproc.md)（把外部视觉策略项目的深度预处理管线在
 RealSense 真机侧与仿真部署参考逐位对齐）并当日完成关闭：
 [DEC-018](../decisions/DEC-018-depth-policy-preproc-operators.md) 冻结——
@@ -142,7 +142,8 @@ RealSense 真机侧与仿真部署参考逐位对齐）并当日完成关闭：
 参数链 ≡ M8 冻结管线；`IStatefulImageNode` 引擎串行在飞执行模型），
 M9 固定预览卡片移除（被组合能力取代）；独立验证一轮 PASS：三预设
 31/31 全绿（节点 golden 258 + 引擎时序 83 + 帧源/缩略图 94 + 边界 78
-项检查）+ tsan 全绿，实现零缺陷；真机画布组装验收待用户。
+项检查）+ tsan 全绿，实现零缺陷；真机画布组装验收待用户。M8/M9/M10 经用户授权合并发布为
+v0.5.1（2026-09-30）。
 
 ## 交付边界（SCOPE）
 
@@ -235,6 +236,9 @@ M9 固定预览卡片移除（被组合能力取代）；独立验证一轮 PASS
 | M5 工作台 UI（导航 / 节点编辑器 / 性能面板） | [m5-ui-workbench.md](m5-ui-workbench.md) | M3、M4-09（骨架先行，DEC-016）；完成依赖 M4 | v0.5.0 |
 | M6 工作流输入扩展（深度源 / 灰度算子 / 控件防呆） | [m6-workflow-input-expansion.md](m6-workflow-input-expansion.md) | M4、M5-06 | v0.5.0（随 M5） |
 | M7 工作台可用性（改图产物刷新 / 分辨率入口 / 滚动与可调 docking） | [m7-workbench-usability.md](m7-workbench-usability.md) | M6 | v0.5.0（随 M5） |
+| M8 深度策略预处理算子（Core） | [m8-depth-policy-preproc.md](m8-depth-policy-preproc.md) | 无（M4 纪律前置） | v0.5.1 |
+| M9 米制深度通道与策略深度预览 | [m9-metric-depth-channel.md](m9-metric-depth-channel.md) | M8 | v0.5.1 |
+| M10 工作流深度域（米制算子进画布） | [m10-workflow-depth-domain.md](m10-workflow-depth-domain.md) | M8、M9 | v0.5.1 |
 
 ## 暂定决策（未冻结）
 
