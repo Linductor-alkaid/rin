@@ -4,7 +4,7 @@
 // WorkflowFrameInput（engine.hpp 帧源契约，DEC-013）。职责归属按 engine.hpp
 // 的接缝说明为应用层（Adapter/应用层职责，RULE-01）：本文件只做有界校验、
 // rendition 分发与零拷贝包装，无 EUI 类型，可独立单测
-//（tests/test_run_control.cpp 对脚本化假相机服务验证）。
+// （tests/test_run_control.cpp 对脚本化假相机服务验证）。
 //
 // 语义要点：
 // - 非阻塞：帧泵 tick（Executor 周期任务上下文）是唯一调用方，实现仅经
@@ -25,9 +25,11 @@
 //   false（引擎停止拉帧前的关闭窗口内安全，见 app.cpp 关闭顺序）。
 
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <rin/camera_service.hpp>
 #include <rin/camera_types.hpp>
@@ -44,11 +46,12 @@ enum class WorkflowSourceRendition {
     DepthJet,
     DepthGray,
     DepthAdaptiveGray,
+    /// 米制深度（M10/DEC-020）：tryLoadDepthMetric → Depth32F 字节容器。
+    DepthMetric,
 };
 
 /// source 节点 typeId → rendition；未知 typeId 防御性回退 RGB。
-[[nodiscard]] inline WorkflowSourceRendition renditionForSourceType(
-    const std::string& typeId) {
+[[nodiscard]] inline WorkflowSourceRendition renditionForSourceType(const std::string& typeId) {
     if (typeId == "source_depth_jet") {
         return WorkflowSourceRendition::DepthJet;
     }
@@ -57,6 +60,9 @@ enum class WorkflowSourceRendition {
     }
     if (typeId == "source_depth_adaptive") {
         return WorkflowSourceRendition::DepthAdaptiveGray;
+    }
+    if (typeId == "source_depth_metric") {
+        return WorkflowSourceRendition::DepthMetric;
     }
     return WorkflowSourceRendition::RgbColor;
 }
@@ -73,8 +79,7 @@ public:
     }
 
     [[nodiscard]] WorkflowSourceRendition renditionFor(rin::NodeId node) const {
-        const std::shared_ptr<const RouteMap> routes =
-            routes_.load(std::memory_order_acquire);
+        const std::shared_ptr<const RouteMap> routes = routes_.load(std::memory_order_acquire);
         if (routes != nullptr) {
             if (const auto it = routes->find(node); it != routes->end()) {
                 return it->second;
@@ -96,27 +101,47 @@ private:
 /// 先于引擎析构）。
 [[nodiscard]] inline rin::WorkflowFrameSource makeCameraFrameSource(
     std::shared_ptr<rin::ICameraService> service, const WorkflowSourceRouter& router) {
-    return [service = std::move(service),
-            &router](rin::NodeId sourceNode, std::uint64_t& lastSeenSequence,
-                     rin::WorkflowFrameInput& out) -> bool {
+    return [service = std::move(service), &router](rin::NodeId sourceNode,
+                                                   std::uint64_t& lastSeenSequence,
+                                                   rin::WorkflowFrameInput& out) -> bool {
         if (service == nullptr) {
             return false;
         }
         switch (router.renditionFor(sourceNode)) {
             case WorkflowSourceRendition::DepthJet: {
                 rin::Frame frame;
-                if (!service->tryLoadFrame(rin::FrameKind::DepthJet, lastSeenSequence,
-                                           frame) ||
+                if (!service->tryLoadFrame(rin::FrameKind::DepthJet, lastSeenSequence, frame) ||
                     !frame.valid()) {
                     return false;
                 }
-                out.image = rin::ImageU8::wrap(rin::PortType::Rgba8, frame.width,
-                                               frame.height, frame.stride, frame.pixels);
+                out.image = rin::ImageU8::wrap(rin::PortType::Rgba8, frame.width, frame.height,
+                                               frame.stride, frame.pixels);
                 if (!out.image.valid()) {
                     return false;  // 防御：包装失败按无新帧处理，不进入执行。
                 }
                 out.sourceSequence = frame.sequence;
                 return true;  // lastSeenSequence 已由 tryLoadFrame 推进。
+            }
+            case WorkflowSourceRendition::DepthMetric: {
+                // 米制深度（M10，DEC-020）：DepthFrameF32 float 载荷 → Depth32F
+                // 字节容器（一次拷贝；帧源契约要求 ImageU8 承载）。
+                rin::DepthMetricSample sample;
+                if (!service->tryLoadDepthMetric(lastSeenSequence, sample) || !sample.valid()) {
+                    return false;
+                }
+                const std::size_t count =
+                    static_cast<std::size_t>(sample.frame.width()) * sample.frame.height();
+                std::vector<std::uint8_t> bytes(count * 4u);
+                std::memcpy(bytes.data(), sample.frame.row(0), count * 4u);
+                auto pixels = std::make_shared<const std::vector<std::uint8_t>>(std::move(bytes));
+                out.image = rin::ImageU8::wrap(rin::PortType::Depth32F, sample.frame.width(),
+                                               sample.frame.height(), sample.frame.width() * 4u,
+                                               std::move(pixels));
+                if (!out.image.valid()) {
+                    return false;
+                }
+                out.sourceSequence = sample.sequence;
+                return true;
             }
             case WorkflowSourceRendition::DepthGray:
             case WorkflowSourceRendition::DepthAdaptiveGray: {
@@ -125,12 +150,11 @@ private:
                         ? rin::GrayFrameKind::Depth
                         : rin::GrayFrameKind::DepthAdaptive;
                 rin::GrayFrame frame;
-                if (!service->tryLoadGrayFrame(kind, lastSeenSequence, frame) ||
-                    !frame.valid()) {
+                if (!service->tryLoadGrayFrame(kind, lastSeenSequence, frame) || !frame.valid()) {
                     return false;
                 }
-                out.image = rin::ImageU8::wrap(rin::PortType::Gray8, frame.width,
-                                               frame.height, frame.stride, frame.pixels);
+                out.image = rin::ImageU8::wrap(rin::PortType::Gray8, frame.width, frame.height,
+                                               frame.stride, frame.pixels);
                 if (!out.image.valid()) {
                     return false;
                 }

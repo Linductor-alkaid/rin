@@ -20,7 +20,6 @@
 #include "navigation.hpp"
 #include "node_canvas.hpp"
 #include "param_panel.hpp"
-#include "policy_depth_preview.hpp"
 #include "pose_view.hpp"
 #include "viewer_theme.hpp"
 
@@ -76,10 +75,6 @@ struct ViewerContext {
     GpuFrameView rgbView;
     GpuFrameView depthView;
     /// 策略深度预览（M9，DEC-019）：米制深度通道 → 冻结管线 → 历史网格快照。
-    std::shared_ptr<viewer::PolicyDepthPreview> policyPreview;
-    GpuFrameView policyView;
-    std::uint64_t lastPolicySequence = 0;
-    std::string policyMeta;
 
     std::uint64_t lastRgbSequence = 0;
     std::uint64_t lastDepthSequence = 0;
@@ -186,13 +181,6 @@ void ensureStarted() {
         rin::WorkflowEngineConfig workflowConfig;
         workflowConfig.frameSource = viewer::makeCameraFrameSource(ctx.service, ctx.sourceRouter);
         ctx.workflow = rin::createWorkflowEngine(ctx.executor, std::move(workflowConfig));
-        // 策略深度预览组件（M9，DEC-019）：米制深度通道 → 冻结管线 → 快照
-        // 邮箱；周期 tick 在 Executor 上（20 ms），关闭顺序中服务 stop 之后
-        // stop（ViewerContext::shutdown）。
-        ctx.policyPreview = std::make_shared<viewer::PolicyDepthPreview>(ctx.service);
-        if (!ctx.policyPreview->start(ctx.executor)) {
-            ctx.policyMeta = "policy depth pump admission failed";
-        }
         ctx.workflowCanvas.model.catalog = &ctx.workflow->catalog();
         ctx.workflowCanvas.afterGraphChange(ctx.workflow.get());
         refreshSourceRouter(ctx);
@@ -384,27 +372,6 @@ void ViewerContext::pump() {
         frameUpdated = true;
     }
 
-    // 策略深度快照（M9，DEC-019）：LatestMailbox 最新态非阻塞消费；Rgba8 网格
-    // 经 Frame 元数据包装零拷贝上传（GPU 上传限 UI 线程，EUI-20260923-003）。
-    if (policyPreview != nullptr) {
-        viewer::PolicyDepthPreviewState policyState;
-        if (policyPreview->tryLoadState(lastPolicySequence, policyState) &&
-            policyState.snapshot.valid()) {
-            rin::Frame policyFrame;
-            policyFrame.kind = FrameKind::Depth;
-            policyFrame.width = policyState.snapshot.grid.width();
-            policyFrame.height = policyState.snapshot.grid.height();
-            policyFrame.stride = policyState.snapshot.grid.stride();
-            policyFrame.sequence = policyState.snapshot.sourceSequence;
-            policyFrame.pixels = policyState.snapshot.grid.pixels();
-            policyView.update(policyFrame);
-            policyMeta = "seq " + std::to_string(policyState.snapshot.sourceSequence) + " - " +
-                         std::to_string(policyState.snapshot.processedFrames) + " frames - " +
-                         std::to_string(static_cast<int>(policyState.fps)) + " fps";
-            frameUpdated = true;
-        }
-    }
-
     rin::IntrinsicsSnapshot snapshot;
     if (service->tryLoadIntrinsics(lastIntrinsicsSequence, snapshot)) {
         intrinsics = std::move(snapshot);
@@ -526,10 +493,6 @@ void ViewerContext::shutdown() {
         workflow.reset();  // （契约 stop 排空语义：stale 数据不得恢复活动状态）。
         workflowCanvas.graphPending = false;
     }
-    if (policyPreview != nullptr) {
-        policyPreview->stop();  // 策略 tick 取消（M9）：生产者已停，executor shutdown 前。
-        policyPreview.reset();
-    }
     // 工作流面板 UI 侧排空（M5-04 §4）：快照缩略图清空、控件绑定复位、失败
     // 标注清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址
     // 排空（M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
@@ -541,7 +504,6 @@ void ViewerContext::shutdown() {
     workflowCanvas.perf.clear();
     rgbView.release();  // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
     depthView.release();
-    policyView.release();
     if (started) {
         (void)executor.shutdown(true);
     }
@@ -851,7 +813,7 @@ void composePreviewPage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, floa
     const float viewsTop = y + controlsHeight + kSpace3;
     const float viewsHeight =
         std::max(160.0f, height - controlsHeight - kSpace3 * 2.0f - panelHeight);
-    const float viewWidth = (width - kSpace3 * 2.0f) / 3.0f;
+    const float viewWidth = (width - kSpace3) / 2.0f;
     const float resolutionX = ox + width - 180.0f;
     const bool narrowControls = width < 640.0f;
 
@@ -865,8 +827,6 @@ void composePreviewPage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, floa
                             ctx.rgbView);
             composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth", ctx.depthMeta,
                             ctx.depthView);
-            composeViewCard(ui, "view.policy", viewWidth, viewsHeight, "Policy Depth",
-                            ctx.policyMeta, ctx.policyView);
         })
         .build();
     composeIntrinsicsCard(ui, ctx, width, panelHeight, ox, y + height - panelHeight);

@@ -45,12 +45,12 @@ constexpr float kBorderHairline = 1.0f;
 
 // --- 语义色令牌（深色主题；对应 Zai Dark 的角色翻译） ---
 struct ThemeTokens {
-    eui::Color background;     // 页面根
-    eui::Color card;           // 标准内容卡
-    eui::Color cardBorder;     // 卡片描边
-    eui::Color surface;        // 低强调承载面（画面区）
-    eui::Color border;         // 默认分隔
-    eui::Color input;          // 可编辑字段底
+    eui::Color background;  // 页面根
+    eui::Color card;        // 标准内容卡
+    eui::Color cardBorder;  // 卡片描边
+    eui::Color surface;     // 低强调承载面（画面区）
+    eui::Color border;      // 默认分隔
+    eui::Color input;       // 可编辑字段底
     eui::Color inputBorder;
     eui::Color inputBorderHover;
     eui::Color menu;           // 下拉浮层底
@@ -128,14 +128,16 @@ inline eui::Color workflowStateColor(const rin::WorkflowEngineState state) {
 /// 端口类型色（M5-02 令牌扩展，ui_workspace_design.md §5.3：Gray8/Rgba8 各一枚，
 /// 供节点画布端口与连线拖拽类型反馈使用；M5-03 消费）。
 struct PortTypeTokens {
-    eui::Color gray8;   ///< Gray8 单色图像端口
-    eui::Color rgba8;   ///< Rgba8 彩色图像端口
+    eui::Color gray8;  ///< Gray8 单色图像端口
+    eui::Color rgba8;  ///< Rgba8 彩色图像端口
+    eui::Color depth32f;  ///< Depth32F 米制深度端口（M10/DEC-020，青蓝示意深度数据域）
 };
 
 inline const PortTypeTokens& portTypes() {
     static const PortTypeTokens tokens{
         .gray8 = {0.580f, 0.620f, 0.680f, 1.0f},
         .rgba8 = {0.720f, 0.520f, 0.950f, 1.0f},
+        .depth32f = {0.300f, 0.760f, 0.860f, 1.0f},
     };
     return tokens;
 }
@@ -148,6 +150,8 @@ inline eui::Color portTypeColor(const rin::PortType type) {
             return tokens.gray8;
         case rin::PortType::Rgba8:
             return tokens.rgba8;
+        case rin::PortType::Depth32F:
+            return tokens.depth32f;
     }
     return tokens.gray8;
 }

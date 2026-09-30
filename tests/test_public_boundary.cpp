@@ -2,6 +2,7 @@
 // 并实例化契约类型/接口，确保公开头零第三方类型（RULE-01）。
 #include "test_util.hpp"
 
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -9,7 +10,6 @@
 #include <vector>
 
 #include <rin/camera_service.hpp>
-#include <rin/depth_policy_preview.hpp>
 #include <rin/depth_preproc.hpp>
 #include <rin/image_node.hpp>
 #include <rin/image_ops.hpp>
@@ -474,64 +474,68 @@ int main() {
         RIN_CHECK_EQ(history.sample().size(), std::size_t{2} * 5 * 6);
     }
 
-    // M9 米制深度通道与策略深度预览模型（仅公开头可见性 + 最小实例化，RULE-01）：
-    // rin/camera_types.hpp 的 DepthMetricSample（payload-struct：sequence/
-    // deviceTimestampMs/frame，valid() 直通 frame.valid()）、
-    // ICameraService::tryLoadDepthMetric 纯虚（上方 NullService 无生产者桩恒
-    // false 且出参/水位不动）、rin/depth_policy_preview.hpp 的
-    // PolicyDepthPreviewSnapshot/PolicyDepthPreviewModel（构造/初态/process/
-    // reset/snapshot/config 访问）经公开头可用且不引入第三方类型（数值 golden
-    // 归 test_depth_policy_preview.cpp，tick 组件时序归
-    // test_policy_depth_component.cpp）。
+    // M10 深度域工作流端口（仅公开头可见性 + 最小实例化，RULE-01，DEC-020）：
+    // rin/workflow_types.hpp 的 PortType::Depth32F（ImageU8 字节容器按 host 端序
+    // 承载 float32 米制深度，elementSize = 4）、rin/image_types.hpp 的
+    // depthF32Row 行视图助手、rin/image_node.hpp 的 IStatefulImageNode 标记接口
+    // （引擎串行在飞探测面）经公开头可用且不引入第三方类型（数值 golden 归
+    // test_image_ops_depth.cpp，引擎时序归 test_workflow_depth_engine.cpp）。
     {
-        // DepthMetricSample 契约类型最小实例化（米制通道载荷形态）。
-        rin::DepthMetricSample sample;
-        RIN_CHECK(!sample.valid());  // 默认构造：frame 无效 → 采样无效。
-        sample.sequence = 5;
-        sample.deviceTimestampMs = 33.0;
-        sample.frame = rin::DepthFrameF32::make(4, 2);
-        RIN_CHECK(sample.valid());  // valid() == frame.valid()。
-
-        // tryLoadDepthMetric 无生产者桩语义（公开接口多态调用）：false 且
-        // 出参/水位保持不动（与实现通道 LatestMailbox::try_load_newer_than 的
-        // stale 读取不更新序号一致）。
-        std::uint64_t metricSequence = 11;
-        rin::DepthMetricSample probe;
-        probe.sequence = 777;
-        RIN_CHECK(!service->tryLoadDepthMetric(metricSequence, probe));
-        RIN_CHECK_EQ(metricSequence, std::uint64_t{11});
-        RIN_CHECK_EQ(probe.sequence, std::uint64_t{777});
-        RIN_CHECK(!probe.valid());
-
-        // 预览模型最小往返（64×36 输入 == 默认 raw 网格，O2 同尺寸恒等）：
-        // 初态快照无效 → process 后快照有效（grid 几何与布局 golden 归
-        // test_depth_policy_preview.cpp）。
-        rin::PolicyDepthPreviewModel model;
-        RIN_CHECK(!model.snapshot().valid());
-        RIN_CHECK_EQ(model.snapshot().processedFrames, std::uint64_t{0});
-        RIN_CHECK_EQ(model.snapshot().historyResets, std::uint64_t{0});
-
-        const std::vector<float> metricPixels(64u * 36u, 1.25f);
-        rin::DepthFrameF32 metricFrame = rin::DepthFrameF32::wrap(
-            64, 36, 64, std::make_shared<const std::vector<float>>(metricPixels));
-        RIN_CHECK(metricFrame.valid());
-        // process/snapshot 最小往返（64×36 输入 == 默认 raw 网格，O2 同尺寸恒等）。
-        // 契约外异常记失败不 abort（防御，test_depth_preproc.cpp tryOp 同纪律；
-        // grid 布局 golden 归 test_depth_policy_preview.cpp）。
-        bool processed = false;
-        try {
-            model.process(metricFrame, 1);
-            processed = true;
-        } catch (const std::exception& error) {
-            RIN_CHECK_MSG(false, std::string("process 意外异常: ") + error.what());
+        // Depth32F 端口语义最小实例化：elementSize = 4、ImageU8 承载、行视图。
+        RIN_CHECK_EQ(rin::elementSize(rin::PortType::Depth32F), std::uint32_t{4});
+        rin::ImageU8 depth = rin::ImageU8::make(rin::PortType::Depth32F, 2, 1);
+        RIN_CHECK(depth.valid());
+        RIN_CHECK_EQ(depth.stride(), std::uint32_t{8});  // 2 像素 × 4 字节（紧凑）。
+        {
+            // 行视图写读最小往返（wrap 前 buffer 可写；const 视图经 depthF32Row 读）。
+            auto pixels = std::make_shared<std::vector<std::uint8_t>>(8);
+            const float values[2] = {0.5f, 1.25f};
+            std::memcpy(pixels->data(), values, sizeof(values));
+            rin::ImageU8 wrapped = rin::ImageU8::wrap(
+                rin::PortType::Depth32F, 2, 1, 8,
+                std::const_pointer_cast<const std::vector<std::uint8_t>>(pixels));
+            RIN_CHECK(wrapped.valid());
+            const float* row = rin::depthF32Row(wrapped, 0);
+            RIN_CHECK(row != nullptr);
+            if (row != nullptr) {
+                RIN_CHECK_EQ(row[0], 0.5f);
+                RIN_CHECK_EQ(row[1], 1.25f);
+            }
+            RIN_CHECK(rin::depthF32Row(wrapped, 1) == nullptr);  // 越界 nullptr。
         }
-        if (processed) {
-            RIN_CHECK(model.snapshot().valid());
-            RIN_CHECK_EQ(model.snapshot().processedFrames, std::uint64_t{1});
-            RIN_CHECK_EQ(model.snapshot().sourceSequence, std::uint64_t{1});
-        }
-        model.reset();
-        RIN_CHECK_EQ(model.snapshot().historyResets, std::uint64_t{1});  // 复位计数可观测。
+
+        // IStatefulImageNode 标记接口最小实例化：双继承节点经 IImageNode* 可
+        // dynamic_cast 探测（引擎 buildGeneration 的编译期探测面）。
+        class WitnessStatefulNode final : public rin::IImageNode, public rin::IStatefulImageNode {
+        public:
+            const rin::NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
+            std::vector<rin::ImageU8> apply(
+                const std::vector<rin::ImageU8>& inputs) const override {
+                return inputs;
+            }
+
+        private:
+            rin::NodeDescriptor descriptor_;
+        };
+        WitnessStatefulNode stateful;
+        rin::IImageNode* asImage = &stateful;
+        RIN_CHECK(dynamic_cast<rin::IStatefulImageNode*>(asImage) != nullptr);
+
+        class WitnessStatelessNode final : public rin::IImageNode {
+        public:
+            const rin::NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
+            std::vector<rin::ImageU8> apply(
+                const std::vector<rin::ImageU8>& inputs) const override {
+                return inputs;
+            }
+
+        private:
+            rin::NodeDescriptor descriptor_;
+        };
+        WitnessStatelessNode stateless;
+        rin::IImageNode* asImage2 = &stateless;
+        RIN_CHECK(dynamic_cast<rin::IStatefulImageNode*>(asImage2) == nullptr);
     }
+
     return rin_test::exitStatus();
 }
