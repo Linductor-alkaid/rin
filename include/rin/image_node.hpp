@@ -33,8 +33,20 @@ public:
     /// 重建），不得保留 inputs 的引用越过本次调用（需要延续时显式共享像素
     /// 所有权拷贝）。失败以异常报告（引擎捕获 → NodeFailed 事件），不得返回
     /// 无效图像静默失败。
-    [[nodiscard]] virtual std::vector<ImageU8> apply(
-        const std::vector<ImageU8>& inputs) const = 0;
+    [[nodiscard]] virtual std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const = 0;
+};
+
+/// 有状态节点标记接口（M10，DEC-020 加性修订 DEC-013）：跨帧保持内部状态
+/// 的节点（如时序历史堆叠）额外实现本接口。引擎契约：
+/// - 编译期探测（buildGeneration），含状态节点的生成代以**串行在飞**执行——
+///   上一帧任务未完成时跳过本帧提交（staged 最新帧语义，下一 tick 重试，
+///   不计过载丢弃），保证 apply 按帧序调用；
+/// - 状态生命周期 = 节点实例生命周期：图替换/参数热更新重建生成代即复位；
+/// - 实现仍须满足 IImageNode::apply 的 const/可并发调用签名纪律——串行序
+///   由引擎保证，实现内部以 mutable 状态承载（不得另开线程/队列）。
+class IStatefulImageNode {
+public:
+    virtual ~IStatefulImageNode() = default;
 };
 
 /// 节点工厂接缝：按目录声明与实例参数构造可执行节点。参数解析经
@@ -70,8 +82,8 @@ using ImageNodeFactory =
                                                           const NodeInstance& instance,
                                                           const std::string& paramId);
 /// 实数数组（行主序；如卷积核系数）。
-[[nodiscard]] std::optional<std::vector<double>> paramRealArray(
-    const NodeDescriptor& descriptor, const NodeInstance& instance,
-    const std::string& paramId);
+[[nodiscard]] std::optional<std::vector<double>> paramRealArray(const NodeDescriptor& descriptor,
+                                                                const NodeInstance& instance,
+                                                                const std::string& paramId);
 
 }  // namespace rin

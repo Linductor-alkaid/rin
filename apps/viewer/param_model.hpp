@@ -17,6 +17,7 @@
 // EUI 组装见 param_panel.hpp，画布会话状态见 node_canvas.hpp。
 
 #include <rin/camera_types.hpp>
+#include <rin/image_types.hpp>
 #include <rin/workflow_engine.hpp>
 #include <rin/workflow_types.hpp>
 
@@ -108,9 +109,8 @@ struct ParamEditResult {
             return {};
         case rin::ParamKind::Integer: {
             const std::int64_t number = std::get<std::int64_t>(value);
-            if (descriptor.hasRange &&
-                (static_cast<double>(number) < descriptor.minValue ||
-                 static_cast<double>(number) > descriptor.maxValue)) {
+            if (descriptor.hasRange && (static_cast<double>(number) < descriptor.minValue ||
+                                        static_cast<double>(number) > descriptor.maxValue)) {
                 return "value out of range (" + paramRangeText(descriptor) + ")";
             }
             return {};
@@ -128,8 +128,8 @@ struct ParamEditResult {
         }
         case rin::ParamKind::Enumeration: {
             const std::string& option = std::get<std::string>(value);
-            if (std::find(descriptor.enumOptions.begin(), descriptor.enumOptions.end(),
-                          option) == descriptor.enumOptions.end()) {
+            if (std::find(descriptor.enumOptions.begin(), descriptor.enumOptions.end(), option) ==
+                descriptor.enumOptions.end()) {
                 return "value is not a declared option";
             }
             return {};
@@ -161,8 +161,8 @@ struct ParamEditResult {
 
 /// 文本 → Integer/Real/Enumeration 赋值（文本输入与下拉的公共入口）；解析失败
 /// 或校验拒绝时 error 非空。Boolean/RealArray 不经文本标量入口。
-[[nodiscard]] inline ParamEditResult paramAssignmentFromText(
-    const rin::ParamDescriptor& descriptor, const std::string& text) {
+[[nodiscard]] inline ParamEditResult paramAssignmentFromText(const rin::ParamDescriptor& descriptor,
+                                                             const std::string& text) {
     switch (descriptor.kind) {
         case rin::ParamKind::Integer: {
             const std::optional<std::int64_t> parsed = parseIntegerText(text);
@@ -204,8 +204,8 @@ struct ParamEditResult {
 
 /// 声明值 → 滑条归一化（Integer/Real 且 hasRange；否则 nullopt）：闭区间外值
 /// 夹取到 [0,1]（§5.5"夹取"）。
-[[nodiscard]] inline std::optional<double> valueToSlider(
-    const rin::ParamDescriptor& descriptor, const rin::ParamValue& value) {
+[[nodiscard]] inline std::optional<double> valueToSlider(const rin::ParamDescriptor& descriptor,
+                                                         const rin::ParamValue& value) {
     if (!descriptor.hasRange) {
         return std::nullopt;
     }
@@ -259,8 +259,7 @@ struct RoiConstraint {
     bool hasInputSize = false;
 
     [[nodiscard]] static RoiConstraint unconstrained() { return {}; }
-    [[nodiscard]] static RoiConstraint forInput(std::uint32_t width,
-                                                std::uint32_t height) {
+    [[nodiscard]] static RoiConstraint forInput(std::uint32_t width, std::uint32_t height) {
         return {static_cast<double>(width), static_cast<double>(height), true};
     }
 
@@ -274,8 +273,7 @@ struct RoiConstraint {
     /// 取声明默认）∩ 声明 range；非 ROI 参数或无输入尺寸返回 nullopt（调用方
     /// 回退声明范围呈现）。
     [[nodiscard]] std::optional<std::pair<double, double>> effectiveRange(
-        const rin::NodeDescriptor& descriptor,
-        const std::vector<rin::ParamAssignment>& assignments,
+        const rin::NodeDescriptor& descriptor, const std::vector<rin::ParamAssignment>& assignments,
         const rin::ParamDescriptor& pd) const {
         if (!hasInputSize || !isRoiParam(pd)) {
             return std::nullopt;
@@ -305,10 +303,10 @@ struct RoiConstraint {
 
     /// 值夹取进 ROI 参数的有效域（Integer 闭区间取整）；非 ROI 参数或无输入
     /// 尺寸原样返回。
-    [[nodiscard]] rin::ParamValue clampValue(
-        const rin::NodeDescriptor& descriptor,
-        const std::vector<rin::ParamAssignment>& assignments,
-        const rin::ParamDescriptor& pd, rin::ParamValue value) const {
+    [[nodiscard]] rin::ParamValue clampValue(const rin::NodeDescriptor& descriptor,
+                                             const std::vector<rin::ParamAssignment>& assignments,
+                                             const rin::ParamDescriptor& pd,
+                                             rin::ParamValue value) const {
         const std::optional<std::pair<double, double>> range =
             effectiveRange(descriptor, assignments, pd);
         if (!range || pd.kind != rin::ParamKind::Integer) {
@@ -326,12 +324,10 @@ struct RoiConstraint {
 
 private:
     /// 兄弟参数生效值（未赋值取声明默认；缺失/种类异常按 0 防御）。
-    [[nodiscard]] double siblingValue(
-        const rin::NodeDescriptor& descriptor,
-        const std::vector<rin::ParamAssignment>& assignments,
-        const std::string& paramId) const {
-        if (const rin::ParamValue* value =
-                effectiveParamValue(descriptor, assignments, paramId)) {
+    [[nodiscard]] double siblingValue(const rin::NodeDescriptor& descriptor,
+                                      const std::vector<rin::ParamAssignment>& assignments,
+                                      const std::string& paramId) const {
+        if (const rin::ParamValue* value = effectiveParamValue(descriptor, assignments, paramId)) {
             if (const auto* number = std::get_if<std::int64_t>(value)) {
                 return static_cast<double>(*number);
             }
@@ -350,8 +346,7 @@ private:
 }
 
 /// 滑条归一化 → 指定值域取值（integer 时就近取整；t 夹取到 [0,1]）。
-[[nodiscard]] inline double sliderToValueInRange(double lo, double hi, double t,
-                                                 bool integer) {
+[[nodiscard]] inline double sliderToValueInRange(double lo, double hi, double t, bool integer) {
     t = std::clamp(t, 0.0, 1.0);
     double value = lo + t * (hi - lo);
     if (integer) {
@@ -406,8 +401,8 @@ struct RealArrayGrid {
             return grid;
         }
         const std::size_t n = flat.size();
-        const std::size_t side = static_cast<std::size_t>(std::llround(std::sqrt(
-            static_cast<long double>(n))));
+        const std::size_t side =
+            static_cast<std::size_t>(std::llround(std::sqrt(static_cast<long double>(n))));
         if (side * side == n && side > 0) {
             grid.rows = side;
             grid.cols = side;
@@ -509,8 +504,7 @@ inline constexpr std::uint32_t kThumbnailMaxDim = 256;
 /// RGBA8 帧（sequence 透传 sourceSequence 供 UI 显示源帧序号）；快照无效或
 /// 像素缺失返回 false。
 [[nodiscard]] inline bool thumbnailRgbaFromSnapshot(const rin::NodeOutputSnapshot& snapshot,
-                                                    const std::uint32_t maxDim,
-                                                    rin::Frame& out) {
+                                                    const std::uint32_t maxDim, rin::Frame& out) {
     if (!snapshot.valid() || maxDim == 0) {
         return false;
     }
@@ -525,21 +519,65 @@ inline constexpr std::uint32_t kThumbnailMaxDim = 256;
     const std::size_t rowBytes = static_cast<std::size_t>(thumbW) * 4u;
     std::vector<std::uint8_t> rgba(rowBytes * thumbH);
     const std::vector<std::uint8_t>& source = *snapshot.pixels;
+    const rin::ImageU8 sourceImage = rin::ImageU8::wrap(
+        snapshot.format, snapshot.width, snapshot.height, snapshot.stride, snapshot.pixels);
+    float p99 = 0.0f;  // Depth32F 缩略图 P99 归一基准（首像素 lazily 计算）。
+    bool p99Valid = false;
     for (std::uint32_t y = 0; y < thumbH; ++y) {
-        const std::size_t sourceY = static_cast<std::size_t>(
-            std::min<std::uint64_t>(snapshot.height - 1,
-                                    static_cast<std::uint64_t>(y) * snapshot.height / thumbH));
-        const std::uint8_t* sourceRow = source.data() + static_cast<std::size_t>(sourceY) *
-                                                                snapshot.stride;
+        const std::size_t sourceY = static_cast<std::size_t>(std::min<std::uint64_t>(
+            snapshot.height - 1, static_cast<std::uint64_t>(y) * snapshot.height / thumbH));
+        const std::uint8_t* sourceRow =
+            source.data() + static_cast<std::size_t>(sourceY) * snapshot.stride;
         std::uint8_t* targetRow = rgba.data() + static_cast<std::size_t>(y) * rowBytes;
         for (std::uint32_t x = 0; x < thumbW; ++x) {
-            const std::size_t sourceX = static_cast<std::size_t>(
-                std::min<std::uint64_t>(snapshot.width - 1,
-                                        static_cast<std::uint64_t>(x) * snapshot.width /
-                                            thumbW));
+            const std::size_t sourceX = static_cast<std::size_t>(std::min<std::uint64_t>(
+                snapshot.width - 1, static_cast<std::uint64_t>(x) * snapshot.width / thumbW));
             std::uint8_t* target = targetRow + static_cast<std::size_t>(x) * 4u;
             if (snapshot.format == rin::PortType::Gray8) {
                 const std::uint8_t gray = sourceRow[sourceX];
+                target[0] = gray;
+                target[1] = gray;
+                target[2] = gray;
+                target[3] = 255;
+            } else if (snapshot.format == rin::PortType::Depth32F) {
+                // Depth32F 缩略图（M10/DEC-020 决策 5）：逐帧 P99（有效像素
+                // v>0 的 99 分位）归一，无效 0 → 黑、其余近白远黑（DEC-007
+                // 灰度约定）。P99 预扫描整帧一次（每缩略图 O(N)）。
+                if (!p99Valid) {
+                    std::vector<float> valid;
+                    valid.reserve(static_cast<std::size_t>(snapshot.width) * snapshot.height);
+                    for (std::uint32_t sy = 0; sy < snapshot.height; ++sy) {
+                        const float* row = rin::depthF32Row(sourceImage, sy);
+                        if (row == nullptr) {
+                            break;
+                        }
+                        for (std::uint32_t sx = 0; sx < snapshot.width; ++sx) {
+                            if (row[sx] > 0.0f) {
+                                valid.push_back(row[sx]);
+                            }
+                        }
+                    }
+                    if (!valid.empty()) {
+                        const std::size_t idx =
+                            std::min(valid.size() - 1, valid.size() * 99u / 100u);
+                        std::nth_element(valid.begin(),
+                                         valid.begin() + static_cast<std::ptrdiff_t>(idx),
+                                         valid.end());
+                        p99 = valid[idx];
+                        p99Valid = p99 > 0.0f;
+                    }
+                }
+                float v = 0.0f;
+                if (p99Valid && sourceY < snapshot.height) {
+                    if (const float* row = rin::depthF32Row(sourceImage, sourceY); row != nullptr) {
+                        v = row[sourceX];
+                    }
+                }
+                std::uint8_t gray = 0;
+                if (p99Valid && v > 0.0f) {
+                    const float t = std::min(1.0f, v / p99);
+                    gray = static_cast<std::uint8_t>((1.0f - t) * 255.0f + 0.5f);
+                }
                 target[0] = gray;
                 target[1] = gray;
                 target[2] = gray;

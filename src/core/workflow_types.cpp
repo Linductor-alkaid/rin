@@ -13,6 +13,8 @@ const char* toString(PortType type) noexcept {
             return "Gray8";
         case PortType::Rgba8:
             return "Rgba8";
+        case PortType::Depth32F:
+            return "Depth32F";
     }
     return "Unknown";
 }
@@ -55,8 +57,7 @@ ParamKind paramKindOf(const ParamValue& value) noexcept {
 namespace {
 
 bool allFinite(const std::vector<double>& values) noexcept {
-    return std::all_of(values.begin(), values.end(),
-                       [](double v) { return std::isfinite(v); });
+    return std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); });
 }
 
 }  // namespace
@@ -71,8 +72,7 @@ bool ParamDescriptor::valid() const noexcept {
     if (hasRange && kind != ParamKind::Integer && kind != ParamKind::Real) {
         return false;
     }
-    if (hasRange &&
-        (std::isnan(minValue) || std::isnan(maxValue) || minValue > maxValue)) {
+    if (hasRange && (std::isnan(minValue) || std::isnan(maxValue) || minValue > maxValue)) {
         // NaN 与任何值比较均为 false，会绕过 min>max 检查并使一切赋值被判越界；
         // ±Inf 端点允许（语义为对应侧不限）。
         return false;
@@ -83,9 +83,7 @@ bool ParamDescriptor::valid() const noexcept {
         }
         const auto& selected = std::get<std::string>(defaultValue);
         if (!std::any_of(enumOptions.begin(), enumOptions.end(),
-                         [&selected](const std::string& option) {
-                             return option == selected;
-                         })) {
+                         [&selected](const std::string& option) { return option == selected; })) {
             return false;
         }
     }
@@ -119,10 +117,9 @@ bool NodeCatalog::valid() const noexcept {
 
 const NodeDescriptor* findNodeDescriptor(const NodeCatalog& catalog,
                                          const std::string& typeId) noexcept {
-    const auto it = std::find_if(catalog.nodes.begin(), catalog.nodes.end(),
-                                 [&typeId](const NodeDescriptor& node) {
-                                     return node.typeId == typeId;
-                                 });
+    const auto it =
+        std::find_if(catalog.nodes.begin(), catalog.nodes.end(),
+                     [&typeId](const NodeDescriptor& node) { return node.typeId == typeId; });
     return it == catalog.nodes.end() ? nullptr : &*it;
 }
 
@@ -134,8 +131,7 @@ bool NodeOutputSnapshot::valid() const noexcept {
     // 使任何 stride 都满足比较；最小行宽超出 uint32 时任何 uint32 stride 必不满足。
     const std::uint64_t minStride =
         format == PortType::Rgba8 ? static_cast<std::uint64_t>(width) * 4u : width;
-    return stride >= minStride &&
-           pixels->size() >= static_cast<std::size_t>(stride) * height;
+    return stride >= minStride && pixels->size() >= static_cast<std::size_t>(stride) * height;
 }
 
 namespace {
@@ -169,9 +165,7 @@ bool paramAssignmentValid(const ParamDescriptor& descriptor, const ParamAssignme
     if (descriptor.kind == ParamKind::Enumeration) {
         const auto& selected = std::get<std::string>(assignment.value);
         if (!std::any_of(descriptor.enumOptions.begin(), descriptor.enumOptions.end(),
-                         [&selected](const std::string& option) {
-                             return option == selected;
-                         })) {
+                         [&selected](const std::string& option) { return option == selected; })) {
             *issueKind = ValidationIssueKind::BadParam;
             return false;
         }
@@ -187,8 +181,7 @@ bool paramAssignmentValid(const ParamDescriptor& descriptor, const ParamAssignme
 
 }  // namespace
 
-WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph,
-                                         const NodeCatalog& catalog) {
+WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph, const NodeCatalog& catalog) {
     WorkflowValidation result;
     auto reject = [&result](ValidationIssueKind kind, NodeId node, std::string message) {
         result.ok = false;
@@ -203,33 +196,28 @@ WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph,
     ids.reserve(graph.nodes.size());
     for (const NodeInstance& node : graph.nodes) {
         if (node.id == kInvalidNode) {
-            reject(ValidationIssueKind::InvalidNodeId, node.id,
-                   "节点 id 为保留的无效值 0");
+            reject(ValidationIssueKind::InvalidNodeId, node.id, "节点 id 为保留的无效值 0");
             continue;
         }
         if (!ids.insert(node.id).second) {
-            reject(ValidationIssueKind::DuplicateNodeId, node.id,
-                   "节点 id 在图内重复");
+            reject(ValidationIssueKind::DuplicateNodeId, node.id, "节点 id 在图内重复");
             continue;
         }
         const NodeDescriptor* descriptor = findNodeDescriptor(catalog, node.typeId);
         if (descriptor == nullptr) {
-            reject(ValidationIssueKind::UnknownNodeType, node.id,
-                   "未知节点类型: " + node.typeId);
+            reject(ValidationIssueKind::UnknownNodeType, node.id, "未知节点类型: " + node.typeId);
             continue;
         }
         descriptors.emplace(node.id, descriptor);
 
         std::unordered_set<std::string> assigned;
         for (const ParamAssignment& assignment : node.params) {
-            const auto it = std::find_if(
-                descriptor->params.begin(), descriptor->params.end(),
-                [&assignment](const ParamDescriptor& param) {
-                    return param.id == assignment.paramId;
-                });
+            const auto it = std::find_if(descriptor->params.begin(), descriptor->params.end(),
+                                         [&assignment](const ParamDescriptor& param) {
+                                             return param.id == assignment.paramId;
+                                         });
             if (it == descriptor->params.end()) {
-                reject(ValidationIssueKind::BadParam, node.id,
-                       "未知参数: " + assignment.paramId);
+                reject(ValidationIssueKind::BadParam, node.id, "未知参数: " + assignment.paramId);
                 continue;
             }
             if (!assigned.insert(assignment.paramId).second) {
@@ -247,8 +235,7 @@ WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph,
     // 连线面：方向、端点存在性、端口序号、类型一致、重复/多驱动/自环。
     struct PortRefHash {
         std::size_t operator()(const PortRef& ref) const noexcept {
-            const std::size_t direction =
-                ref.direction == PortDirection::Output ? 1u : 0u;
+            const std::size_t direction = ref.direction == PortDirection::Output ? 1u : 0u;
             return std::hash<std::uint64_t>{}(ref.node) ^
                    (std::hash<std::uint32_t>{}(ref.index) << 32) ^ direction;
         }
@@ -265,19 +252,16 @@ WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph,
         const auto toIt = descriptors.find(connection.to.node);
         if (fromIt == descriptors.end() || toIt == descriptors.end()) {
             reject(ValidationIssueKind::UnknownConnectionNode,
-                   fromIt == descriptors.end() ? connection.from.node
-                                               : connection.to.node,
+                   fromIt == descriptors.end() ? connection.from.node : connection.to.node,
                    "连线引用了图中不存在的节点");
             continue;
         }
         if (connection.from.index >= fromIt->second->outputs.size()) {
-            reject(ValidationIssueKind::PortOutOfRange, connection.from.node,
-                   "输出端口序号越界");
+            reject(ValidationIssueKind::PortOutOfRange, connection.from.node, "输出端口序号越界");
             continue;
         }
         if (connection.to.index >= toIt->second->inputs.size()) {
-            reject(ValidationIssueKind::PortOutOfRange, connection.to.node,
-                   "输入端口序号越界");
+            reject(ValidationIssueKind::PortOutOfRange, connection.to.node, "输入端口序号越界");
             continue;
         }
         if (fromIt->second->outputs[connection.from.index] !=
@@ -289,8 +273,7 @@ WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph,
             continue;
         }
         if (connection.from.node == connection.to.node) {
-            reject(ValidationIssueKind::SelfLoop, connection.to.node,
-                   "连线构成自环");
+            reject(ValidationIssueKind::SelfLoop, connection.to.node, "连线构成自环");
             continue;
         }
         if (!drivenInputs.insert(connection.to).second) {
@@ -308,8 +291,7 @@ WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph,
         }
         std::vector<bool> driven(it->second->inputs.size(), false);
         for (const Connection& connection : graph.connections) {
-            if (connection.to.node == node.id &&
-                connection.to.direction == PortDirection::Input &&
+            if (connection.to.node == node.id && connection.to.direction == PortDirection::Input &&
                 connection.to.index < driven.size()) {
                 driven[connection.to.index] = true;
             }

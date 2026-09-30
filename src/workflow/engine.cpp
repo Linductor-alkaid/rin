@@ -1,5 +1,7 @@
 #include "engine.hpp"
 
+#include "rin/image_node.hpp"
+
 #include <executor/comm/channel.hpp>
 #include <executor/comm/mailbox.hpp>
 #include <executor/task_cancellation.hpp>
@@ -113,33 +115,32 @@ public:
             validation.ok = false;
             validation.issues.push_back(
                 {ValidationIssueKind::BadParam, kInvalidNode,
-                 "graph exceeds node admission limit (" +
-                     std::to_string(config_.maxNodes) + ")"});
+                 "graph exceeds node admission limit (" + std::to_string(config_.maxNodes) + ")"});
         }
         if (!validation.ok) {
             return validation;
         }
         std::scoped_lock lock(lifecycleMutex_);
         switch (state_.load(std::memory_order_relaxed)) {
-        case WorkflowEngineState::Idle:
-        case WorkflowEngineState::Failed:
-            pendingStart_ = std::make_shared<const WorkflowGraph>(graph);
-            break;
-        case WorkflowEngineState::Running:
-            graphQueue_.publish(std::make_shared<const WorkflowGraph>(graph));
-            break;
-        case WorkflowEngineState::Stopping:
-            // 同线程模型下不可达（stop() 为 owner 线程同步调用）；防御性显式拒绝。
-            validation.ok = false;
-            validation.issues.push_back(
-                {ValidationIssueKind::BadParam, kInvalidNode, "engine is stopping"});
-            break;
+            case WorkflowEngineState::Idle:
+            case WorkflowEngineState::Failed:
+                pendingStart_ = std::make_shared<const WorkflowGraph>(graph);
+                break;
+            case WorkflowEngineState::Running:
+                graphQueue_.publish(std::make_shared<const WorkflowGraph>(graph));
+                break;
+            case WorkflowEngineState::Stopping:
+                // 同线程模型下不可达（stop() 为 owner 线程同步调用）；防御性显式拒绝。
+                validation.ok = false;
+                validation.issues.push_back(
+                    {ValidationIssueKind::BadParam, kInvalidNode, "engine is stopping"});
+                break;
         }
         return validation;
     }
 
-    bool requestParamUpdate(NodeId node, const std::string& paramId,
-                            const ParamValue& value, std::string* error) override {
+    bool requestParamUpdate(NodeId node, const std::string& paramId, const ParamValue& value,
+                            std::string* error) override {
         std::scoped_lock lock(lifecycleMutex_);
         const WorkflowEngineState current = state_.load(std::memory_order_relaxed);
         if (current == WorkflowEngineState::Stopping) {
@@ -175,8 +176,7 @@ public:
             }
             return false;
         }
-        const NodeDescriptor* descriptor =
-            findNodeDescriptor(config_.catalog, instance->typeId);
+        const NodeDescriptor* descriptor = findNodeDescriptor(config_.catalog, instance->typeId);
         const ParamDescriptor* param =
             descriptor != nullptr ? findParamDescriptor(*descriptor, paramId) : nullptr;
         if (param == nullptr) {
@@ -267,8 +267,8 @@ public:
         GenerationPtr generation = buildGeneration(*pendingStart_);
         if (generation == nullptr) {
             // 工厂期失败（参数依赖的构造拒绝等）：准入显式失败，保持 Idle。
-            result.error = buildFailureMessage_.empty() ? "graph build failed"
-                                                        : buildFailureMessage_;
+            result.error =
+                buildFailureMessage_.empty() ? "graph build failed" : buildFailureMessage_;
             buildFailureMessage_.clear();
             return result;
         }
@@ -278,8 +278,8 @@ public:
         timerHandle_ = executor_.submit_periodic_cancellable_with_handle(
             static_cast<std::int64_t>(config_.pumpInterval.count()),
             // 掉队 tick 生命周期闭合：闭包只持弱引用（假引擎同款，见 M5-08）。
-            [weak = std::weak_ptr<WorkflowEngine>(shared_from_this())](
-                executor::StopToken tickToken) {
+            [weak =
+                 std::weak_ptr<WorkflowEngine>(shared_from_this())](executor::StopToken tickToken) {
                 if (std::shared_ptr<WorkflowEngine> self = weak.lock()) {
                     self->tick(tickToken);
                 }
@@ -344,13 +344,11 @@ public:
         return lastError_;
     }
 
-    [[nodiscard]] bool tryLoadStats(std::uint64_t& lastSeenSequence,
-                                    WorkflowStats& out) override {
+    [[nodiscard]] bool tryLoadStats(std::uint64_t& lastSeenSequence, WorkflowStats& out) override {
         return stats_.try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
     }
 
-    [[nodiscard]] bool tryLoadNodeOutput(NodeId node,
-                                         std::uint64_t& lastSeenSequence,
+    [[nodiscard]] bool tryLoadNodeOutput(NodeId node, std::uint64_t& lastSeenSequence,
                                          NodeOutputSnapshot& out) override {
         const GenerationPtr generation = effective_.load();
         if (generation == nullptr) {
@@ -363,9 +361,7 @@ public:
         return it->second->try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
     }
 
-    [[nodiscard]] bool tryLoadEvent(WorkflowEvent& out) override {
-        return events_.try_load(out);
-    }
+    [[nodiscard]] bool tryLoadEvent(WorkflowEvent& out) override { return events_.try_load(out); }
 
 private:
     /// 生效图一代：图基底（参数应用后的图值，参数边界重建的基底）+ 编译图 +
@@ -379,9 +375,11 @@ private:
     struct Generation {
         std::shared_ptr<const WorkflowGraph> sourceGraph;  /// 构建来源图值。
         std::unique_ptr<NodeGraph> compiled;               /// 稳定拓扑序编译图。
-        std::vector<NodeId> injectableNodes;               /// 注入型源节点（拓扑序）。
-        std::unordered_map<NodeId, std::shared_ptr<LatestMailbox<NodeOutputSnapshot>>>
-            outputs;
+        /// 含有状态节点（M10/DEC-020）：串行在飞——上一帧任务未完成时跳过
+        /// 本帧提交（staged 最新帧语义，不计过载丢弃），保证 apply 按帧序。
+        bool serialExecution = false;
+        std::vector<NodeId> injectableNodes;  /// 注入型源节点（拓扑序）。
+        std::unordered_map<NodeId, std::shared_ptr<LatestMailbox<NodeOutputSnapshot>>> outputs;
     };
     using GenerationPtr = std::shared_ptr<const Generation>;
 
@@ -427,8 +425,8 @@ private:
     /// 连续，见 Generation 注释），新节点取全新邮箱。调用方持有 lifecycleMutex_
     /// 且传递的 previous 即 effective_ 当前值——共享（不移除）语义对并发读取
     /// 者（tryLoadNodeOutput 持旧代 shared_ptr）无数据竞争。
-    [[nodiscard]] GenerationPtr buildGeneration(
-        const WorkflowGraph& graph, const GenerationPtr& previous = {}) {
+    [[nodiscard]] GenerationPtr buildGeneration(const WorkflowGraph& graph,
+                                                const GenerationPtr& previous = {}) {
         NodeGraphBuild build =
             buildNodeGraph(graph, config_.catalog, config_.nodeFactory, config_.maxNodes);
         if (build.graph == nullptr) {
@@ -445,6 +443,10 @@ private:
         generation->sourceGraph = std::make_shared<const WorkflowGraph>(graph);
         generation->compiled = std::move(build.graph);
         for (const NodeGraph::Node& node : generation->compiled->nodes()) {
+            if (node.impl != nullptr &&
+                dynamic_cast<const IStatefulImageNode*>(node.impl.get()) != nullptr) {
+                generation->serialExecution = true;
+            }
             if (node.impl == nullptr && node.descriptor->outputs.size() == 1) {
                 generation->injectableNodes.push_back(node.id);
             }
@@ -508,6 +510,12 @@ private:
         if (!hasNew) {
             return;  // 无新帧：廉价探测，不提交（帧源空闲语义）。
         }
+        // 串行在飞门（M10/DEC-020，IStatefulImageNode）：上一帧任务未完成时
+        // 跳过本帧提交——staged 保留最新帧，下一 tick 重试；不计过载丢弃
+        // （帧未被消费能力接受，非过载），保证状态节点 apply 按帧序。
+        if (current->serialExecution && !inflight_.empty()) {
+            return;
+        }
         // 覆盖检查：生效图必须全部源节点有捕获输入（待生效图的新源节点尚未
         // 产出时图不可运行；此时不提交也不计入过载丢弃——帧未被消费能力
         // 接受，非过载）。
@@ -559,8 +567,7 @@ private:
                 publishEvent(WorkflowEventKind::Info, kInvalidNode,
                              buildFailureMessage_.empty()
                                  ? "graph rejected at frame boundary"
-                                 : "graph rejected at frame boundary: " +
-                                       buildFailureMessage_);
+                                 : "graph rejected at frame boundary: " + buildFailureMessage_);
                 buildFailureMessage_.clear();
             }
             consumedQueued_ = std::move(queued);  // 成功或显式拒绝都消费。
@@ -595,8 +602,7 @@ private:
             publishEvent(WorkflowEventKind::Info, kInvalidNode,
                          buildFailureMessage_.empty()
                              ? "param update rejected at frame boundary"
-                             : "param update rejected at frame boundary: " +
-                                   buildFailureMessage_);
+                             : "param update rejected at frame boundary: " + buildFailureMessage_);
             buildFailureMessage_.clear();
             return;
         }
@@ -614,8 +620,7 @@ private:
     static void pruneCaptureState(const Generation& generation, Map& map) {
         const std::vector<NodeId>& injectables = generation.injectableNodes;
         for (auto it = map.begin(); it != map.end();) {
-            if (std::find(injectables.begin(), injectables.end(), it->first) ==
-                injectables.end()) {
+            if (std::find(injectables.begin(), injectables.end(), it->first) == injectables.end()) {
                 it = map.erase(it);
             } else {
                 ++it;
@@ -626,14 +631,11 @@ private:
     /// 参数赋值到图（值合法性已由 requestParamUpdate 校验；帧边界应用时失配
     /// 显式丢弃并发布 Info，假引擎同款）。publishEvents=false 用于
     /// requestParamUpdate 预编译校验路径（事件在帧边界或受理点另行发布）。
-    bool applyParamToGraph(WorkflowGraph& graph, NodeId node,
-                           const std::string& paramId, const ParamValue& value,
-                           bool publishEvents) {
+    bool applyParamToGraph(WorkflowGraph& graph, NodeId node, const std::string& paramId,
+                           const ParamValue& value, bool publishEvents) {
         NodeInstance* instance = findNodeInstance(graph, node);
         const NodeDescriptor* descriptor =
-            instance != nullptr
-                ? findNodeDescriptor(config_.catalog, instance->typeId)
-                : nullptr;
+            instance != nullptr ? findNodeDescriptor(config_.catalog, instance->typeId) : nullptr;
         const ParamDescriptor* param =
             descriptor != nullptr ? findParamDescriptor(*descriptor, paramId) : nullptr;
         if (instance == nullptr || param == nullptr || !paramValueMatches(*param, value)) {
@@ -660,11 +662,10 @@ private:
 
     // --- 帧执行（Executor 有限任务上下文） ---
 
-    void executeFrame(const GenerationPtr& generation,
-                      const std::shared_ptr<const std::unordered_map<NodeId, WorkflowFrameInput>>&
-                          inputs,
-                      std::uint64_t frameSeq,
-                      executor::StopToken token) {
+    void executeFrame(
+        const GenerationPtr& generation,
+        const std::shared_ptr<const std::unordered_map<NodeId, WorkflowFrameInput>>& inputs,
+        std::uint64_t frameSeq, executor::StopToken token) {
         // 帧边界取消检查（DEC-013：取消在帧边界生效；已开始的帧为有界工作
         // 单元，完整完成并发布，不在节点间中断）。
         if (token.stop_requested()) {
@@ -674,24 +675,23 @@ private:
         // 逐节点观测（runNodeGraph 接缝）：耗时入统计；失败归因节点。
         NodeId failedNode = kInvalidNode;
         std::string failureMessage;
-        NodeExecutionObserver observer =
-            [this, &failedNode, &failureMessage](const NodeGraph::Node& node,
-                                                 double costMs,
-                                                 const std::exception_ptr& error) {
-                if (error != nullptr) {
-                    try {
-                        std::rethrow_exception(error);
-                    } catch (const std::exception& e) {
-                        failedNode = node.id;
-                        failureMessage = e.what();
-                    } catch (...) {
-                        failedNode = node.id;
-                        failureMessage = "unknown node failure";
-                    }
-                    return;
+        NodeExecutionObserver observer = [this, &failedNode, &failureMessage](
+                                             const NodeGraph::Node& node, double costMs,
+                                             const std::exception_ptr& error) {
+            if (error != nullptr) {
+                try {
+                    std::rethrow_exception(error);
+                } catch (const std::exception& e) {
+                    failedNode = node.id;
+                    failureMessage = e.what();
+                } catch (...) {
+                    failedNode = node.id;
+                    failureMessage = "unknown node failure";
                 }
-                recordNodeCost(node.id, costMs);
-            };
+                return;
+            }
+            recordNodeCost(node.id, costMs);
+        };
 
         SourceInjector injector = [this, inputs](const NodeGraph::Node& node) -> ImageU8 {
             // 源节点执行记账：注入点即执行点（runNodeGraph 对每个注入型节点
@@ -722,10 +722,9 @@ private:
         // ≤ maxInFlight 帧）。失败帧不进入发布通道（引擎转 Failed，无后续帧）。
         {
             std::scoped_lock publishLock(publishMutex_);
-            pendingPublish_.emplace(
-                frameSeq, PendingPublish{generation, inputs, std::move(outputs)});
-            for (auto it = pendingPublish_.find(nextPublishSeq_);
-                 it != pendingPublish_.end();
+            pendingPublish_.emplace(frameSeq,
+                                    PendingPublish{generation, inputs, std::move(outputs)});
+            for (auto it = pendingPublish_.find(nextPublishSeq_); it != pendingPublish_.end();
                  it = pendingPublish_.find(nextPublishSeq_)) {
                 PendingPublish& frame = it->second;
                 publishOutputs(frame.generation, frame.outputs, *frame.inputs);
@@ -764,8 +763,7 @@ private:
             } else {
                 bool first = true;
                 for (const NodeGraph::InputEdge& edge : node.inputs) {
-                    const auto it =
-                        seqOf.find(nodes[edge.producerIndex].id);
+                    const auto it = seqOf.find(nodes[edge.producerIndex].id);
                     if (it == seqOf.end()) {
                         continue;  // 拓扑序保证生产者先发布；防御。
                     }
@@ -800,8 +798,7 @@ private:
     /// 调用方持 lifecycleMutex_；只消费已就绪 future，不阻塞。
     void reapFinished() {
         for (auto it = inflight_.begin(); it != inflight_.end();) {
-            if (it->get()->future.wait_for(std::chrono::seconds(0)) !=
-                std::future_status::ready) {
+            if (it->get()->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
                 ++it;
                 continue;
             }
@@ -868,8 +865,7 @@ private:
         } catch (...) {
             // 非 std 异常不得逃出 stop()（否则 std::terminate）。
             setLastError("unknown task failure during stop");
-            publishEvent(WorkflowEventKind::Info, kInvalidNode,
-                         "unknown task failure during stop");
+            publishEvent(WorkflowEventKind::Info, kInvalidNode, "unknown task failure during stop");
         }
     }
 
@@ -902,11 +898,10 @@ private:
 
         WorkflowStats snapshot;
         snapshot.sequence = ++statsSequence_;
-        snapshot.endToEndFps =
-            frameTimes_.size() >= 2
-                ? static_cast<double>(frameTimes_.size() - 1) * 1000.0 /
-                      (frameTimes_.back() - frameTimes_.front())
-                : 0.0;
+        snapshot.endToEndFps = frameTimes_.size() >= 2
+                                   ? static_cast<double>(frameTimes_.size() - 1) * 1000.0 /
+                                         (frameTimes_.back() - frameTimes_.front())
+                                   : 0.0;
         snapshot.processedFrames = processedFrames_;
         snapshot.droppedFrames = droppedFrames_.load(std::memory_order_relaxed);
         snapshot.inFlight = static_cast<std::uint32_t>(inFlightCount_.load());
@@ -917,11 +912,9 @@ private:
             if (it != nodeStats_.end()) {
                 const NodeRunStats& run = it->second;
                 nodeStats.lastCostMs = run.lastCostMs;
-                const double sum =
-                    std::accumulate(run.window.begin(), run.window.end(), 0.0);
+                const double sum = std::accumulate(run.window.begin(), run.window.end(), 0.0);
                 nodeStats.avgCostMs =
-                    run.window.empty() ? 0.0
-                                       : sum / static_cast<double>(run.window.size());
+                    run.window.empty() ? 0.0 : sum / static_cast<double>(run.window.size());
                 nodeStats.executedFrames = run.executedFrames;
             }
             snapshot.nodes.push_back(nodeStats);
@@ -954,17 +947,18 @@ private:
     executor::comm::MpscChannel<ParamCommand> paramQueue_;
 
     std::atomic<GenerationPtr> effective_{nullptr};
-    std::shared_ptr<const WorkflowGraph> pendingStart_;   // owner 线程（lifecycleMutex_ 下）
-    PendingGraph consumedQueued_;                          // 已消费待生效图标记（lifecycleMutex_ 下）
+    std::shared_ptr<const WorkflowGraph> pendingStart_;  // owner 线程（lifecycleMutex_ 下）
+    PendingGraph consumedQueued_;  // 已消费待生效图标记（lifecycleMutex_ 下）
     std::unordered_map<NodeId, WorkflowFrameInput> staged_;  // 捕获帧快照（lifecycleMutex_ 下）
-    std::unordered_map<NodeId, std::uint64_t> committedSeq_; // 引擎侧已消费源序号（lifecycleMutex_ 下）
-    std::vector<std::unique_ptr<InFlight>> inflight_;       // lifecycleMutex_ 下
+    std::unordered_map<NodeId, std::uint64_t>
+        committedSeq_;  // 引擎侧已消费源序号（lifecycleMutex_ 下）
+    std::vector<std::unique_ptr<InFlight>> inflight_;  // lifecycleMutex_ 下
     std::atomic<std::size_t> inFlightCount_{0};
     std::atomic<std::uint64_t> droppedFrames_{0};
     std::atomic<WorkflowEngineState> state_{WorkflowEngineState::Idle};
     executor::TimerHandle timerHandle_{};
-    std::string buildFailureMessage_;                       // buildGeneration 失败原因（lifecycleMutex_ 下）
-    std::uint64_t submitSeq_ = 0;                           // 帧提交序（lifecycleMutex_ 下）
+    std::string buildFailureMessage_;  // buildGeneration 失败原因（lifecycleMutex_ 下）
+    std::uint64_t submitSeq_ = 0;      // 帧提交序（lifecycleMutex_ 下）
 
     // 发布有序化（帧提交序 = 发布序；publishMutex_ 下）。lifecycleMutex_ 持有
     // 期间可短促获取本锁（start/stop 复位），帧任务只持本锁，无反向嵌套。

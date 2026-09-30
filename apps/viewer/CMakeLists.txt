@@ -1,6 +1,6 @@
 # rin：EUI-NEO 前端应用。eui_neo_configure_app 注入框架入口与运行资源。
 
-add_executable(rin app.cpp policy_depth_preview.cpp)
+add_executable(rin app.cpp)
 
 # 工作流页运行控制与真引擎集成（M5-06，DEC-013/DEC-016）：M4-07 真引擎 +
 # 相机帧源接缝（workflow_frame_source.hpp）替代 M5-08 契约假引擎（已随本次

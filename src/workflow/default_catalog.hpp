@@ -13,7 +13,10 @@ namespace rin::workflow_catalog {
 /// source_depth_jet / source_depth_gray / source_depth_adaptive（M6-03 深度
 /// rendition 源，DEC-017）/ crop / downscale / crop_gray / downscale_gray
 /// （M6-03 灰度变体，逐像素同语义）/ grayify / gaussian_blur / conv_kernel /
-/// hist_eq / fft_lowpass / fft_highpass / fft_bandpass。签名与参数 schema 按
+/// hist_eq / fft_lowpass / fft_highpass / fft_bandpass / source_depth_metric +
+/// depth_fill_invalid / depth_resize / depth_crop / depth_gaussian_blur /
+/// depth_normalize / depth_history（M10 深度域，DEC-020：PortType::Depth32F，
+/// 默认参数链 ≡ M8 冻结管线；depth_history 为有状态节点）。签名与参数 schema 按
 /// M5-08 假目录冻结基线（image_workflow_design.md §6，schema 演进随算子工作项
 /// 双向落盘）；算子数值语义由 M4 真实现提供。新类型一律追加于既有条目之后
 /// （契约套件按"目录首个无输入节点"泛式构图，依赖 source 居首）。
@@ -220,6 +223,170 @@ namespace rin::workflow_catalog {
     bandHigh.defaultValue = 0.6;
     fftBand.params = {bandLow, bandHigh};
     catalog.nodes.push_back(std::move(fftBand));
+
+    // ===== M10 深度域（DEC-020）：PortType::Depth32F，默认参数 = E3 冻结值 =====
+
+    NodeDescriptor sourceDepthMetric;
+    sourceDepthMetric.typeId = "source_depth_metric";
+    sourceDepthMetric.displayName = "相机源 深度米制";
+    sourceDepthMetric.outputs = {PortType::Depth32F};
+    catalog.nodes.push_back(std::move(sourceDepthMetric));
+
+    NodeDescriptor depthFillInvalid;
+    depthFillInvalid.typeId = "depth_fill_invalid";
+    depthFillInvalid.displayName = "深度无效填充";
+    depthFillInvalid.inputs = {PortType::Depth32F};
+    depthFillInvalid.outputs = {PortType::Depth32F};
+    ParamDescriptor fillFar;
+    fillFar.id = "far_value";
+    fillFar.label = "far value (m)";
+    fillFar.kind = ParamKind::Real;
+    fillFar.defaultValue = 2.5;
+    fillFar.hasRange = true;
+    fillFar.minValue = 0.0;
+    fillFar.maxValue = 100.0;
+    ParamDescriptor fillBelow;
+    fillBelow.id = "invalid_below";
+    fillBelow.label = "invalid below (m)";
+    fillBelow.kind = ParamKind::Real;
+    fillBelow.defaultValue = 0.0;
+    fillBelow.hasRange = true;
+    fillBelow.minValue = 0.0;
+    fillBelow.maxValue = 100.0;
+    depthFillInvalid.params = {fillFar, fillBelow};
+    catalog.nodes.push_back(std::move(depthFillInvalid));
+
+    NodeDescriptor depthResize;
+    depthResize.typeId = "depth_resize";
+    depthResize.displayName = "深度降采样";
+    depthResize.inputs = {PortType::Depth32F};
+    depthResize.outputs = {PortType::Depth32F};
+    ParamDescriptor resizeW;
+    resizeW.id = "width";
+    resizeW.label = "width";
+    resizeW.kind = ParamKind::Integer;
+    resizeW.defaultValue = static_cast<std::int64_t>(64);
+    resizeW.hasRange = true;
+    resizeW.minValue = 1.0;
+    resizeW.maxValue = 4096.0;
+    ParamDescriptor resizeH = resizeW;
+    resizeH.id = "height";
+    resizeH.label = "height";
+    resizeH.defaultValue = static_cast<std::int64_t>(36);
+    depthResize.params = {resizeW, resizeH};
+    catalog.nodes.push_back(std::move(depthResize));
+
+    NodeDescriptor depthCrop;
+    depthCrop.typeId = "depth_crop";
+    depthCrop.displayName = "深度裁切";
+    depthCrop.inputs = {PortType::Depth32F};
+    depthCrop.outputs = {PortType::Depth32F};
+    ParamDescriptor cropUp;
+    cropUp.id = "up";
+    cropUp.label = "up";
+    cropUp.kind = ParamKind::Integer;
+    cropUp.defaultValue = static_cast<std::int64_t>(18);
+    cropUp.hasRange = true;
+    cropUp.minValue = 0.0;
+    cropUp.maxValue = 4096.0;
+    ParamDescriptor cropDown = cropUp;
+    cropDown.id = "down";
+    cropDown.label = "down";
+    cropDown.defaultValue = static_cast<std::int64_t>(0);
+    ParamDescriptor cropLeft = cropUp;
+    cropLeft.id = "left";
+    cropLeft.label = "left";
+    cropLeft.defaultValue = static_cast<std::int64_t>(16);
+    ParamDescriptor cropRight = cropUp;
+    cropRight.id = "right";
+    cropRight.label = "right";
+    cropRight.defaultValue = static_cast<std::int64_t>(16);
+    depthCrop.params = {cropUp, cropDown, cropLeft, cropRight};
+    catalog.nodes.push_back(std::move(depthCrop));
+
+    NodeDescriptor depthBlur;
+    depthBlur.typeId = "depth_gaussian_blur";
+    depthBlur.displayName = "深度高斯模糊";
+    depthBlur.inputs = {PortType::Depth32F};
+    depthBlur.outputs = {PortType::Depth32F};
+    ParamDescriptor blurRadius;
+    blurRadius.id = "radius";
+    blurRadius.label = "radius";
+    blurRadius.kind = ParamKind::Integer;
+    blurRadius.defaultValue = static_cast<std::int64_t>(1);
+    blurRadius.hasRange = true;
+    blurRadius.minValue = 1.0;
+    blurRadius.maxValue = 10.0;
+    ParamDescriptor blurSigma;
+    blurSigma.id = "sigma";
+    blurSigma.label = "sigma";
+    blurSigma.kind = ParamKind::Real;
+    blurSigma.defaultValue = 1.0;
+    blurSigma.hasRange = true;
+    blurSigma.minValue = 0.0;
+    blurSigma.maxValue = 10.0;
+    depthBlur.params = {blurRadius, blurSigma};
+    catalog.nodes.push_back(std::move(depthBlur));
+
+    NodeDescriptor depthNormalize;
+    depthNormalize.typeId = "depth_normalize";
+    depthNormalize.displayName = "深度归一化";
+    depthNormalize.inputs = {PortType::Depth32F};
+    depthNormalize.outputs = {PortType::Depth32F};
+    ParamDescriptor normNear;
+    normNear.id = "near";
+    normNear.label = "near (m)";
+    normNear.kind = ParamKind::Real;
+    normNear.defaultValue = 0.0;
+    normNear.hasRange = true;
+    normNear.minValue = 0.0;
+    normNear.maxValue = 100.0;
+    ParamDescriptor normFar = normNear;
+    normFar.id = "far";
+    normFar.label = "far (m)";
+    normFar.defaultValue = 2.5;
+    depthNormalize.params = {normNear, normFar};
+    catalog.nodes.push_back(std::move(depthNormalize));
+
+    NodeDescriptor depthHistory;
+    depthHistory.typeId = "depth_history";
+    depthHistory.displayName = "深度历史堆叠";
+    depthHistory.inputs = {PortType::Depth32F};
+    depthHistory.outputs = {PortType::Depth32F};
+    ParamDescriptor histLen;
+    histLen.id = "history_length";
+    histLen.label = "history length";
+    histLen.kind = ParamKind::Integer;
+    histLen.defaultValue = static_cast<std::int64_t>(37);
+    histLen.hasRange = true;
+    histLen.minValue = 1.0;
+    histLen.maxValue = 4096.0;
+    ParamDescriptor histCount;
+    histCount.id = "sample_count";
+    histCount.label = "sample count";
+    histCount.kind = ParamKind::Integer;
+    histCount.defaultValue = static_cast<std::int64_t>(8);
+    histCount.hasRange = true;
+    histCount.minValue = 1.0;
+    histCount.maxValue = 64.0;
+    ParamDescriptor histSkip;
+    histSkip.id = "sample_skip";
+    histSkip.label = "sample skip";
+    histSkip.kind = ParamKind::Integer;
+    histSkip.defaultValue = static_cast<std::int64_t>(5);
+    histSkip.hasRange = true;
+    histSkip.minValue = 1.0;
+    histSkip.maxValue = 128.0;
+    ParamDescriptor histDelay;
+    histDelay.id = "sample_delay";
+    histDelay.label = "sample delay";
+    histDelay.kind = ParamKind::Integer;
+    histDelay.defaultValue = static_cast<std::int64_t>(0);
+    histDelay.hasRange = true;
+    histDelay.minValue = 0.0;
+    histDelay.maxValue = 4096.0;
+    depthHistory.params = {histLen, histCount, histSkip, histDelay};
+    catalog.nodes.push_back(std::move(depthHistory));
 
     return catalog;
 }

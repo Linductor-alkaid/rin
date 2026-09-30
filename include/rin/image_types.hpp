@@ -8,7 +8,7 @@
 
 namespace rin {
 
-/// 端口图像类型的单像素字节数（Gray8=1，Rgba8=4）；未知格式返回 0。
+/// 端口图像类型的单像素字节数（Gray8=1，Rgba8=4，Depth32F=4）；未知格式返回 0。
 [[nodiscard]] std::uint32_t elementSize(PortType type) noexcept;
 
 /// 单幅图像像素缓冲上界（字节）：16 MiB。覆盖当前支持的全部流配置
@@ -32,14 +32,14 @@ public:
 
     /// 分配并构造：像素缓冲由本调用分配（值初始化为零）。格式未知、宽高为 0、
     /// stride 小于最小行宽或缓冲超过 kMaxImageBytes 时返回无效图像。
-    [[nodiscard]] static ImageU8 make(PortType format, std::uint32_t width,
-                                      std::uint32_t height, std::uint32_t stride = 0);
+    [[nodiscard]] static ImageU8 make(PortType format, std::uint32_t width, std::uint32_t height,
+                                      std::uint32_t stride = 0);
 
     /// 接管既有缓冲（适配器零拷贝路径、节点内填充缓冲等）。pixels 为空、尺寸
     /// 非法或缓冲小于 stride×height 时返回无效图像；接管后以 const 视图共享，
     /// 调用方不得再改写其内容。
-    [[nodiscard]] static ImageU8 wrap(PortType format, std::uint32_t width,
-                                      std::uint32_t height, std::uint32_t stride,
+    [[nodiscard]] static ImageU8 wrap(PortType format, std::uint32_t width, std::uint32_t height,
+                                      std::uint32_t stride,
                                       std::shared_ptr<const std::vector<std::uint8_t>> pixels);
 
     /// 有效性：非默认构造成功（格式已知、宽高非零、stride 达到最小行宽、
@@ -55,8 +55,7 @@ public:
     [[nodiscard]] std::uint64_t byteSize() const noexcept;
 
     /// 共享像素缓冲；无效图像返回空指针。
-    [[nodiscard]] const std::shared_ptr<const std::vector<std::uint8_t>>&
-    pixels() const noexcept {
+    [[nodiscard]] const std::shared_ptr<const std::vector<std::uint8_t>>& pixels() const noexcept {
         return pixels_;
     }
 
@@ -70,5 +69,11 @@ private:
     std::uint32_t stride_ = 0;
     std::shared_ptr<const std::vector<std::uint8_t>> pixels_;
 };
+
+/// Depth32F 行视图（M10，DEC-020）：把 ImageU8 字节容器按 host 端序 float32
+/// 解释为米制深度行（distance_to_image_plane，米；无效深度 0.0）。仅当图像
+/// 有效、格式为 Depth32F 且 y 在界内时返回非空指针；行内可寻址元素数 =
+/// stride/4。float 视图统一经本助手解释，禁止散布 reinterpret_cast。
+[[nodiscard]] const float* depthF32Row(const ImageU8& image, std::uint32_t y) noexcept;
 
 }  // namespace rin
