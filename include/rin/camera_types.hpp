@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "rin/depth_preproc.hpp"
+
 namespace rin {
 
 /// 相机服务显式状态集（AGENTS.md "Runtime 与状态模型"；热插拔语义见 DEC-006）。
@@ -81,8 +83,8 @@ struct Frame {
     std::shared_ptr<const std::vector<std::uint8_t>> pixels;
 
     [[nodiscard]] bool valid() const noexcept {
-        return pixels != nullptr && width > 0 && height > 0 &&
-               stride >= width * 4u && pixels->size() >= static_cast<std::size_t>(stride) * height;
+        return pixels != nullptr && width > 0 && height > 0 && stride >= width * 4u &&
+               pixels->size() >= static_cast<std::size_t>(stride) * height;
     }
 };
 
@@ -194,6 +196,21 @@ struct MotionSample {
     std::uint64_t sequence = 0;
 
     [[nodiscard]] bool valid() const noexcept;
+};
+
+/// 米制深度采样（M9，DEC-019）：adapter 采集 worker 内 Z16 × depth_scale
+/// 线性换算的 float32 米制深度 rendition——`frame` 为
+/// distance_to_image_plane 语义（米），无效像素保持 0.0（"无效/远距"语义
+/// 由消费方 `fillDepthInvalid` 决定，rendition 保持测量原值）；`sequence`
+/// 为源帧序号（与 Frame::sequence 同源，每次流启动重置）、
+/// `deviceTimestampMs` 与 Frame 同源。策略预处理管线
+/// （`rin/depth_preproc.hpp`）的数据源。
+struct DepthMetricSample {
+    std::uint64_t sequence = 0;
+    double deviceTimestampMs = 0.0;
+    DepthFrameF32 frame;
+
+    [[nodiscard]] bool valid() const noexcept { return frame.valid(); }
 };
 
 /// IMU 源频率统计（采集侧实测滑动频率 + 会话累计样本数，随姿态快照发布）。

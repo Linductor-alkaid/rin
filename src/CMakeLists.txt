@@ -12,6 +12,7 @@ add_library(rin_core STATIC
     core/image_node.cpp
     core/image_ops.cpp
     core/depth_preproc.cpp
+    core/depth_policy_preview.cpp
     core/node_graph.cpp
 )
 add_library(rin::core ALIAS rin_core)

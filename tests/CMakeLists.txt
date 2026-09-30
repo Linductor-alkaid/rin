@@ -444,3 +444,59 @@ target_link_libraries(test_depth_preproc PRIVATE rin::core)
 target_include_directories(test_depth_preproc PRIVATE ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME depth_preproc COMMAND test_depth_preproc)
 set_tests_properties(depth_preproc PROPERTIES LABELS "unit")
+
+# M9-04 米制深度转换纯单测（DEC-019，Independent-Verification-Agent；头文件
+# src/adapters/realsense/depth_metric_convert.hpp header-only 零 SDK 依赖）：
+# 码值×scale 精确换算（scale 1.0 恒等/0.5 倍频/典型 0.001 毫米→米）、无效像素
+# 0 保持 0.0（含 +0 符号位）、非零最小/最大码值（1/65535）端点、strideUnits ==
+# width 紧凑与 > width 行距 + padding 哨兵不泄漏、全零图全 0.0、全分支拒绝
+# （nullptr/0 尺寸/stride 不足/scale 0/−0/负/NaN/±Inf）且不部分写出、out 复用
+# 重置语义、848×480 规模全量 double 参考交叉 + 冻结公式 float 形式精确互证。
+# 单线程纯函数：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_depth_metric_convert test_depth_metric_convert.cpp)
+target_include_directories(test_depth_metric_convert PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/adapters/realsense)
+add_test(NAME depth_metric_convert COMMAND test_depth_metric_convert)
+set_tests_properties(depth_metric_convert PROPERTIES LABELS "unit")
+
+# M9-04 策略深度预览模型 golden 测试（DEC-019 决策 4 网格布局冻结，
+# Independent-Verification-Agent）：快照初态与 grid 几何冻结（512×576 Rgba8、
+# stride = width×4 字节、byteSize）；网格布局 golden（37 帧可区分常量序列 →
+# O7 抽样下标 {2,7,…,37} 帧落位阅读序，逐平面全格扫描 + 角点锚点 + 平面互异）；
+# 欠帧首帧填充渲染（2 帧历史 → 前 7 格 oldest 值/末格 newest 值）；量化 golden
+# （自定义 [1.25,2.5] 精确命中 v=0→0/0.5→128 round-half-up/1→255、alpha 恒 255）；
+# M8 冻结管线一致性抽查（恒定 1.25 m → 归一化 0.5 → 全格 128）；计数与 reset
+# （processedFrames/sourceSequence 推进、reset 幂等 + historyResets 计数、grid
+# 保留、复位后首帧填充可观测）；快照整体换新（新共享缓冲 + 旧快照不可变）；
+# 拒绝路径（无效帧/尺寸不足帧抛 invalid_argument、非法 config 构造抛、快照不变）。
+# golden 期望由 DEC-019/设计文档冻结公式独立推导并经 M8 公开算子交叉确认。
+# 单写者纯逻辑：执行上下文归调用方，并发矩阵不适用（见文件头）。
+add_executable(test_depth_policy_preview test_depth_policy_preview.cpp)
+target_link_libraries(test_depth_policy_preview PRIVATE rin::core)
+target_include_directories(test_depth_policy_preview PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME depth_policy_preview COMMAND test_depth_policy_preview)
+set_tests_properties(depth_policy_preview PROPERTIES LABELS "unit")
+
+# M9-04 viewer 策略深度预览 tick 组件时序测试（DEC-019 决策 3/5，
+# Independent-Verification-Agent；apps/viewer/policy_depth_preview 组件编译进
+# 测试目标，无 EUI 类型）：脚本化假服务（本文件最小 ICameraService 全纯虚实现，
+# 米制通道脚本发布 + "上次已见序号"水位 + stop 排空门）直接驱动 tick 的时序
+# 语义（无帧空转不发布、有新帧状态发布/字段正确/fps ≥ 0、同帧不重发水位推进、
+# 无效源帧 droppedFrames 显式计数、流重启 seq 回绕 → reset + 首帧填充可观测 +
+# 严格小于语义）；start/stop 用真实 Executor 验证准入成功、双 start 幂等
+# （恰 1 个 20ms 周期任务且 execution_count 增长）、stop 取消（0 运行中任务 +
+# 静默窗无新状态）、重复 stop 幂等、start/stop/start 无任务泄漏、start 准入
+# 失败契约见证（已关闭 Executor 上应返回 false——当前实现抛异常，缺陷 D1 见证）
+# 与析构防御（stop 前析构不悬挂、弱引用不锁已析构实例、shutdown(true) 收敛）。
+# tsan 预设复跑目标（Executor 周期任务 × 状态邮箱跨上下文）。
+add_executable(test_policy_depth_component
+    test_policy_depth_component.cpp
+    ${CMAKE_SOURCE_DIR}/apps/viewer/policy_depth_preview.cpp)
+target_link_libraries(test_policy_depth_component PRIVATE rin::core executor::executor)
+target_include_directories(test_policy_depth_component PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME policy_depth_component COMMAND test_policy_depth_component)
+set_tests_properties(policy_depth_component PROPERTIES
+    LABELS "unit"
+    TIMEOUT 120)  # 有界轮询/静默窗设计 <30s；挂看门狗兜底关闭竞态检查不悬挂。

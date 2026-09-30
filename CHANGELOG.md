@@ -23,6 +23,15 @@
   参考交叉 ≤1e-6 + 全部拒绝路径）与 `test_public_boundary` 新头文件见证；
   debug/asan/ubsan 三预设全量 ctest 27/27 全绿，零消毒器诊断。
 
+- 米制深度通道贯通与策略深度预览（M9，`M9-02`..`M9-04`）：相机契约加性
+  扩展 `DepthMetricSample`/`ICameraService::tryLoadDepthMetric`（float32 米制
+  distance_to_image_plane rendition，Z16 × depth_scale，无效像素 0.0）；adapter
+  采集 worker 新增米制转换与发布（`depth_metric_convert.hpp` 纯函数）；Core
+  预览模型 `PolicyDepthPreviewModel`（M8 冻结管线 + 2×4 历史网格渲染，
+  [DEC-019](docs/decisions/DEC-019-metric-depth-channel.md)）；viewer 预览页
+  新增 "Policy Depth" 卡片（Executor 周期 tick 驱动冻结管线，流重启自动
+  复位历史，最新态邮箱交付渲染线程）。真机米制通道冒烟待用户验收。
+
 ## [0.5.0] - 2026-09-29（M4 图像工作流与 M5 工作台 UI；含 M6 输入扩展、M7 可用性）
 
 ### 新增

@@ -45,6 +45,12 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
   近黑远白（DEC-007 两条灰度 ramp 的单通道对应层，无效深度一律 0/黑，无 alpha
   层），语义与预览配色解耦。`ICameraService::tryLoadGrayFrame(kind, seq, out)`
   与 `tryLoadFrame` 同型"上次已见序号"非阻塞读取。
+- `DepthMetricSample`（M9/DEC-019）：米制深度 rendition 采样——`sequence`、
+  `deviceTimestampMs` 与 `frame`（`DepthFrameF32`：float32 单通道
+  distance_to_image_plane 语义，米；Z16 × depth_scale 线性换算，无效像素
+  保持 0.0，远距语义由消费方 O1 填充）。`ICameraService::tryLoadDepthMetric(seq, out)`
+  与 `tryLoadFrame` 同型"上次已见序号"非阻塞读取；策略预处理管线的
+  数据源（`depth_preproc.hpp` 冻结管线消费）。
 - `IntrinsicsSnapshot`：彩色/深度各自的 `width/height/fx/fy/cx/cy` 与畸变系数/模型；
   M3-04 起另含 `gyroToColor` 外参（`Extrinsics`：列主序 3x3 旋转 + 平移米）与
   `accelIntrinsics`/`gyroIntrinsics` 出厂运动内参（`MotionIntrinsics`：scale/bias/
@@ -62,9 +68,10 @@ adapter，也不包含 librealsense2/EUI-NEO 头（由编译测试锁定，见 `
 - `ICameraService`：`start(StreamRequest)`、`requestResolution(StreamRequest)`、
   `requestDevice(serial)`、`requestDepthColorScheme(DepthColorScheme)`、`stop()`、
   `state()`、`lastError()`，以及七条"上次已见序号"语义的非阻塞读取通道
-  `tryLoadFrame / tryLoadGrayFrame / tryLoadIntrinsics / tryLoadMotion /
-  tryLoadPose / tryLoadCatalog / tryLoadEvent`（M3 新增 motion/pose；M6-04 新增
-  灰度 rendition；适配器发布自 M3-04 接线、M6-04 扩展）。
+  `tryLoadFrame / tryLoadGrayFrame / tryLoadDepthMetric / tryLoadIntrinsics /
+  tryLoadMotion / tryLoadPose / tryLoadCatalog / tryLoadEvent`（M3 新增
+  motion/pose；M6-04 新增灰度 rendition；M9 新增米制深度
+  `tryLoadDepthMetric`；适配器发布自 M3-04 接线、M6-04/M9 扩展）。
   接口只使用 std 类型（RULE-01）；`executor::comm::LatestMailbox` 由实现内部持有。
 - `createRealSenseCameraService(executor::Executor&)`：工厂（声明在 adapter 头
   `src/adapters/realsense/realsense_camera_service.hpp`，viewer 只经工厂创建；
