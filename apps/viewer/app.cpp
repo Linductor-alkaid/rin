@@ -20,6 +20,7 @@
 #include "navigation.hpp"
 #include "node_canvas.hpp"
 #include "param_panel.hpp"
+#include "policy_depth_preview.hpp"
 #include "pose_view.hpp"
 #include "viewer_theme.hpp"
 
@@ -74,6 +75,11 @@ struct ViewerContext {
     std::shared_ptr<rin::ICameraService> service;
     GpuFrameView rgbView;
     GpuFrameView depthView;
+    /// 策略深度预览（M9，DEC-019）：米制深度通道 → 冻结管线 → 历史网格快照。
+    std::shared_ptr<viewer::PolicyDepthPreview> policyPreview;
+    GpuFrameView policyView;
+    std::uint64_t lastPolicySequence = 0;
+    std::string policyMeta;
 
     std::uint64_t lastRgbSequence = 0;
     std::uint64_t lastDepthSequence = 0;
@@ -135,8 +141,6 @@ struct ViewerContext {
     bool started = false;
     bool shutdownDone = false;
 
-
-
     void applyResolutionChoice(int index);
     void applyDeviceChoice(int index);
     void applyPaletteChoice(int index);
@@ -180,10 +184,15 @@ void ensureStarted() {
         // 顺序中服务先停、引擎后回收，帧源闭包不悬垂；router 为本上下文成员，
         // 存续覆盖引擎。
         rin::WorkflowEngineConfig workflowConfig;
-        workflowConfig.frameSource =
-            viewer::makeCameraFrameSource(ctx.service, ctx.sourceRouter);
-        ctx.workflow = rin::createWorkflowEngine(ctx.executor,
-                                                 std::move(workflowConfig));
+        workflowConfig.frameSource = viewer::makeCameraFrameSource(ctx.service, ctx.sourceRouter);
+        ctx.workflow = rin::createWorkflowEngine(ctx.executor, std::move(workflowConfig));
+        // 策略深度预览组件（M9，DEC-019）：米制深度通道 → 冻结管线 → 快照
+        // 邮箱；周期 tick 在 Executor 上（20 ms），关闭顺序中服务 stop 之后
+        // stop（ViewerContext::shutdown）。
+        ctx.policyPreview = std::make_shared<viewer::PolicyDepthPreview>(ctx.service);
+        if (!ctx.policyPreview->start(ctx.executor)) {
+            ctx.policyMeta = "policy depth pump admission failed";
+        }
         ctx.workflowCanvas.model.catalog = &ctx.workflow->catalog();
         ctx.workflowCanvas.afterGraphChange(ctx.workflow.get());
         refreshSourceRouter(ctx);
@@ -252,8 +261,7 @@ std::string formatIntrinsicsValues(const rin::StreamIntrinsics& intrinsics) {
         return "n/a";
     }
     char buffer[160];
-    std::snprintf(buffer, sizeof(buffer),
-                  "fx %.3f   fy %.3f   cx %.3f   cy %.3f   %ux%u",
+    std::snprintf(buffer, sizeof(buffer), "fx %.3f   fy %.3f   cx %.3f   cy %.3f   %ux%u",
                   static_cast<double>(intrinsics.fx), static_cast<double>(intrinsics.fy),
                   static_cast<double>(intrinsics.cx), static_cast<double>(intrinsics.cy),
                   intrinsics.width, intrinsics.height);
@@ -322,8 +330,7 @@ void ViewerContext::rebuildResolutionOptions() {
 }
 
 void ViewerContext::applyResolutionChoice(int index) {
-    if (service == nullptr || index < 0 ||
-        index >= static_cast<int>(resolutionOptions.size())) {
+    if (service == nullptr || index < 0 || index >= static_cast<int>(resolutionOptions.size())) {
         return;
     }
     std::string error;
@@ -338,8 +345,7 @@ void ViewerContext::applyDeviceChoice(int index) {
         return;
     }
     std::string error;
-    if (!service->requestDevice(deviceOptions[static_cast<std::size_t>(index)].serial,
-                                &error)) {
+    if (!service->requestDevice(deviceOptions[static_cast<std::size_t>(index)].serial, &error)) {
         statusMessage = "device select rejected: " + error;
     }
 }
@@ -351,8 +357,7 @@ void ViewerContext::applyPaletteChoice(int index) {
         rin::DepthColorScheme::Grayscale,
         rin::DepthColorScheme::AdaptiveGrayscale,
     };
-    if (service == nullptr || index < 0 ||
-        index >= static_cast<int>(std::size(kSchemes))) {
+    if (service == nullptr || index < 0 || index >= static_cast<int>(std::size(kSchemes))) {
         return;
     }
     std::string error;
@@ -377,6 +382,27 @@ void ViewerContext::pump() {
         depthView.update(frame);
         depthMeta = std::to_string(frame.width) + " x " + std::to_string(frame.height);
         frameUpdated = true;
+    }
+
+    // 策略深度快照（M9，DEC-019）：LatestMailbox 最新态非阻塞消费；Rgba8 网格
+    // 经 Frame 元数据包装零拷贝上传（GPU 上传限 UI 线程，EUI-20260923-003）。
+    if (policyPreview != nullptr) {
+        viewer::PolicyDepthPreviewState policyState;
+        if (policyPreview->tryLoadState(lastPolicySequence, policyState) &&
+            policyState.snapshot.valid()) {
+            rin::Frame policyFrame;
+            policyFrame.kind = FrameKind::Depth;
+            policyFrame.width = policyState.snapshot.grid.width();
+            policyFrame.height = policyState.snapshot.grid.height();
+            policyFrame.stride = policyState.snapshot.grid.stride();
+            policyFrame.sequence = policyState.snapshot.sourceSequence;
+            policyFrame.pixels = policyState.snapshot.grid.pixels();
+            policyView.update(policyFrame);
+            policyMeta = "seq " + std::to_string(policyState.snapshot.sourceSequence) + " - " +
+                         std::to_string(policyState.snapshot.processedFrames) + " frames - " +
+                         std::to_string(static_cast<int>(policyState.fps)) + " fps";
+            frameUpdated = true;
+        }
     }
 
     rin::IntrinsicsSnapshot snapshot;
@@ -435,12 +461,10 @@ void ViewerContext::pump() {
                 workflowCanvas.graphPending = false;
                 app::requestUpdate();
             }
-
         }
         // 待生效标注随引擎离开 Running 一并清除（stop 排空待生效队列，画布图
         // 即待运行图；Failed 下待生效队列同样丢弃，契约 applyGraph 状态分支）。
-        if (workflowCanvas.graphPending &&
-            workflow->state() != rin::WorkflowEngineState::Running) {
+        if (workflowCanvas.graphPending && workflow->state() != rin::WorkflowEngineState::Running) {
             workflowCanvas.graphPending = false;
             app::requestUpdate();
         }
@@ -496,11 +520,15 @@ void ViewerContext::shutdown() {
         service->stop();
         service.reset();
     }
-    poseView.clear();     // 姿态通道 UI 侧排空（M3-07）：通道已无新发布，消费态归零。
+    poseView.clear();  // 姿态通道 UI 侧排空（M3-07）：通道已无新发布，消费态归零。
     if (workflow != nullptr) {
         workflow->stop();  // 幂等；Idle 快路径。画布 UI 状态不跨 shutdown 复活
         workflow.reset();  // （契约 stop 排空语义：stale 数据不得恢复活动状态）。
         workflowCanvas.graphPending = false;
+    }
+    if (policyPreview != nullptr) {
+        policyPreview->stop();  // 策略 tick 取消（M9）：生产者已停，executor shutdown 前。
+        policyPreview.reset();
     }
     // 工作流面板 UI 侧排空（M5-04 §4）：快照缩略图清空、控件绑定复位、失败
     // 标注清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址
@@ -511,8 +539,9 @@ void ViewerContext::shutdown() {
     workflowPanel.resetBindings();
     workflowCanvas.failures.clear();
     workflowCanvas.perf.clear();
-    rgbView.release();    // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
+    rgbView.release();  // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
     depthView.release();
+    policyView.release();
     if (started) {
         (void)executor.shutdown(true);
     }
@@ -636,16 +665,15 @@ void composeControls(eui::Ui& ui, const ViewerContext& ctx, float ox, bool narro
         .fontWeight(kWeightMedium)
         .color(dark().fgSubtle)
         .build();
-    if (ctx.hasCatalog && ctx.catalog.activeSerial.empty() &&
-        ctx.catalog.devices.size() > 1) {
+    if (ctx.hasCatalog && ctx.catalog.activeSerial.empty() && ctx.catalog.devices.size() > 1) {
         ui.text("controls.hint")
             .position(ox + 282.0f, labelY)
             .text("multiple devices, select one")
             .fontSize(kFontXs)
             .color(dark().warning)
             .build();
-    } else if (ctx.hasCatalog && !ctx.catalog.activeSerial.empty() &&
-               ctx.catalog.activeIsAuto && ctx.catalog.devices.size() > 1) {
+    } else if (ctx.hasCatalog && !ctx.catalog.activeSerial.empty() && ctx.catalog.activeIsAuto &&
+               ctx.catalog.devices.size() > 1) {
         ui.text("controls.hint")
             .position(ox + 282.0f, labelY)
             .text("auto-selected, click Device to change")
@@ -698,8 +726,7 @@ void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
             ui.text(std::string(id) + ".value")
                 .position(kSpace3, 0.0f)
                 .size(width - kSpace3 * 2.0f - kSpace4, fieldHeight)
-                .text(hasSelection ? items[static_cast<std::size_t>(selectedIndex)]
-                                   : placeholder)
+                .text(hasSelection ? items[static_cast<std::size_t>(selectedIndex)] : placeholder)
                 .fontSize(kFontBase)
                 .fontWeight(kWeightMedium)
                 .color(hasSelection ? dark().fg : dark().fgSubtlest)
@@ -731,8 +758,7 @@ void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
                         .position(kSpace1, fieldHeight + kSpace1 + itemY)
                         .size(width - kSpace2, itemHeight)
                         .radius(kRadiusMd)
-                        .color(active ? dark().accentSurface
-                                      : (dark().menu))
+                        .color(active ? dark().accentSurface : (dark().menu))
                         .onClick([index, onPick] { onPick(index); })
                         .build();
                     ui.text(std::string(id) + ".itemText" + std::to_string(index))
@@ -825,7 +851,7 @@ void composePreviewPage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, floa
     const float viewsTop = y + controlsHeight + kSpace3;
     const float viewsHeight =
         std::max(160.0f, height - controlsHeight - kSpace3 * 2.0f - panelHeight);
-    const float viewWidth = (width - kSpace3) / 2.0f;
+    const float viewWidth = (width - kSpace3 * 2.0f) / 3.0f;
     const float resolutionX = ox + width - 180.0f;
     const bool narrowControls = width < 640.0f;
 
@@ -837,8 +863,10 @@ void composePreviewPage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, floa
         .content([&] {
             composeViewCard(ui, "view.rgb", viewWidth, viewsHeight, "RGB", ctx.rgbMeta,
                             ctx.rgbView);
-            composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth",
-                            ctx.depthMeta, ctx.depthView);
+            composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth", ctx.depthMeta,
+                            ctx.depthView);
+            composeViewCard(ui, "view.policy", viewWidth, viewsHeight, "Policy Depth",
+                            ctx.policyMeta, ctx.policyView);
         })
         .build();
     composeIntrinsicsCard(ui, ctx, width, panelHeight, ox, y + height - panelHeight);
@@ -850,9 +878,8 @@ void composePosePage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, float w
                      float height) {
     const float imuPanelWidth = std::clamp(width * 0.38f, 320.0f, 480.0f);
     const float poseWidth = width - imuPanelWidth - kSpace3;
-    composePoseViewCard(ui, ctx.poseView,
-                        ctx.hasIntrinsics ? &ctx.intrinsics : nullptr, poseWidth, height,
-                        ox, y);
+    composePoseViewCard(ui, ctx.poseView, ctx.hasIntrinsics ? &ctx.intrinsics : nullptr, poseWidth,
+                        height, ox, y);
     composeImuPanelCard(ui, ctx.poseView, imuPanelWidth, std::min(height, 160.0f),
                         ox + poseWidth + kSpace3, y);
 }
@@ -955,8 +982,8 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     ViewerContext& ctx = context();
     ctx.pump();
 
-    const float pad = kSpace4;                // 16px：标准卡/面板内边距
-    const float ox = kNavRailWidth + pad;     // 内容左缘（导航栏右移一个内边距）
+    const float pad = kSpace4;             // 16px：标准卡/面板内边距
+    const float ox = kNavRailWidth + pad;  // 内容左缘（导航栏右移一个内边距）
     const float contentWidth = screen.width - kNavRailWidth - pad * 2.0f;
     const float headerHeight = 24.0f;
     const float pageTop = pad + headerHeight + kSpace3;
@@ -989,8 +1016,8 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     // selectedIndex 每帧从共享信号刷新。
                     ctx.cameraResolutionBinding.selectedIndex = ctx.resolutionIndex.get();
                     composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflowPanel,
-                                        ctx.workflow.get(), &ctx.cameraResolutionBinding,
-                                        ox, pageTop, contentWidth, pageHeight);
+                                        ctx.workflow.get(), &ctx.cameraResolutionBinding, ox,
+                                        pageTop, contentWidth, pageHeight);
                     break;
                 }
                 case WorkbenchPage::Settings:
@@ -1001,8 +1028,8 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             // overlay 层（最后合成 = 浮于卡片之上）：当前页的选择控件与工作流页
             // 浮层（右键创建菜单、调色板拖拽跟随）。
             if (ctx.nav.current == WorkbenchPage::Workflow) {
-                composeWorkflowCreateMenu(ui, ctx.workflowCanvas, ctx.workflow.get(),
-                                          screen.width, screen.height);
+                composeWorkflowCreateMenu(ui, ctx.workflowCanvas, ctx.workflow.get(), screen.width,
+                                          screen.height);
                 composeWorkflowDragGhost(ui, ctx.workflowCanvas);
             } else if (ctx.nav.current == WorkbenchPage::Preview) {
                 std::vector<std::string> deviceLabels;
@@ -1011,15 +1038,15 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     deviceLabels.push_back(option.label);
                 }
                 if (!deviceLabels.empty()) {
-                    composeSelect(ui, "controls.device", deviceFieldX, pageTop, 210.0f,
-                                  "select device", deviceLabels, ctx.deviceIndex.get(),
-                                  ctx.deviceOpen.get(),
-                                  [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
-                                  [&ctx](int index) {
-                                      ctx.deviceOpen.set(false);
-                                      ctx.deviceIndex.set(index);
-                                      ctx.applyDeviceChoice(index);
-                                  });
+                    composeSelect(
+                        ui, "controls.device", deviceFieldX, pageTop, 210.0f, "select device",
+                        deviceLabels, ctx.deviceIndex.get(), ctx.deviceOpen.get(),
+                        [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
+                        [&ctx](int index) {
+                            ctx.deviceOpen.set(false);
+                            ctx.deviceIndex.set(index);
+                            ctx.applyDeviceChoice(index);
+                        });
                 }
                 if (!ctx.resolutionOptions.empty()) {
                     std::vector<std::string> resolutionLabels;
@@ -1027,31 +1054,28 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     for (const ResolutionUiOption& option : ctx.resolutionOptions) {
                         resolutionLabels.push_back(option.label);
                     }
-                    composeSelect(ui, "controls.resolution", resolutionFieldX, pageTop,
-                                  180.0f, "select", resolutionLabels,
-                                  ctx.resolutionIndex.get(), ctx.resolutionOpen.get(),
-                                  [&] {
-                                      ctx.resolutionOpen.set(!ctx.resolutionOpen.get());
-                                  },
-                                  [&ctx](int index) {
-                                      ctx.resolutionOpen.set(false);
-                                      ctx.resolutionIndex.set(index);
-                                      ctx.applyResolutionChoice(index);
-                                  });
+                    composeSelect(
+                        ui, "controls.resolution", resolutionFieldX, pageTop, 180.0f, "select",
+                        resolutionLabels, ctx.resolutionIndex.get(), ctx.resolutionOpen.get(),
+                        [&] { ctx.resolutionOpen.set(!ctx.resolutionOpen.get()); },
+                        [&ctx](int index) {
+                            ctx.resolutionOpen.set(false);
+                            ctx.resolutionIndex.set(index);
+                            ctx.applyResolutionChoice(index);
+                        });
                 }
             } else if (ctx.nav.current == WorkbenchPage::Settings) {
                 // 深度配色（DEC-007）：不依赖设备目录，Waiting 态可预设；与卡片
                 // 内 "Depth palette" 标签同行（标签行 y=48，见 composeSettingsPage）。
-                composeSelect(ui, "settings.preferences.palette",
-                              ox + 170.0f, pageTop + 48.0f, 170.0f, "select",
-                              {"Jet", "Grayscale", "Adaptive"}, ctx.paletteIndex.get(),
-                              ctx.paletteOpen.get(),
-                              [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
-                              [&ctx](int index) {
-                                  ctx.paletteOpen.set(false);
-                                  ctx.paletteIndex.set(index);
-                                  ctx.applyPaletteChoice(index);
-                              });
+                composeSelect(
+                    ui, "settings.preferences.palette", ox + 170.0f, pageTop + 48.0f, 170.0f,
+                    "select", {"Jet", "Grayscale", "Adaptive"}, ctx.paletteIndex.get(),
+                    ctx.paletteOpen.get(), [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
+                    [&ctx](int index) {
+                        ctx.paletteOpen.set(false);
+                        ctx.paletteIndex.set(index);
+                        ctx.applyPaletteChoice(index);
+                    });
             }
         })
         .build();
@@ -1073,8 +1097,7 @@ namespace app {
 // Packaging.cmake。
 constexpr const char* kInstalledUiFont =
     "/usr/share/rin/fonts/JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf";
-constexpr const char* kInstalledIconFont =
-    "/usr/share/rin/fonts/Font Awesome 7 Free-Solid-900.otf";
+constexpr const char* kInstalledIconFont = "/usr/share/rin/fonts/Font Awesome 7 Free-Solid-900.otf";
 
 DslAppConfig makeDslAppConfig() {
     viewer::ensureStarted();
@@ -1097,8 +1120,7 @@ DslAppConfig makeDslAppConfig() {
                 // 工作流页画布快捷键（§3/§5.1/§5.4；每项均有鼠标等价路径：
                 // Fit 按钮 / 右键删除 / 点击空白收起菜单）。F=帧全图，
                 // Del=删除选中（节点+关联边、选中连线），Esc=取消拖拽/收起菜单。
-                if (ctx.nav.current == viewer::WorkbenchPage::Workflow &&
-                    ctx.workflow != nullptr) {
+                if (ctx.nav.current == viewer::WorkbenchPage::Workflow && ctx.workflow != nullptr) {
                     viewer::WorkflowCanvasState& canvas = ctx.workflowCanvas;
                     if (event.key == eui::InputKey::F) {
                         canvas.view.fit(canvas.model.graphBounds(), canvas.viewport.x,
@@ -1153,6 +1175,8 @@ const DslAppConfig& dslAppConfig() {
     return config;
 }
 
-void compose(eui::Ui& ui, const eui::Screen& screen) { viewer::compose(ui, screen); }
+void compose(eui::Ui& ui, const eui::Screen& screen) {
+    viewer::compose(ui, screen);
+}
 
 }  // namespace app
