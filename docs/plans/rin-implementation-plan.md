@@ -128,8 +128,14 @@ RealSense 真机侧与仿真部署参考逐位对齐）并当日完成关闭：
 `depth_policy_preproc_design.md`；独立验证两轮（首轮 3 处实现缺陷——
 元素/字节 stride 混淆、framesNeeded 乘法回绕、append 扁平拷贝——修复后
 复验 PASS）：三预设全量 ctest 27/27 全绿、`depth_preproc` 309 项 +
-`public_boundary` 68 项检查 0 失败、零消毒器诊断。后续衔接（另行立项）：
-adapter 米制深度通道、ONNX 推理接入。
+`public_boundary` 68 项检查 0 失败、零消毒器诊断。后续衔接：adapter 米制深度通道已于同日立项 [M9](m9-metric-depth-channel.md)
+并交付——[DEC-019](../decisions/DEC-019-metric-depth-channel.md) 冻结
+（`DepthMetricSample`/`tryLoadDepthMetric` 契约扩展、adapter 米制 rendition
+发布、Executor 周期 tick 驱动冻结管线、预览页 "Policy Depth" 卡片）；独立
+验证两轮（D2 预览网格 stride 字节语义、D1 准入异常转译、D3 测试 fake 水位
+语义）修复后三预设 30/30 全绿（convert 60 + 模型 122 + 组件 87 + 边界 82
+项检查）+ tsan 专项全绿，零消毒器诊断；ONNX 推理接入仍另行立项。M9 真机
+冒烟待用户验收。
 
 ## 交付边界（SCOPE）
 
