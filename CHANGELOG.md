@@ -2,6 +2,27 @@
 
 本项目的版本遵循语义化版本（工程规范 10.5）；tag 与里程碑"建议发布点"一一对应。
 
+## [Unreleased]（M8 深度策略预处理算子）
+
+### 新增
+
+- 米制深度策略预处理算子（M8，`M8-02`）：`rin::DepthFrameF32`（float32 单通道
+  米制深度帧：共享不可变像素、16 MiB 单帧字节预算、元素 stride 语义，镜像
+  `ImageU8` 纪律）与 Core 纯函数算子集——`fillDepthInvalid`（无效深度填充）、
+  `resizeDepthArea`（面积加权箱式降采样，仅缩小）、`cropDepth`（裁切）、
+  `gaussianBlurDepth`（可分离高斯，reflect-101 边界，σ=0 δ 核恒等）、
+  `clipNormalizeDepth`（裁切归一化）、`preprocessPolicyDepthFrame`（冻结顺序
+  组合：填充 → 降采样到 raw 网格 → 裁切 → 模糊 → 归一化）与
+  `PolicyDepthHistory`（`historyLength` 有界环形历史 + CHW 时序抽样，默认
+  37 帧 ring 抽 8 帧输出 (8, 18, 32) float32，欠帧首帧填充）。数值语义以
+  外部视觉策略仿真部署参考为唯一权威冻结（[DEC-018](docs/decisions/DEC-018-depth-policy-preproc-operators.md)、
+  `docs/design/depth_policy_preproc_design.md`），用于把 RealSense 深度流
+  确定性复刻为策略 `depth_encoder` 输入；不进入工作流节点面（DEC-018）。
+- golden/交叉验证测试（M8，`M8-03`，Independent-Verification-Agent 两轮）：
+  `test_depth_preproc` 309 项检查（逐算子手推 golden + 测试内双精度独立
+  参考交叉 ≤1e-6 + 全部拒绝路径）与 `test_public_boundary` 新头文件见证；
+  debug/asan/ubsan 三预设全量 ctest 27/27 全绿，零消毒器诊断。
+
 ## [0.5.0] - 2026-09-29（M4 图像工作流与 M5 工作台 UI；含 M6 输入扩展、M7 可用性）
 
 ### 新增
