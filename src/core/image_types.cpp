@@ -8,6 +8,8 @@ std::uint32_t elementSize(PortType type) noexcept {
             return 1;
         case PortType::Rgba8:
             return 4;
+        case PortType::Depth32F:
+            return 4;  // float32 单通道（DEC-020：字节容器 host 端序承载）。
     }
     return 0;
 }
@@ -16,9 +18,8 @@ namespace {
 
 /// 共同的元数据校验（64 位乘法，防 uint32 回绕——与 NodeOutputSnapshot::valid
 /// 同款纪律）；成功时经 minStrideOut 返回最小行宽、bytesOut 返回缓冲字节数。
-bool metadataValid(PortType format, std::uint32_t width, std::uint32_t height,
-                   std::uint32_t stride, std::uint64_t& minStrideOut,
-                   std::uint64_t& bytesOut) noexcept {
+bool metadataValid(PortType format, std::uint32_t width, std::uint32_t height, std::uint32_t stride,
+                   std::uint64_t& minStrideOut, std::uint64_t& bytesOut) noexcept {
     const std::uint64_t element = elementSize(format);
     if (element == 0 || width == 0 || height == 0) {
         return false;
@@ -46,8 +47,8 @@ ImageU8 ImageU8::make(PortType format, std::uint32_t width, std::uint32_t height
     if (!metadataValid(format, width, height, stride, minStride, bytes)) {
         return {};
     }
-    auto pixels = std::make_shared<const std::vector<std::uint8_t>>(
-        static_cast<std::size_t>(bytes), std::uint8_t{0});
+    auto pixels = std::make_shared<const std::vector<std::uint8_t>>(static_cast<std::size_t>(bytes),
+                                                                    std::uint8_t{0});
     ImageU8 image;
     image.format_ = format;
     image.width_ = width;
@@ -62,8 +63,7 @@ ImageU8 ImageU8::wrap(PortType format, std::uint32_t width, std::uint32_t height
                       std::shared_ptr<const std::vector<std::uint8_t>> pixels) {
     std::uint64_t minStride = 0;
     std::uint64_t bytes = 0;
-    if (pixels == nullptr ||
-        !metadataValid(format, width, height, stride, minStride, bytes) ||
+    if (pixels == nullptr || !metadataValid(format, width, height, stride, minStride, bytes) ||
         pixels->size() < bytes) {
         return {};
     }
@@ -97,6 +97,15 @@ const std::uint8_t* ImageU8::row(std::uint32_t y) const noexcept {
         return nullptr;
     }
     return pixels_->data() + static_cast<std::uint64_t>(stride_) * y;
+}
+
+const float* depthF32Row(const ImageU8& image, std::uint32_t y) noexcept {
+    if (!image.valid() || image.format() != PortType::Depth32F || y >= image.height()) {
+        return nullptr;
+    }
+    const std::uint8_t* rowBytes =
+        image.pixels()->data() + static_cast<std::size_t>(image.stride()) * y;
+    return reinterpret_cast<const float*>(rowBytes);
 }
 
 }  // namespace rin

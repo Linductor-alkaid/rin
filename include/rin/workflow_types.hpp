@@ -27,9 +27,14 @@ enum class PortDirection {
 };
 
 /// 端口图像类型（M4 节点集；新格式按决策扩展，UI 据此渲染端口与类型兼容性）。
+/// Depth32F（M10/DEC-020）：单通道 float32 米制深度（distance_to_image_plane，
+/// 米；无效深度 0.0）——ImageU8 字节容器按 host 端序承载 float32 像素，
+/// elementSize = 4、stride 为字节数 ≥ width×4；float 视图只经 Core 助手
+/// （image_types.hpp depthF32*）显式解释。
 enum class PortType {
     Gray8,
     Rgba8,
+    Depth32F,
 };
 
 [[nodiscard]] const char* toString(PortType type) noexcept;
@@ -72,8 +77,8 @@ enum class ParamKind {
 
 /// 参数声明（节点目录项；UI 据此生成类型化参数面板）。
 struct ParamDescriptor {
-    std::string id;        /// 节点类型内唯一，如 "sigma"。
-    std::string label;     /// UI 展示名。
+    std::string id;     /// 节点类型内唯一，如 "sigma"。
+    std::string label;  /// UI 展示名。
     ParamKind kind = ParamKind::Boolean;
     ParamValue defaultValue = false;
     /// Integer/Real 的取值范围；hasRange=false 表示不限。
@@ -94,8 +99,7 @@ struct ParamAssignment {
     std::string paramId;
     ParamValue value;
 
-    [[nodiscard]] friend bool operator==(const ParamAssignment&,
-                                         const ParamAssignment&) = default;
+    [[nodiscard]] friend bool operator==(const ParamAssignment&, const ParamAssignment&) = default;
 };
 
 /// 节点类型描述（调色板/端口签名/参数 schema 的唯一来源）。
@@ -181,9 +185,9 @@ struct WorkflowValidation {
 /// 单节点执行统计（滚动窗口均值由实现定义窗口长度，契约只冻结语义）。
 struct NodeStats {
     NodeId node = kInvalidNode;
-    double lastCostMs = 0.0;          /// 最近一次执行耗时。
-    double avgCostMs = 0.0;           /// 滚动窗口平均耗时。
-    std::uint64_t executedFrames = 0; /// 会话累计执行次数。
+    double lastCostMs = 0.0;           /// 最近一次执行耗时。
+    double avgCostMs = 0.0;            /// 滚动窗口平均耗时。
+    std::uint64_t executedFrames = 0;  /// 会话累计执行次数。
 
     [[nodiscard]] friend bool operator==(const NodeStats&, const NodeStats&) = default;
 };
@@ -193,8 +197,8 @@ struct WorkflowStats {
     std::uint64_t sequence = 0;
     double endToEndFps = 0.0;           /// 实测端到端帧率（滚动窗口）。
     std::uint64_t processedFrames = 0;  /// 会话累计完成帧。
-    std::uint64_t droppedFrames = 0;    /// 过载显式丢弃累计（EXEC-07，禁止静默排队）。
-    std::uint32_t inFlight = 0;         /// 当前在飞任务数（有界准入的可观察面）。
+    std::uint64_t droppedFrames = 0;  /// 过载显式丢弃累计（EXEC-07，禁止静默排队）。
+    std::uint32_t inFlight = 0;       /// 当前在飞任务数（有界准入的可观察面）。
     std::vector<NodeStats> nodes;
 
     [[nodiscard]] friend bool operator==(const WorkflowStats&, const WorkflowStats&) = default;
