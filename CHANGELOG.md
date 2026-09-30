@@ -32,6 +32,16 @@
   新增 "Policy Depth" 卡片（Executor 周期 tick 驱动冻结管线，流重启自动
   复位历史，最新态邮箱交付渲染线程）。真机米制通道冒烟待用户验收。
 
+- 工作流深度域（M10，[DEC-020](docs/decisions/DEC-020-workflow-depth-domain.md)）：
+  `PortType::Depth32F` 端口类型（ImageU8 字节容器承载 float32 米制深度）与
+  七个画布节点——`source_depth_metric` 相机米制源、`depth_fill_invalid`/
+  `depth_resize`/`depth_crop`/`depth_gaussian_blur`/`depth_normalize`
+  （默认参数链 ≡ M8 冻结管线）与有状态 `depth_history`（37 帧环抽 8 帧
+  竖直堆叠，欠帧首帧填充；引擎对含状态节点图自动切换串行在飞执行保证
+  帧序）；帧源米制路由、Depth32F 缩略图逐帧 P99 显示、深度域端口色。
+  M9 固定预览卡片移除（被画布组合能力取代，DEC-020 决策 6）；米制通道
+  与契约保留。
+
 ## [0.5.0] - 2026-09-29（M4 图像工作流与 M5 工作台 UI；含 M6 输入扩展、M7 可用性）
 
 ### 新增
