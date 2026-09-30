@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <rin/camera_service.hpp>
+#include <rin/depth_preproc.hpp>
 #include <rin/image_node.hpp>
 #include <rin/image_ops.hpp>
 #include <rin/image_types.hpp>
@@ -436,6 +437,49 @@ int main() {
                           std::string("FFT 工厂缺参构造拒绝：") + fftCase.typeId);
             ++instanceId;
         }
+    }
+
+    // M8 米制深度策略预处理算子（仅公开头可见性 + 最小实例化，RULE-01）：
+    // rin/depth_preproc.hpp 的 DepthFrameF32（make/wrap/valid）、PolicyDepthConfig
+    // （默认值/派生量）、O1 纯函数与 PolicyDepthHistory（append/sample）经公开头
+    // 可用且不引入第三方类型（数值 golden 归 test_depth_preproc.cpp）。
+    {
+        rin::DepthFrameF32 frame = rin::DepthFrameF32::make(4, 2);
+        RIN_CHECK(frame.valid());
+        RIN_CHECK_EQ(frame.stride(), std::uint32_t{4});  // stride=0 → width（元素数）
+
+        rin::PolicyDepthConfig config;
+        RIN_CHECK(config.valid());
+        RIN_CHECK_EQ(config.policyWidth(), std::uint32_t{32});
+        RIN_CHECK_EQ(config.policyHeight(), std::uint32_t{18});
+
+        rin::DepthFrameF32 filled = rin::fillDepthInvalid(frame, 2.5);
+        RIN_CHECK(filled.valid() && filled.width() == 4 && filled.height() == 2);
+
+        // 时序历史最小往返：非默认小配置（grid 8×8、crop (2,1,1,1) → 6×5 帧，
+        // history 4、sample 2 skip 2 → framesNeeded = 3 ≤ 4）。
+        rin::PolicyDepthConfig small;
+        small.gridWidth = 8;
+        small.gridHeight = 8;
+        small.cropUp = 2;
+        small.cropDown = 1;
+        small.cropLeft = 1;
+        small.cropRight = 1;
+        small.historyLength = 4;
+        small.sampleCount = 2;
+        small.sampleSkip = 2;
+        RIN_CHECK(small.valid());
+        RIN_CHECK_EQ(small.policyWidth(), std::uint32_t{6});
+        RIN_CHECK_EQ(small.policyHeight(), std::uint32_t{5});
+
+        auto policyPixels = std::make_shared<const std::vector<float>>(30u, 1.0f);
+        rin::DepthFrameF32 policyFrame = rin::DepthFrameF32::wrap(6, 5, 6, policyPixels);
+        RIN_CHECK(policyFrame.valid());
+
+        rin::PolicyDepthHistory history(small);
+        history.append(policyFrame);
+        RIN_CHECK_EQ(history.size(), std::size_t{1});
+        RIN_CHECK_EQ(history.sample().size(), std::size_t{2} * 5 * 6);
     }
     return rin_test::exitStatus();
 }

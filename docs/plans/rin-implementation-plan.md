@@ -115,7 +115,21 @@ ubsan/tsan 26/26 全绿（真机硬件四预设实跑，零消毒器诊断）；
 端到端验收通过（拖拽搭图→连线→运行→中间结果→性能面板→停止排空，交互
 接缝注入时序，截图 `screenshots/m5-07/`）；`ui_workspace_design.md` 拓扑
 树逐项核对、CHANGELOG 回写、`SCOPE-09` 关闭。M4/M5/M6/M7 全部交付，
-v0.5.0 发布点待用户发布。
+v0.5.0 发布点待用户发布。2026-09-30 用户需求立项
+[M8](m8-depth-policy-preproc.md)（把外部视觉策略项目的深度预处理管线在
+RealSense 真机侧与仿真部署参考逐位对齐）并当日完成关闭：
+[DEC-018](../decisions/DEC-018-depth-policy-preproc-operators.md) 冻结——
+米制深度（float32，米）策略预处理算子落 Core 纯函数层（时序有状态与工作流
+无状态节点契约冲突，节点面扩展留待真实需求立项）；`rin/depth_preproc.hpp`
++ `src/core/depth_preproc.cpp` 交付 `DepthFrameF32`（共享不可变缓冲 +
+16 MiB 预算 + 元素 stride 语义）、五算子（无效填充/面积降采样/裁切/高斯
+模糊/裁切归一化）、冻结配置组合函数与 37 帧环形历史抽样（8 帧skip-5
+时序，输出 (8,18,32) CHW），数值语义以仿真部署参考为唯一权威冻结于
+`depth_policy_preproc_design.md`；独立验证两轮（首轮 3 处实现缺陷——
+元素/字节 stride 混淆、framesNeeded 乘法回绕、append 扁平拷贝——修复后
+复验 PASS）：三预设全量 ctest 27/27 全绿、`depth_preproc` 309 项 +
+`public_boundary` 68 项检查 0 失败、零消毒器诊断。后续衔接（另行立项）：
+adapter 米制深度通道、ONNX 推理接入。
 
 ## 交付边界（SCOPE）
 

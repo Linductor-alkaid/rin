@@ -419,3 +419,28 @@ add_test(NAME workflow_engine COMMAND test_workflow_engine)
 set_tests_properties(workflow_engine PROPERTIES
     LABELS "unit"
     TIMEOUT 300)  # 套件 + 特有检查设计 <60s；挂看门狗兜底关停/关闭竞态检查不悬挂。
+
+# M8 米制深度策略预处理算子 golden 数值测试（Core 纯逻辑，DEC-018，
+# depth_policy_preproc_design.md §5 冻结公式 / §6 golden 项）：DepthFrameF32 契约
+# （make/wrap/valid/byteSize/row、stride 语义、16 MiB 字节预算恰等/超限、共享只读）、
+# PolicyDepthConfig 默认值逐字段与 valid() 全约束反例/边界正例（delay 恰好上界、
+# historyLength 4096/4097、u64 回绕对抗）；O1 无效填充（NaN/+Inf/−Inf/0/负值混合、
+# invalidBelow 非默认含恰等与负阈值、farValue 非有限拒绝）；O2 面积降采样（2×2→1×1、
+# 3×2→2×1 分数覆盖手推、8×8→2×2 整数倍恒比、同尺寸恒等含 padding 输入、848×480→64×36
+# 等四组与独立 double 参考交叉 ≤1e-6、放大/零尺寸/无效帧拒绝）；O3 裁切（64×36
+# (18,0,16,16)→18×32 索引逐位含 padding stride、退化/越界全分支拒绝、贴边合法）；
+# O4 高斯模糊（核系数 golden 经脉冲响应读出、σ=0 δ 核恒等、常值图恒等、角点脉冲
+# reflect-101 折返手推 + 能量守恒、1×6 窄图手推、radius×sigma 九组直接 2D 与可分离
+# 双参考交叉 ≤1e-6、padding 一致、越界/无效帧拒绝）；O5 裁切归一化（双侧 clip、
+# 非零 near、near≥far 拒绝）；O6 冻结顺序全链（合成 848×480 混合无效像素 vs 测试内
+# 按冻结顺序独立 double 参考逐像素 ≤1e-6、输出恰 18×32 值域 [0,1]、config/输入无效
+# 拒绝）；O7 时序历史（空历史全 0、append 1/5/36 帧欠帧首帧填充逐位、满环 37 帧与
+# 滚动 40 帧抽样下标 {1,6,…,36}、CHW oldest→newest、delay=1 下标 {0,5,…,35}、非默认
+# 小配置、historyLength=1 微型环、reset、尺寸不符/无效帧/padding stride 对抗、非法
+# config 构造抛）。golden 期望由冻结公式独立手推/测试内参考实现推导，不参考实现代码。
+# 单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
+add_executable(test_depth_preproc test_depth_preproc.cpp)
+target_link_libraries(test_depth_preproc PRIVATE rin::core)
+target_include_directories(test_depth_preproc PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME depth_preproc COMMAND test_depth_preproc)
+set_tests_properties(depth_preproc PROPERTIES LABELS "unit")
