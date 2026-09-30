@@ -28,8 +28,7 @@ public:
     /// 请求切换深度图输出配色（DEC-007）；Waiting/Opening/Streaming/Restreaming 下
     /// 有效且粘性（跨插拔/设备切换保留）。仅影响后续帧转换，不触发重流；worker 在
     /// 下一帧边界应用。
-    virtual bool requestDepthColorScheme(DepthColorScheme scheme,
-                                         std::string* error = nullptr) = 0;
+    virtual bool requestDepthColorScheme(DepthColorScheme scheme, std::string* error = nullptr) = 0;
 
     /// 任意状态 -> Stopping -> Idle；幂等。阻塞至 worker 回收完成。
     ///
@@ -46,16 +45,20 @@ public:
     /// kind 覆盖全部 RGBA8 rendition：Rgb（彩色）、Depth（预览深度通道，
     /// 配色跟随 DEC-007 命令）、DepthJet（深度伪彩固定 rendition，M6-04
     /// DEC-017，不随预览配色变化）。
-    [[nodiscard]] virtual bool tryLoadFrame(FrameKind kind,
-                                            std::uint64_t& lastSeenSequence,
+    [[nodiscard]] virtual bool tryLoadFrame(FrameKind kind, std::uint64_t& lastSeenSequence,
                                             Frame& out) = 0;
 
     /// 取 kind 灰度 rendition 中 sequence > lastSeenSequence 的最新帧
     /// （M6-04，DEC-017：Depth = 固定区间近白远黑，DepthAdaptive = P99 近黑
     /// 远白；语义与预览配色解耦，工作流灰度源消费）。无新帧返回 false。
-    [[nodiscard]] virtual bool tryLoadGrayFrame(GrayFrameKind kind,
-                                                std::uint64_t& lastSeenSequence,
+    [[nodiscard]] virtual bool tryLoadGrayFrame(GrayFrameKind kind, std::uint64_t& lastSeenSequence,
                                                 GrayFrame& out) = 0;
+
+    /// 取米制深度采样中 sequence > lastSeenSequence 的最新一帧（M9，DEC-019：
+    /// float32 米制 distance_to_image_plane，Z16 × depth_scale，无效像素 0.0；
+    /// 策略预处理管线数据源）。无新帧返回 false。
+    [[nodiscard]] virtual bool tryLoadDepthMetric(std::uint64_t& lastSeenSequence,
+                                                  DepthMetricSample& out) = 0;
 
     [[nodiscard]] virtual bool tryLoadIntrinsics(std::uint64_t& lastSeenSequence,
                                                  IntrinsicsSnapshot& out) = 0;
@@ -69,8 +72,7 @@ public:
     /// 取姿态通道中 sequence > lastSeenSequence 的最新融合姿态快照（最新态语义，
     /// DEC-010/EXEC-06：采集 worker 内融合并发布）；无新快照返回 false。运动流未
     /// 使能或姿态尚未首次收敛时可能长期为 false。
-    [[nodiscard]] virtual bool tryLoadPose(std::uint64_t& lastSeenSequence,
-                                           ImuSnapshot& out) = 0;
+    [[nodiscard]] virtual bool tryLoadPose(std::uint64_t& lastSeenSequence, ImuSnapshot& out) = 0;
 
     /// 取在线设备目录（含各设备能力与活动设备）；无更新返回 false。
     [[nodiscard]] virtual bool tryLoadCatalog(std::uint64_t& lastSeenSequence,

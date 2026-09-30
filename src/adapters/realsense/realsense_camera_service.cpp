@@ -1,5 +1,7 @@
 #include "realsense_camera_service.hpp"
 
+#include "depth_metric_convert.hpp"
+
 #include <librealsense2/rs.hpp>
 
 #include <executor/comm/mailbox.hpp>
@@ -192,6 +194,13 @@ public:
                                                           lastSeenSequence);
     }
 
+    // 米制深度通道（M9，DEC-019）：策略预处理管线数据源，最新态语义。
+    [[nodiscard]] bool tryLoadDepthMetric(std::uint64_t& lastSeenSequence,
+                                          DepthMetricSample& out) override {
+        return depthMetricSamples_.try_load_newer_than(lastSeenSequence, out,
+                                                       lastSeenSequence);
+    }
+
     [[nodiscard]] bool tryLoadIntrinsics(std::uint64_t& lastSeenSequence,
                                          IntrinsicsSnapshot& out) override {
         return intrinsics_.try_load_newer_than(lastSeenSequence, out, lastSeenSequence);
@@ -225,6 +234,9 @@ public:
     [[nodiscard]] LatestMailbox<GrayFrame>& depthGrayMailbox() { return depthGrayFrames_; }
     [[nodiscard]] LatestMailbox<GrayFrame>& depthAdaptiveGrayMailbox() {
         return depthAdaptiveGrayFrames_;
+    }
+    [[nodiscard]] LatestMailbox<DepthMetricSample>& depthMetricMailbox() {
+        return depthMetricSamples_;
     }
     [[nodiscard]] LatestMailbox<IntrinsicsSnapshot>& intrinsicsMailbox() { return intrinsics_; }
     [[nodiscard]] LatestMailbox<MotionSample>& motionMailbox() { return motion_; }
@@ -307,6 +319,8 @@ private:
     LatestMailbox<Frame> depthJetFrames_{"rin.frames.depth.jet"};
     LatestMailbox<GrayFrame> depthGrayFrames_{"rin.frames.depth.gray"};
     LatestMailbox<GrayFrame> depthAdaptiveGrayFrames_{"rin.frames.depth.adaptive"};
+    // 米制深度通道（M9，DEC-019）：Z16 × depth_scale，策略预处理管线数据源。
+    LatestMailbox<DepthMetricSample> depthMetricSamples_{"rin.frames.depth.metric"};
     LatestMailbox<IntrinsicsSnapshot> intrinsics_{"rin.intrinsics"};
     LatestMailbox<MotionSample> motion_{"rin.motion"};
     LatestMailbox<ImuSnapshot> pose_{"rin.pose"};
@@ -890,6 +904,22 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             publishGrayFrame(owner_.depthAdaptiveGrayMailbox(), depthWidth, depthHeight,
                              sequence, depthTimestamp, std::move(depthAdaptive));
         }
+        // 米制深度 rendition（M9，DEC-019）：Z16 × depth_scale 线性换算，无效
+        // 像素保持 0.0；策略预处理管线（depth_preproc 冻结管线）数据源。
+        std::vector<float> depthMetric;
+        if (rin_realsense::convertDepth16ToMetric(depthData, depthWidth, depthHeight,
+                                                  depthStrideUnits, depthScale,
+                                                  depthMetric)) {
+            DepthMetricSample metricSample;
+            metricSample.sequence = sequence;
+            metricSample.deviceTimestampMs = depthTimestamp;
+            metricSample.frame = DepthFrameF32::wrap(
+                depthWidth, depthHeight, depthWidth,
+                std::make_shared<const std::vector<float>>(std::move(depthMetric)));
+            if (metricSample.valid()) {
+                owner_.depthMetricMailbox().publish(std::move(metricSample));
+            }
+        }
         if (depthColorScheme_ != DepthColorScheme::Jet) {
             std::vector<std::uint8_t> jetRgba;
             if (convertDepth16ToRgba8Jet(depthData, depthWidth, depthHeight,
@@ -1080,7 +1110,7 @@ void CaptureLoop::run(executor::StopToken stopToken) {
                         failed = true;
                         break;
                     }
-                    sleepPoll(stopToken);
+                    (void)sleepPoll(stopToken);  // 轮询等待为预期丢弃路径（既有修复：nodiscard）
                 }
             }
             if (!opened) {
