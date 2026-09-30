@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <rin/camera_service.hpp>
+#include <rin/depth_policy_preview.hpp>
 #include <rin/depth_preproc.hpp>
 #include <rin/image_node.hpp>
 #include <rin/image_ops.hpp>
@@ -23,19 +24,16 @@ public:
     rin::StartOutcome start(const rin::StreamRequest&) override { return {}; }
     bool requestResolution(const rin::StreamRequest&, std::string*) override { return false; }
     bool requestDevice(const std::string&, std::string*) override { return false; }
-    bool requestDepthColorScheme(rin::DepthColorScheme, std::string*) override
-    {
-        return false;
-    }
+    bool requestDepthColorScheme(rin::DepthColorScheme, std::string*) override { return false; }
     void stop() override {}
     rin::CameraServiceState state() const override { return rin::CameraServiceState::Idle; }
     std::string lastError() const override { return {}; }
     bool tryLoadFrame(rin::FrameKind, std::uint64_t&, rin::Frame&) override { return false; }
     // M6-04（DEC-017）：灰度 rendition 通道同样是公开契约纯虚——无生产者桩恒 false。
-    bool tryLoadGrayFrame(rin::GrayFrameKind, std::uint64_t&, rin::GrayFrame&) override
-    {
+    bool tryLoadGrayFrame(rin::GrayFrameKind, std::uint64_t&, rin::GrayFrame&) override {
         return false;
     }
+    bool tryLoadDepthMetric(std::uint64_t&, rin::DepthMetricSample&) override { return false; }
     bool tryLoadIntrinsics(std::uint64_t&, rin::IntrinsicsSnapshot&) override { return false; }
     bool tryLoadMotion(std::uint64_t&, rin::MotionSample&) override { return false; }
     bool tryLoadPose(std::uint64_t&, rin::ImuSnapshot&) override { return false; }
@@ -48,8 +46,7 @@ public:
     const rin::NodeCatalog& catalog() const override { return catalog_; }
     rin::WorkflowValidation applyGraph(const rin::WorkflowGraph&) override { return {}; }
     bool requestParamUpdate(rin::NodeId, const std::string&, const rin::ParamValue&,
-                            std::string*) override
-    {
+                            std::string*) override {
         return false;
     }
     rin::AdmissionResult start() override { return {}; }
@@ -57,8 +54,7 @@ public:
     rin::WorkflowEngineState state() const override { return rin::WorkflowEngineState::Idle; }
     std::string lastError() const override { return {}; }
     bool tryLoadStats(std::uint64_t&, rin::WorkflowStats&) override { return false; }
-    bool tryLoadNodeOutput(rin::NodeId, std::uint64_t&, rin::NodeOutputSnapshot&) override
-    {
+    bool tryLoadNodeOutput(rin::NodeId, std::uint64_t&, rin::NodeOutputSnapshot&) override {
         return false;
     }
     bool tryLoadEvent(rin::WorkflowEvent&) override { return false; }
@@ -75,19 +71,17 @@ namespace {
 
 class PassThroughNode final : public rin::IImageNode {
 public:
-    explicit PassThroughNode(rin::NodeDescriptor descriptor)
-        : descriptor_(std::move(descriptor)) {}
+    explicit PassThroughNode(rin::NodeDescriptor descriptor) : descriptor_(std::move(descriptor)) {}
 
     const rin::NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
-    std::vector<rin::ImageU8> apply(const std::vector<rin::ImageU8>& inputs) const override
-    {
+    std::vector<rin::ImageU8> apply(const std::vector<rin::ImageU8>& inputs) const override {
         std::vector<rin::ImageU8> outputs;
         for (rin::PortType type : descriptor_.outputs) {
-            outputs.push_back(inputs.empty() ? rin::ImageU8::make(type, 2, 1)
-                                             : rin::ImageU8::wrap(type, inputs.front().width(),
-                                                                  inputs.front().height(),
-                                                                  inputs.front().stride(),
-                                                                  inputs.front().pixels()));
+            outputs.push_back(
+                inputs.empty()
+                    ? rin::ImageU8::make(type, 2, 1)
+                    : rin::ImageU8::wrap(type, inputs.front().width(), inputs.front().height(),
+                                         inputs.front().stride(), inputs.front().pixels()));
         }
         return outputs;
     }
@@ -145,8 +139,8 @@ int main() {
         rin::GrayFrame probe;
         probe.sequence = 777;
         RIN_CHECK(!service->tryLoadGrayFrame(rin::GrayFrameKind::Depth, graySequence, probe));
-        RIN_CHECK(!service->tryLoadGrayFrame(rin::GrayFrameKind::DepthAdaptive, graySequence,
-                                             probe));
+        RIN_CHECK(
+            !service->tryLoadGrayFrame(rin::GrayFrameKind::DepthAdaptive, graySequence, probe));
         RIN_CHECK_EQ(graySequence, std::uint64_t{13});
         RIN_CHECK_EQ(probe.sequence, std::uint64_t{777});
     }
@@ -225,9 +219,9 @@ int main() {
         RIN_CHECK(build.graph != nullptr);
         RIN_CHECK_EQ(build.graph->size(), std::size_t{2});
 
-        const auto outputs = rin::runNodeGraph(
-            *build.graph,
-            [](const rin::NodeGraph::Node&) { return rin::ImageU8::make(rin::PortType::Rgba8, 2, 1); });
+        const auto outputs = rin::runNodeGraph(*build.graph, [](const rin::NodeGraph::Node&) {
+            return rin::ImageU8::make(rin::PortType::Rgba8, 2, 1);
+        });
         RIN_CHECK_EQ(outputs.size(), std::size_t{2});
         RIN_CHECK(outputs[0][0].valid() && outputs[0][0].format() == rin::PortType::Rgba8);
         RIN_CHECK(outputs[1][0].valid() && outputs[1][0].format() == rin::PortType::Gray8);
@@ -259,8 +253,7 @@ int main() {
         rin::NodeInstance cropInstance;
         cropInstance.id = 1;
         cropInstance.typeId = "crop";
-        const std::unique_ptr<rin::IImageNode> node =
-            rin::makeDefaultImageNode(crop, cropInstance);
+        const std::unique_ptr<rin::IImageNode> node = rin::makeDefaultImageNode(crop, cropInstance);
         RIN_CHECK(node != nullptr);
         RIN_CHECK(node != nullptr && node->descriptor().typeId == "crop");
 
@@ -433,8 +426,7 @@ int main() {
             } catch (const std::invalid_argument&) {
                 rejected = true;
             }
-            RIN_CHECK_MSG(rejected,
-                          std::string("FFT 工厂缺参构造拒绝：") + fftCase.typeId);
+            RIN_CHECK_MSG(rejected, std::string("FFT 工厂缺参构造拒绝：") + fftCase.typeId);
             ++instanceId;
         }
     }
@@ -480,6 +472,66 @@ int main() {
         history.append(policyFrame);
         RIN_CHECK_EQ(history.size(), std::size_t{1});
         RIN_CHECK_EQ(history.sample().size(), std::size_t{2} * 5 * 6);
+    }
+
+    // M9 米制深度通道与策略深度预览模型（仅公开头可见性 + 最小实例化，RULE-01）：
+    // rin/camera_types.hpp 的 DepthMetricSample（payload-struct：sequence/
+    // deviceTimestampMs/frame，valid() 直通 frame.valid()）、
+    // ICameraService::tryLoadDepthMetric 纯虚（上方 NullService 无生产者桩恒
+    // false 且出参/水位不动）、rin/depth_policy_preview.hpp 的
+    // PolicyDepthPreviewSnapshot/PolicyDepthPreviewModel（构造/初态/process/
+    // reset/snapshot/config 访问）经公开头可用且不引入第三方类型（数值 golden
+    // 归 test_depth_policy_preview.cpp，tick 组件时序归
+    // test_policy_depth_component.cpp）。
+    {
+        // DepthMetricSample 契约类型最小实例化（米制通道载荷形态）。
+        rin::DepthMetricSample sample;
+        RIN_CHECK(!sample.valid());  // 默认构造：frame 无效 → 采样无效。
+        sample.sequence = 5;
+        sample.deviceTimestampMs = 33.0;
+        sample.frame = rin::DepthFrameF32::make(4, 2);
+        RIN_CHECK(sample.valid());  // valid() == frame.valid()。
+
+        // tryLoadDepthMetric 无生产者桩语义（公开接口多态调用）：false 且
+        // 出参/水位保持不动（与实现通道 LatestMailbox::try_load_newer_than 的
+        // stale 读取不更新序号一致）。
+        std::uint64_t metricSequence = 11;
+        rin::DepthMetricSample probe;
+        probe.sequence = 777;
+        RIN_CHECK(!service->tryLoadDepthMetric(metricSequence, probe));
+        RIN_CHECK_EQ(metricSequence, std::uint64_t{11});
+        RIN_CHECK_EQ(probe.sequence, std::uint64_t{777});
+        RIN_CHECK(!probe.valid());
+
+        // 预览模型最小往返（64×36 输入 == 默认 raw 网格，O2 同尺寸恒等）：
+        // 初态快照无效 → process 后快照有效（grid 几何与布局 golden 归
+        // test_depth_policy_preview.cpp）。
+        rin::PolicyDepthPreviewModel model;
+        RIN_CHECK(!model.snapshot().valid());
+        RIN_CHECK_EQ(model.snapshot().processedFrames, std::uint64_t{0});
+        RIN_CHECK_EQ(model.snapshot().historyResets, std::uint64_t{0});
+
+        const std::vector<float> metricPixels(64u * 36u, 1.25f);
+        rin::DepthFrameF32 metricFrame = rin::DepthFrameF32::wrap(
+            64, 36, 64, std::make_shared<const std::vector<float>>(metricPixels));
+        RIN_CHECK(metricFrame.valid());
+        // process/snapshot 最小往返（64×36 输入 == 默认 raw 网格，O2 同尺寸恒等）。
+        // 契约外异常记失败不 abort（防御，test_depth_preproc.cpp tryOp 同纪律；
+        // grid 布局 golden 归 test_depth_policy_preview.cpp）。
+        bool processed = false;
+        try {
+            model.process(metricFrame, 1);
+            processed = true;
+        } catch (const std::exception& error) {
+            RIN_CHECK_MSG(false, std::string("process 意外异常: ") + error.what());
+        }
+        if (processed) {
+            RIN_CHECK(model.snapshot().valid());
+            RIN_CHECK_EQ(model.snapshot().processedFrames, std::uint64_t{1});
+            RIN_CHECK_EQ(model.snapshot().sourceSequence, std::uint64_t{1});
+        }
+        model.reset();
+        RIN_CHECK_EQ(model.snapshot().historyResets, std::uint64_t{1});  // 复位计数可观测。
     }
     return rin_test::exitStatus();
 }

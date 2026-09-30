@@ -215,6 +215,15 @@ public:
         return true;
     }
 
+    // M9 米制深度通道：fake 保持空通道（无新帧返回 false）；策略深度组件的
+    // 时序测试使用脚本化米制帧发布（见 test_depth_preproc/独立验证套件）。
+    [[nodiscard]] bool tryLoadDepthMetric(std::uint64_t& lastSeenSequence,
+                                          rin::DepthMetricSample& out) override {
+        (void)lastSeenSequence;
+        (void)out;
+        return false;
+    }
+
     [[nodiscard]] bool tryLoadGrayFrame(rin::GrayFrameKind kind,
                                         std::uint64_t& lastSeenSequence,
                                         rin::GrayFrame& out) override {
