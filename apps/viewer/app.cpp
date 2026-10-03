@@ -1065,6 +1065,9 @@ DslAppConfig makeDslAppConfig() {
         DslAppConfig{}
             .title("Rin")
             .pageId("Rin")
+            // 桌面标识（上游 dev d7b15ea，issue #77）：X11 WM_CLASS 与 Wayland
+            // app_id；未设置时 WM_CLASS 为空、任务栏图标缺失。
+            .appId("rin")
             .clearColor(viewer::theme::dark().background)
             // 工作台壳默认版面（M5-02）：四页与工作流五区骨架（DEC-014）需要比
             // M1 单页 viewer 更大的最小版面。注意 EUI 的 Screen 为逻辑尺寸（X11/
