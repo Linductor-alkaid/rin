@@ -9,7 +9,7 @@ Rin 要求所有第三方依赖分别建立独立台账（AGENTS.md“依赖独�
 | executor | [../../executor_feedback/ledger.md](../../executor_feedback/ledger.md)（模板固定路径） | `EXE-` | `4731b16493ae996311a9e85f55bd137aee69418a` | external |
 | executor（索引镜像） | [executor/ledger.md](executor/ledger.md) | — | 同上 | external |
 | librealsense2 | [librealsense/ledger.md](librealsense/ledger.md) | `LRS-` | `2.58.3`（源 `7c3ee3fb7c640e9f315e663907208cb56c4febfd`） | system |
-| eui-neo | [eui-neo/ledger.md](eui-neo/ledger.md) | `EUI-` | `782c56993dc1890e0589e2100cfa74322bb0e0bf` | external |
+| eui-neo | [eui-neo/ledger.md](eui-neo/ledger.md) | `EUI-` | `4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722`（上游 dev） | external |
 | kissfft | [kissfft/ledger.md](kissfft/ledger.md) | `KIS-` | `131.2.0`（源 `7bce4153c6bc8aba2db0e889e576f9d00505cbe1`） | external |
 
 新增依赖时：在本表追加一行，并创建 `docs/dependency_feedback/<dep>/ledger.md`。

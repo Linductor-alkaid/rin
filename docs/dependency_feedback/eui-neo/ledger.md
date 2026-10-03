@@ -1,19 +1,24 @@
 # EUI-NEO 依赖台账
 
 > 状态：Active
-> 依赖：EUI-NEO（pinned `782c56993dc1890e0589e2100cfa74322bb0e0bf`，
+> 依赖：EUI-NEO（pinned `4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722`，上游 dev 分支——
+> 含 #71/#72/#73/#76/#77/#78 修复；待上游发布正式版本后回迁 main/tag，
 > https://github.com/sudoevolve/EUI-NEO ，Apache-2.0）
 > 记录纪律：工程规范第 9.4 节（台账部分由 AGENTS.md“依赖独立台账”节扩展到所有依赖）。
 
 ## 依赖身份
 
 - 来源：https://github.com/sudoevolve/EUI-NEO（备用镜像 AtomGit）
-- 锁定：`third_party/dependencies.lock` 行 `eui-neo|...|782c5699...|...|OFF|external`
+- 锁定：`third_party/dependencies.lock` 行 `eui-neo|...|4691fc0a...|...|OFF|external`
+  （2026-10-03 由 `782c5699` 升至 dev `4691fc0a`，验证会话见文末）
 - 许可证：Apache-2.0（上游 LICENSE）
 - 类别：external（FetchContent 源码引入 / 本地 pinned clone）
 - 集成方式：`add_subdirectory` → `eui::neo`；应用目标经 `eui_neo_configure_app()`
   获得入口与资源部署（[DEC-002](../../decisions/DEC-002-runtime-ui-integration.md)）。
-- 后端：GLFW + OpenGL（默认；GLFW/glad/FreeType 等由上游 3rd/ 提供）。
+  GLFW 引入当前经 `cmake/Dependencies.cmake` 特例路由（见 EUI-20261003-001/002/003
+  绕行；上游 #79/#80/#81 修复前维持）。
+- 后端：GLFW 3.4（依赖自带 `3rd/glfw`，已含上游 X11 IME 修复）+ OpenGL；
+  glad/FreeType 等其余由上游 3rd/ 提供。
 
 ## 集成决策
 
@@ -193,6 +198,104 @@
 - 状态：Open（绕行已实施，M5-02 引用本编号）
 - 跟进：2026-09-28 登记。
 
+### EUI-20261003-001：dev `d7b15ea` 硬依赖 GLFW 3.4 API，auto 模式解析系统 GLFW 3.3 时编译失败
+
+- 级别：P2（dev 分支集成阻断；bundled 模式绕行）
+- 现象/证据（2026-10-03，Rin debug 预设，eui-neo dev `4691fc0`）：
+  - `core/window/window_backend.cpp:582` 无条件调用 `glfwWindowHintString(GLFW_WAYLAND_APP_ID, appId)`；
+    该常量仅 GLFW 3.4 定义。
+  - `3rd/dependencies.cmake` 在 `EUI_DEPS_MODE=auto`（默认）下先 `find_package(glfw3 CONFIG)`，
+    本机系统 GLFW 为 3.3（`/usr/include/GLFW/glfw3.h` 无 `GLFW_WAYLAND_APP_ID`），
+    编译报 `error: 'GLFW_WAYLAND_APP_ID' was not declared in this scope`（Rin 构建日志）。
+  - dev 之前 pinned `782c569` 在同一环境以 auto + 系统 GLFW 3.3 构建通过（无该引用）。
+- 影响：凡系统仅装 GLFW 3.3 且走 auto 模式的集成方，dev 起无法编译；#77 修复对
+  系统(GLFW 3.3)路径不可用。
+- 期望语义：对 GLFW 3.3 保持兼容（`#ifdef GLFW_WAYLAND_APP_ID` 条件编译），或
+  auto 模式校验系统 GLFW 版本不满足时回退 bundled/fetch。
+- 建议最小能力：`window_backend.cpp` 对 `GLFW_WAYLAND_APP_ID` 加版本/宏保护，或在
+  CMake 配置期校验 glfw3 版本 ≥ 3.4 并给出明确诊断。
+- 绕行方案（已实施，单一边界内）：`cmake/Dependencies.cmake` 对 eui-neo 特例——
+  `FetchContent_Populate` 后先由依赖自带 `3rd/glfw`（3.4，含上游提交的 IME 修复）
+  `add_subdirectory` 预定义 `glfw` 目标，再 `add_subdirectory` eui-neo 本体，使上游
+  走 "Using existing GLFW target" 分支，跳过系统 glfw 探测（不再依赖
+  `EUI_DEPS_MODE`）；本地构建因缺 `libxkbcommon-dev` 另传 `-DGLFW_BUILD_WAYLAND=OFF`
+  仅编 X11 后端（运行时为 XWayland，与原 pinned 运行路径一致），CI 已安装所需
+  dev 包、走默认 Wayland+X11。
+- 移除条件：上游修复 #79 并被锁定版本包含后，恢复 `FetchContent_MakeAvailable`
+  原生路径并删除该特例。
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#79）
+- 跟进：2026-10-03 登记；2026-10-03 在干净 dev 检出复现并上报 #79。
+
+### EUI-20261003-002：dev `4691fc0` GLFW X11 IME 补丁脚本哈希常量与真实 GLFW 3.4 不符，bundled/fetch 路径配置期 FATAL
+
+- 级别：P2（dev 分支 GLFW 路径集成阻断；哈希校正绕行）
+- 现象/证据（2026-10-03，与 EUI-20261003-001 同一构建会话）：
+  - `scripts/patch_glfw_x11_ime.cmake` 声明
+    `expected_source_hash=BBCBDD40...`（称"bundled GLFW 3.4"）与
+    `expected_output_hash=B1B9E54E...`（打补丁后）。
+  - 实测官方 GLFW 3.4 zip（SHA256 `a133ddc3...`，与 dev `3rd/dependencies.cmake`
+    FetchContent 声明一致）解出的 `src/x11_window.c` 哈希为 `7c5a60a5...` ≠
+    `BBCBDD40...`；dev 捆绑文件（`4691fc0` 已直接提交 6 行 IME 修复）哈希为
+    `8ce625aa...`，与两个期望值均不符。
+  - `3rd/dependencies.cmake:271-291` 在 `EUI_OWNS_GLFW_TARGET=ON`（bundled/fetch
+    均如此）时无条件执行该脚本 → 配置期
+    `Failed to prepare the GLFW X11 IME fix: Unsupported GLFW X11 source hash`。
+    即该提交使捆绑与 fetch 两条 GLFW 路径都无法配置（脚本对"已含修复的捆绑文件"
+    与"原始 3.4"均不识别）。
+- 影响：Linux + GLFW 后端的捆绑/fetch 集成在 dev 起配置即失败。
+- 期望语义：脚本哈希表覆盖真实 GLFW 3.4 原始哈希与已修复哈希（或改为检测
+  KeyPress/KeyRelease 上下文匹配而非哈希白名单）。
+- 建议最小能力：更新两个哈希常量为实测值（pristine `7C5A60A5...`、patched
+  `8CE625AA...`）。
+- 绕行方案（已实施，单一边界内）：同 EUI-20261003-001——`cmake/Dependencies.cmake`
+  预先定义 `glfw` 目标后，上游 `EUI_OWNS_GLFW_TARGET` 保持 OFF，补丁脚本在 Rin 构建
+  中不再执行（捆绑 `3rd/glfw` 已直接含修复，行为无偏移）。另：本地依赖测试克隆
+  `/home/linductor/eui-neo` 的 `scripts/patch_glfw_x11_ime.cmake` 有一处未提交哈希
+  校正（`expected_output_hash` → `8CE625AA...`），仅供跑上游自带测试套件使用，
+  不影响 Rin 构建。
+- 移除条件：上游修正脚本（#80）并被锁定版本包含后，恢复原生路径并还原本地克隆。
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#80；哈希取证：官方 3.4=`7C5A60A5...`、脚本变换产物=dev 捆绑文件=`8CE625AA...`）
+- 跟进：2026-10-03 登记。
+
+### EUI-20261003-003：dev `c7efcf1`（#76 修复）在库本体引入 `catch(...)`，与 `eui_apply_compile_options` 非 Debug 的 `-fno-exceptions` 冲突，eui_neo 库非 Debug 配置无法编译
+
+- 级别：P1（dev 分支阻断 Rin release/dist 预设）
+- 现象/证据（2026-10-03，独立验证会话实测复现）：
+  - `core/platform/platform.cpp:286`（#76 修复 c7efcf1 引入）使用 `catch (...)`
+    包裹 popen 命令拼装；
+  - `CMakeLists.txt` `eui_apply_compile_options()` L125/L131 对非 Debug 配置向
+    除 `vcd_viewer`/`gpu_image_probe` 外的全部目标（含库目标 `eui_neo`）施加
+    `-fno-exceptions` → 非 Debug 编译报
+    `error: exception handling disabled, use '-fexceptions' to enable`；
+  - Debug 配置不触发，解释上游 CI 未发现；本次独立验证初始非 Debug 构建即失败，
+    加 `-DCMAKE_BUILD_TYPE=Debug` 后通过。
+- 影响：Rin 以 release/dist 预设构建 dev 版依赖时在依赖编译期失败；台账既有
+  EUI-20260923-004（app 目标同源冲突）的绕行救不了库本体。
+- 期望语义：库本体不施加 `-fno-exceptions`（或平台层避免异常构造），或提供
+  显式 opt-out 目标属性。
+- 建议最小能力：`eui_apply_compile_options()` 的 `-fno-exceptions` 豁免范围
+  覆盖 `eui_neo` 库目标，或 `platform.cpp` 改用错误码路径。
+- 绕行方案（已实施，单一边界内）：`cmake/Dependencies.cmake` 在 eui-neo
+  add_subdirectory 后对 `eui_neo` 目标追加
+  `$<$<NOT:$<CONFIG:Debug>>:-fexceptions>`（GCC 后写优先，与 EUI-20260923-004
+  的 app 目标绕行同型；Debug 配置上游本就不施加）。本机 debug/release 两预设
+  全量构建验证通过。
+- 移除条件：上游修复 #81 并被锁定版本包含后，删除该追加。
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#81；干净 dev 检出 + bundled + Release 复现 platform.cpp:286 编译失败）
+
+### EUI-20261003-004：上游测试 `tests/unit/image_stream.cpp` 与实现脱节，Debug 构建下确定性 SIGABRT
+
+- 级别：P3（上游测试缺陷，不阻断 Rin 集成）
+- 现象/证据（2026-10-03，独立验证会话，确定性复现 3/3）：
+  - `tests/unit/image_stream.cpp:34` 断言 BGRA8 帧提交必须被拒绝（源自 a969ed5）；
+    但实现 `core/render/image_stream.cpp:104-105` `ImageFrame::valid()` 显式接受
+    BGRA8，`submit()`（:181-191）仅做 `valid()` 校验 → 返回 true → 断言失败
+    （exit 134）；仅在 assert 生效的 Debug 构建暴露，Release 下 NDEBUG 掩盖。
+  - 与本次 5 个修复提交无关（e5ca594 未触碰该文件），为 dev HEAD 既有脱节。
+- 影响：上游测试套件在 Debug 下不可用（本次验证 33 项中唯一失败）。
+- 期望语义：测试断言与当前实现语义对齐（BGRA8 合法或恢复拒绝）。
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#82；Debug 构建下 3/3 复现 SIGABRT）
+
 ## 跟进记录表
 
 | 编号 | 状态 | 优先级 | 跟进 |
@@ -203,3 +306,35 @@
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
+| EUI-20261003-001 | Reported | P2 | 上游 #79；dev `d7b15ea` 硬依赖 GLFW 3.4，auto+系统 3.3 编译失败；绕行 `-DEUI_DEPS_MODE=bundled -DGLFW_BUILD_WAYLAND=OFF` |
+| EUI-20261003-002 | Reported | P2 | 上游 #80；dev `4691fc0` IME 补丁脚本哈希常量与真实 GLFW 3.4 不符（取证：变换产物=dev 捆绑文件=`8CE625AA...`）；本地测试克隆哈希校正绕行（未提交） |
+| EUI-20261003-003 | Reported | P1 | 上游 #81；dev `c7efcf1` 库本体 `catch(...)` × 非 Debug `-fno-exceptions`，release/dist 预设阻断；`-fexceptions` 追加绕行已实施 |
+| EUI-20261003-004 | Reported | P3 | 上游 #82；`tests/unit/image_stream.cpp` 陈旧断言（源自 a969ed5），Debug 下确定性 SIGABRT，与 5 个修复提交无关 |
+
+## dev 分支验证会话（2026-10-03）
+
+- 背景：上游 dev（`4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722`）关闭了本方全部
+  6 个 issue（#71/#72/#73/#76/#77/#78），对应 5 个修复提交（e5ca594/6d39b88/
+  d7b15ea/c7efcf1/4691fc0）。2026-10-03 正式将锁清单 pinned 升至 dev HEAD
+  （第三方依赖升级，独立验证通过后经 MR 合入）。
+- 构建系统变更：`cmake/Dependencies.cmake` 对 eui-neo 特例路由（Populate +
+  预定义 `glfw` 目标 + 对 `eui_neo` 追加 `-fexceptions`，绕过上游
+  #79/#80/#81；见各条绕行方案）。本机（无 libxkbcommon-dev）本地构建另传
+  `-DGLFW_BUILD_WAYLAND=OFF`，CI 走默认 Wayland+X11。
+- 代码接线：`apps/viewer/app.cpp` 增加 `.appId("rin")`（#77 对应能力的最小
+  接线；onStart 接线另行决策，EUI-20260923-001 的幂等设计仍成立）。
+- 验证结果（独立验证会话，2026-10-03）：
+  - Rin 测试套件（debug）：31 项，30 通过 / 1 跳过（`realsense_hardware`，
+    无相机，预期跳过）。
+  - 上游套件（bundled + Debug）：33 项，32 通过 / 1 失败（EUI-20261003-004，
+    与本次修复无关）；8 个探针全过，其中 `gpu_image_probe` 通过——本机
+    Mesa Intel ARL + XWayland 即 #71 当初复现环境。
+  - viewer 运行时：无相机进入 Waiting 稳态（DEC-006），`WM_CLASS=("rin","rin")`
+    实测确认（#77 X11 侧 + Rin `.appId("rin")` 接线），存活 2 分 29 秒无崩溃、
+    日志干净、SIGTERM 退出码 143（正常终止）。
+  - 按 issue 结论：#71/#72/#73/#76/#77 已验证通过；#78 仅构建级验证
+    （补丁产物哈希 `8CE625AA...` 在两个构建树校验通过；IME 交互行为需人工
+    输入法环境验证）。
+- 残余风险：#71 相机帧真机回归（GpuFrameView → `.stream()` 切回）待相机接入；
+  Release/打包构建被 EUI-20261003-003 阻断；上游新缺陷已上报：#79（EUI-20261003-001）、#80（EUI-20261003-002）、
+  #81（EUI-20261003-003）、#82（EUI-20261003-004）。
