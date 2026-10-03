@@ -125,9 +125,43 @@ function(_rin_declare_external dep_name dep_url dep_commit)
         GIT_REPOSITORY "${dep_url}"
         GIT_TAG "${dep_commit}"
     )
-    FetchContent_MakeAvailable(${dep_name})
+    # eui-neo dev（4691fc0）GLFW 引入绕行（台账 EUI-20261003-001/002/003，上游
+    # issue #79/#80/#81）：上游 3rd/dependencies.cmake 自持 GLFW 时在 Linux 上
+    # 无条件执行 X11 IME 补丁脚本，其哈希常量与真实 GLFW 3.4 不符（bundled/fetch
+    # 配置期 FATAL，#80）；auto 命中系统 GLFW 3.3 时缺 GLFW_WAYLAND_APP_ID（#79，
+    # 该常量 3.4 才有）；eui_neo 库目标又在非 Debug 被上游施加 -fno-exceptions，
+    # 而 #76 修复（c7efcf1）在库本体 platform.cpp 引入 catch(...)（#81，非 Debug
+    # 编译失败）。绕行：Rin 预先从依赖自带的 3rd/glfw（3.4，已含上游提交的 IME
+    # 修复）定义 glfw 目标，令上游走 "Using existing GLFW target" 分支，跳过系统
+    # glfw 探测与补丁脚本；随后对 eui_neo 追加 -fexceptions（GCC
+    # 后写优先，覆盖上游 -fno-exceptions；Debug 配置上游本就不施加，无需覆盖）。
+    # 移除条件：上游修复 #79/#80/#81 且锁定版本包含修复后，恢复
+    # FetchContent_MakeAvailable 原生路径并删除本段。
+    if(dep_name STREQUAL "eui-neo")
+        FetchContent_Populate(eui-neo)
+        if(NOT TARGET glfw)
+            set(EUI_PREV_BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS}")
+            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            foreach(_glfw_build_opt IN ITEMS GLFW_BUILD_EXAMPLES GLFW_BUILD_TESTS
+                    GLFW_BUILD_DOCS GLFW_INSTALL)
+                set("${_glfw_build_opt}" OFF CACHE BOOL "" FORCE)
+            endforeach()
+            add_subdirectory("${eui-neo_SOURCE_DIR}/3rd/glfw"
+                "${eui-neo_BINARY_DIR}/glfw" EXCLUDE_FROM_ALL)
+            set(BUILD_SHARED_LIBS "${EUI_PREV_BUILD_SHARED_LIBS}" CACHE BOOL "" FORCE)
+            unset(EUI_PREV_BUILD_SHARED_LIBS)
+        endif()
+        add_subdirectory("${eui-neo_SOURCE_DIR}" "${eui-neo_BINARY_DIR}")
+    else()
+        FetchContent_MakeAvailable(${dep_name})
+    endif()
     set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "rin")
     set(CMAKE_CXX_STANDARD 20)
+
+    # 见上方 eui-neo 绕行说明（上游 #81 / EUI-20261003-003）。
+    if(dep_name STREQUAL "eui-neo" AND TARGET eui_neo)
+        target_compile_options(eui_neo PRIVATE $<$<NOT:$<CONFIG:Debug>>:-fexceptions>)
+    endif()
 
     # 恢复 librealsense2 裁剪期间强制的 cache 值（见上方说明）。
     if(dep_name STREQUAL "realsense2")
