@@ -1117,7 +1117,12 @@ DslAppConfig makeDslAppConfig() {
                 }
                 const int digit =
                     static_cast<int>(event.key) - static_cast<int>(eui::InputKey::Digit1) + 1;
-                if (digit >= 1 && digit <= 9) {
+                if (digit >= 1 && digit <= 9 &&
+                    digit - 1 < static_cast<int>(ctx.resolutionOptions.size())) {
+                    // 与下拉路径同序（先 set 再 apply）：Resolution 选择器由
+                    // resolutionIndex 驱动，缺 set 会显示 stale 档位；越界档位
+                    // 保持 no-op（与 applyResolutionChoice 拒绝语义一致）。
+                    ctx.resolutionIndex.set(digit - 1);
                     ctx.applyResolutionChoice(digit - 1);
                 }
             })

@@ -84,7 +84,8 @@
 - 期望语义：RGBA8/YUV 帧上传后纹理内容完整、按提交序呈现。
 - 建议最小能力：修复 ImageStream 的纹理上传路径（疑似 PBO/行距/异步映射处理）；
   或在文档标注已知不兼容的驱动范围。
-- 状态：Open（已按官方支持的外部 GPU 图像接口在 viewer 内绕行，见下）
+- 状态：Open（绕行维持；2026-10-04 真机回归证实 dev `4691fc0` 的 #71 修复
+  （e5ca594）对本机环境无效，切回尝试已回滚，见下）
 - 绕行方案（单一边界内，符合台账纪律）：`apps/viewer/gpu_frame_view.hpp`——
   UI/渲染线程以自有 GL 纹理 `glTexSubImage2D` 上传 RGBA8，经
   `eui::image::importGpuImage` 导入绘制；revision 失效 + `app::requestUpdate()`
@@ -92,6 +93,16 @@
   回收；`onShutdown` 释放引用。移除条件：上游修复 ImageStream 并经真机回归后，
   切回 `.stream()` 路径并删除 GpuFrameView。
 - 跟进：2026-09-23 登记；同日真机验证绕行后完整画面 + 键盘/鼠标切换 + 干净退出。
+  2026-10-04 切回尝试（独立验证会话，dev `4691fc0`，D435IF 真机）：viewer 与
+  合成探针双重复现——viewer RGB/Depth 卡逐像素差分仅左缘第 1 列更新、区域纯单色
+  （#71 症状逐字复现，提交侧 tryLoadFrame/submit 正常）；独立合成探针（无相机、
+  RGBA8 移动彩条，存档 `screenshots/upstream-repro/imagestream_rgba8_probe_20261004.cpp`，
+  截图 `..._stripe.png` 与 `viewer_imagestream_20261004_left_strip.png`）仅渲染
+  1-2 像素宽垂直条纹——判定 e5ca594（GL 像素解包状态隔离）未覆盖本机
+  Mesa Intel ARL + XWayland 的触发路径，缺陷不在 Rin 集成层与相机内容。切回
+  改动全部回滚，绕行恢复。勘误：dev 验证会话（2026-10-03）中"gpu_image_probe
+  通过 ⇒ #71 已验证"的推断不成立——该探针覆盖的是 `importGpuImage` 外部导入
+  路径（即绕行所走路径），非 ImageStream 上传路径。待持探针证据跟进上游 #71。
 
 ### EUI-20260923-004：`eui_neo_configure_app` 目标被施加 `-fno-exceptions`，与 Executor 异常式 API 冲突
 
@@ -302,7 +313,7 @@
 | --- | --- | --- | --- |
 | EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
-| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 已绕行（GpuFrameView），上游修复后回归 |
+| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 真机回归证实 dev e5ca594 对本机无效（合成探针独立复现），切回已回滚，待持证据跟进上游 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
@@ -327,8 +338,10 @@
   - Rin 测试套件（debug）：31 项，30 通过 / 1 跳过（`realsense_hardware`，
     无相机，预期跳过）。
   - 上游套件（bundled + Debug）：33 项，32 通过 / 1 失败（EUI-20261003-004，
-    与本次修复无关）；8 个探针全过，其中 `gpu_image_probe` 通过——本机
-    Mesa Intel ARL + XWayland 即 #71 当初复现环境。
+    与本次修复无关）；8 个探针全过，其中 `gpu_image_probe` 通过（该探针覆盖
+    `importGpuImage` 外部导入路径）。勘误（2026-10-04）：当时据此次通过推断
+    "#71 已验证"不成立——ImageStream 上传路径的修复效果须经真机回归确认，
+    结论见 EUI-20260923-003 跟进记录：e5ca594 对本机无效。
   - viewer 运行时：无相机进入 Waiting 稳态（DEC-006），`WM_CLASS=("rin","rin")`
     实测确认（#77 X11 侧 + Rin `.appId("rin")` 接线），存活 2 分 29 秒无崩溃、
     日志干净、SIGTERM 退出码 143（正常终止）。
