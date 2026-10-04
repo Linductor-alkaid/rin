@@ -112,7 +112,9 @@
   系统 GLFW 3.3），该簇症状疑与 GLFW/环境相关，与 RGBA8 窄条非同因。上游
   修复配套探针仅做 `glGetTexImage` 内容回读验证、不覆盖屏幕渲染结果，故其
   通过不构成修复有效的证据。附加线索：探针在同上下文含 EUI 文字渲染时即
-  复现，指向同上下文其他 GL 上传方与 ImageStream 渲染路径的交互。
+  复现，指向同上下文其他 GL 上传方与 ImageStream 渲染路径的交互。A/B 证据
+  （含探针源码与截图对）已作为评论提交上游
+  sudoevolve/EUI-NEO#71（issuecomment-5980595234）。
 
 ### EUI-20260923-004：`eui_neo_configure_app` 目标被施加 `-fno-exceptions`，与 Executor 异常式 API 冲突
 
@@ -323,7 +325,7 @@
 | --- | --- | --- | --- |
 | EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
-| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 同机 A/B 证实 e5ca594 对 RGBA8 流路径零改善（症状逐位一致），切回已回滚，待持证据跟进上游 |
+| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 同机 A/B 证实 e5ca594 对 RGBA8 流路径零改善，切回已回滚；A/B 证据已评论上游 #71，待上游回应 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
