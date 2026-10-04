@@ -50,7 +50,7 @@
 | `docs/compatibility/` | 平台、编译器、依赖和 Provider 兼容性证据 | `<dep>-<version>.md` |
 | `docs/supply-chain/` | 依赖锁定、许可证、SBOM 和升级审计 | `dependency-policy.md` |
 | `docs/benchmarks/` | 性能目标、方法、原始条件和结果摘要 | `<metric>-latency.md` |
-| `docs/executor_feedback/` | Executor 能力缺口反馈台账 | `ledger.md` |
+| `docs/kairo_feedback/` | Executor 能力缺口反馈台账 | `ledger.md` |
 | `docs/project/` | 本规范及其他仓库级协作流程 | 本文 |
 
 不要用一个"总文档"承载所有内容。安全结论、兼容性声明、性能数据和供应链证据应保留在各自
@@ -309,16 +309,16 @@ YYYY-MM-DD：记录 commit、环境、命令、结果、限制和剩余项。
 
 ### 9.1 定位与锁定
 
-Executor（`third_party/executor`，C++20 并发与生命周期库）是项目唯一的并发基础设施。
+Executor（`third_party/kairo`，C++20 并发与生命周期库）是项目唯一的并发基础设施。
 它以 pinned 依赖形式引入，两种可接受的锁定方式：
 
-- **Git submodule + 锁文件**：`.gitmodules` 声明 `third_party/executor`，`dependencies.lock.json`
+- **Git submodule + 锁文件**：`.gitmodules` 声明 `third_party/kairo`，`dependencies.lock.json`
   记录 source、精确 commit、版本号、许可证及许可文件路径；CMake configure 时校验 commit。
 - **lock 清单 + CMake 拉取**：`third_party/dependencies.lock` 逐行记录
   `name|url|pinned_commit|expected_commit|submodule|class`，configure 时同步缺失仓库并
   校验 commit；离线/CI 构建可用 `-DRin_FETCH_DEPENDENCIES=OFF` 走只校验路径。
 
-未经明确授权不得修改 pinned executor；升级必须记录旧版本、新 commit、能力变化、受影响
+未经明确授权不得修改 pinned kairo；升级必须记录旧版本、新 commit、能力变化、受影响
 范围和回归结果。
 
 ### 9.2 强制规则
@@ -331,10 +331,10 @@ Executor（`third_party/executor`，C++20 并发与生命周期库）是项目�
    将其封装在 Platform Adapter 中，并通过 Executor 支持的外部事件循环或扩展边界协调。
 3. 普通有限任务优先使用 `submit_auto()`，并保留、消费其 `future`。成功入队只表示 admission，
    不等于执行成功；影响任务结果的异常不得被丢弃。
-4. 跨执行上下文通信按语义选用 `executor::comm` 组件：逐条 FIFO 用 `MpscChannel`，最新状态
+4. 跨执行上下文通信按语义选用 `kairo::comm` 组件：逐条 FIFO 用 `MpscChannel`，最新状态
    用 `LatestMailbox`，一致快照用 `DoubleBuffer`，实时路径用 `RealtimeChannel`，多订阅广播用
    `Topic`，启动阶段协调用 `PhaseGate`。不得用 ad-hoc 队列或“共享可变状态 + mutex + 条件变量”
-   替代 executor 通信。
+   替代 kairo 通信。
 5. 长期阻塞 I/O 使用 Executor 的 blocking worker 生命周期能力（如 `start_worker(BlockingWorkerSpec)`
    + 有界工作通道）；允许抖动的后台周期任务使用 timer 能力（`submit_delayed`/`submit_periodic`
    及 `TimerHandle`）；固定周期或低延迟控制使用 realtime/low-latency 能力。不得用普通周期任务
@@ -347,7 +347,7 @@ Executor（`third_party/executor`，C++20 并发与生命周期库）是项目�
    任务生产者，发出取消或停止请求，回收 worker/实时路径，等待需要完成的有限任务，最后由
    非 worker 线程执行 `shutdown(true)`。不得从 Executor worker 内完成自等待或最终 teardown。
    组件间不得隐藏全局 Executor 生命周期；依赖通过构造参数或明确 context 传递。
-8. 使用 Executor 的监控、状态、失败事件和 `executor::comm` 统计作为任务健康的事实源；新任务
+8. 使用 Executor 的监控、状态、失败事件和 `kairo::comm` 统计作为任务健康的事实源；新任务
    路径必须使 admission 拒绝、执行失败、超时/取消、背压和生命周期/关闭状态可经 Executor 设施
    观察。不得建立平行任务监控子系统。
 9. 队列容量（含 `max_in_flight_tasks` 总量准入）、背压/drop 策略、超时、取消和关闭行为是
@@ -360,13 +360,13 @@ Executor（`third_party/executor`，C++20 并发与生命周期库）是项目�
 设计和实现并发行为前，先使用 pinned 版本自带资源，本地资源与依赖版本一致、优先于其他
 版本的文档：
 
-- 应用集成：`third_party/executor/docs/skill/executor-integration/SKILL.md`。按其路由表
+- 应用集成：`third_party/kairo/docs/skill/kairo-integration/SKILL.md`。按其路由表
   （Quick start / By scenario / By requirement / By API）只加载一个 router 和一张 capability
   card，遵循 card 的集成陷阱，通过其声明的 future/result/status/callback 观察成功。
 - 修改 Executor 本体：仅在获得明确指示后使用
-  `third_party/executor/docs/skill/executor-maintainer/SKILL.md`，遵循其 source、invariant、
+  `third_party/kairo/docs/skill/kairo-maintainer/SKILL.md`，遵循其 source、invariant、
   test 和 documentation 检查。maintainer skill 不是修改依赖的隐式授权。
-- 用户指南：`third_party/executor/website/`（zh/en）中 lifecycle、submission、communication、
+- 用户指南：`third_party/kairo/website/`（zh/en）中 lifecycle、submission、communication、
   monitoring、failure、realtime 与 reliability 各节；公开头文件与 pinned 指南是应用使用的
   权威，优先公共 facade 而非实现细节。
 
@@ -380,7 +380,7 @@ Executor（`third_party/executor`，C++20 并发与生命周期库）是项目�
 
 1. 先核对当前版本的公开头文件、API 文档、集成指南及相关测试，排除 API 选型错误、配置错误、
    平台限制和应用层职责。
-2. 在 `docs/executor_feedback/ledger.md` 中新增一条唯一编号（`EXE-YYYYMMDD-NNN`）的反馈记录，
+2. 在 `docs/kairo_feedback/ledger.md` 中新增一条唯一编号（`EXE-YYYYMMDD-NNN`）的反馈记录，
    附上可复现证据、影响范围、期望语义和可验收结果。只写“Executor 不支持”不构成有效记录；
    报告至少包含：缺失的行为、造成缺口的 API/语义限制、为什么现有 lifecycle 与 comm 设施
    不足、建议的最小 Executor 能力或获批例外、延期实施的影响。
@@ -388,7 +388,7 @@ Executor（`third_party/executor`，C++20 并发与生命周期库）是项目�
 4. 确需临时方案时，将其限制在单一 Adapter/compatibility boundary 内，说明行为差异、风险、
    移除条件和测试覆盖。临时方案不得创建线程、队列或调度器，不得改变“任务与生命周期由
    Executor 管理”的总体约束。
-5. 未经明确授权，不直接修改 `third_party/executor` 来掩盖集成问题，也不把项目特有策略下沉
+5. 未经明确授权，不直接修改 `third_party/kairo` 来掩盖集成问题，也不把项目特有策略下沉
    到通用 Executor。等待明确指示后再实施例外或变更依赖。
 
 台账条目分级参考：`P1` 系统性将就（影响整个代码面的派发可见性）、`P2` 结构性将就（某子系统
@@ -526,7 +526,7 @@ git diff --cached
   `third_party/dependencies.lock`）中登记来源、版本、许可证与校验 commit；configure 阶段
   校验，不匹配即失败。
 - 依赖升级走独立 MR：更新 pin、说明版本差异与许可证变化、运行全量回归，并在
-  `docs/supply-chain/` 记录审计结论；升级 pinned executor 前先核对第 9.4 节台账状态。
+  `docs/supply-chain/` 记录审计结论；升级 pinned kairo 前先核对第 9.4 节台账状态。
 - 生成物（协议文件、fixture、fuzz corpus）约束在构建树内，不进入源码树。
 
 ## 11. C++ 工程基线
