@@ -9,7 +9,7 @@
 ## 依赖身份
 
 - 来源：https://github.com/Linductor-alkaid/kairo
-- 锁定：`d9602ea6762806be320b9543e3b36f27f7dd5b1a`（tag v0.6.0，
+- 锁定：`162aa5db7a8e7867aafa71cb9a5ebbd5f7867435`（master HEAD，v0.6.0-10，
   `third_party/dependencies.lock`）
 - 许可证：MIT（见上游 LICENSE；原 executor 时代为 Apache-2.0，随上游更名变更）
 - 类别：external（FetchContent 源码引入 / 本地 pinned clone）

@@ -1,7 +1,7 @@
 # kairo 反馈台账
 
 > 状态：Active
-> 依赖：kairo（pinned `d9602ea6762806be320b9543e3b36f27f7dd5b1a`，v0.6.0，
+> 依赖：kairo（pinned `162aa5db7a8e7867aafa71cb9a5ebbd5f7867435`，v0.6.0-10，
 > https://github.com/Linductor-alkaid/kairo ，MIT）
 > 记录纪律：工程规范第 9.4 节；编号 `EXE-YYYYMMDD-NNN`；只写"不支持"不构成有效记录。
 > 沿革：本台账原承载依赖 executor（Apache-2.0，pin `4731b16`）；2026-10-04 随上游
@@ -21,9 +21,11 @@
 - **依据**：上游 `docs/MIGRATION.md` §"从 0.5.x 升级到 0.6.0"；破坏性提交
   `6fb8f29`（项目更名）、`49a5615`（移除兼容层、Result 变体接管主名）、`6e7657a`
   （`QosClass::HardRealtime`→`Critical`、删除 `AffinityHint::exclusive`，Rin 无使用面）。
-- **pin 说明**：pin 取 v0.6.0 tag 提交 `d9602ea` 而非上游移动的 master HEAD（迁移期间
-  HEAD 已从 `5673d58` 推进至 `8e3dba5`）；tag 与 HEAD 之间仅网站文案与上游自测去抖动
-  差异，库本体无 API/行为差异。
+- **pin 说明**：迁移执行时曾先 pin v0.6.0 tag 提交 `d9602ea`（当时 master 移动中，
+  `5673d58`→`8e3dba5`）；仓库所有者 2026-10-04 决定改为跟随最新 master HEAD，最终
+  pin `162aa5d`（v0.6.0-10）。tag→HEAD 之间全部为网站文案、上游文档与上游自测去抖动
+  提交，库本体无 API/行为差异（逐提交核对）。注意：跟随 HEAD 意味着上游每次推进都
+  需要重新校验并更新 pin。
 - **Rin 侧适配面**：namespace `executor::`→`kairo::`、include `<executor/…>`→`<kairo/…>`、
   target `executor::executor`→`kairo::kairo`、选项 `EXECUTOR_*`→`KAIRO_*`；
   `initialize_ex()`→`initialize()`（约 12 处，tests；`ExecutorResult` 的 `operator bool`

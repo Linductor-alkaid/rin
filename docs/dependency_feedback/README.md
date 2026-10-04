@@ -6,7 +6,7 @@ Rin 要求所有第三方依赖分别建立独立台账（AGENTS.md“依赖独�
 
 | 依赖 | 台账位置 | 编号前缀 | 锁定版本（commit/版本号） | 类别 |
 | --- | --- | --- | --- | --- |
-| kairo | [../../kairo_feedback/ledger.md](../../kairo_feedback/ledger.md)（模板固定路径） | `EXE-` | `d9602ea6762806be320b9543e3b36f27f7dd5b1a`（tag v0.6.0） | external |
+| kairo | [../../kairo_feedback/ledger.md](../../kairo_feedback/ledger.md)（模板固定路径） | `EXE-` | `162aa5db7a8e7867aafa71cb9a5ebbd5f7867435`（master HEAD，v0.6.0-10） | external |
 | kairo（索引镜像） | [kairo/ledger.md](kairo/ledger.md) | — | 同上 | external |
 | librealsense2 | [librealsense/ledger.md](librealsense/ledger.md) | `LRS-` | `2.58.3`（源 `7c3ee3fb7c640e9f315e663907208cb56c4febfd`） | system |
 | eui-neo | [eui-neo/ledger.md](eui-neo/ledger.md) | `EUI-` | `4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722`（上游 dev） | external |
