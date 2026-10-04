@@ -42,7 +42,7 @@
 
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -94,10 +94,10 @@ inline bool quietFor(HasNew&& hasNew, std::chrono::milliseconds window) {
 struct WorkflowEngineFixture {
     /// 标准引擎工厂（引擎由套件内的每阶段 Executor 承载；套件负责 stop/reset/
     /// shutdown 生命周期）。
-    std::function<std::shared_ptr<rin::IWorkflowEngine>(executor::Executor&)> make;
+    std::function<std::shared_ptr<rin::IWorkflowEngine>(kairo::Executor&)> make;
     /// 可选：构造"对 id==failNode 的节点在第 failOnFrame 帧（1 起）必然失败"的
     /// 引擎（失败路径检查用）；空则跳过失败路径检查。
-    std::function<std::shared_ptr<rin::IWorkflowEngine>(executor::Executor&,
+    std::function<std::shared_ptr<rin::IWorkflowEngine>(kairo::Executor&,
                                                         rin::NodeId failNode,
                                                         std::uint64_t failOnFrame)>
         makeFailing;
@@ -242,8 +242,8 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
 
     // ---- 阶段 1：无图 start 拒绝；非法图 applyGraph 拒绝且状态不变、start 仍拒绝 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         std::shared_ptr<rin::IWorkflowEngine> engine = fixture.make(executor);
         RIN_CHECK(static_cast<bool>(engine));
@@ -280,13 +280,13 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
             RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
         }
         engine.reset();
-        RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+        RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
     }
 
     // ---- 阶段 2：合法图全流程（Started/统计/节点输出/参数/GraphApplied/stop 语义） ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         std::shared_ptr<rin::IWorkflowEngine> engine = fixture.make(executor);
         RIN_CHECK(static_cast<bool>(engine));
@@ -538,7 +538,7 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
             }
         }
         engine.reset();
-        RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+        RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
     }
 
     // ---- 阶段 3：失败路径（makeFailing 提供时）----
@@ -556,14 +556,14 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
         bool reachedFailedOnce = false;
 
         for (int attempt = 0; attempt < kFailureAttempts && !sawNodeFailed; ++attempt) {
-            executor::Executor executor;
-            executor::ExecutorConfig executorConfig;
+            kairo::Executor executor;
+            kairo::ExecutorConfig executorConfig;
             RIN_CHECK(executor.initialize(executorConfig));
             std::shared_ptr<rin::IWorkflowEngine> engine =
                 fixture.makeFailing(executor, failNode, failOnFrame);
             RIN_CHECK(static_cast<bool>(engine));
             if (!engine) {
-                RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+                RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
                 break;
             }
             ChainGraph chain;
@@ -628,7 +628,7 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
             }
 
             engine.reset();  // 析构内幂等 stop。
-            RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+            RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
         }
 
         RIN_CHECK(reachedFailedOnce);
@@ -640,8 +640,8 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
         // 重启语义（独立会话）：Failed 后 stop→Idle 可再 start 并推进；注入只在
         // 帧计数 == failOnFrame 触发一次，重启会话帧序不回落，可正常推进。
         {
-            executor::Executor executor;
-            executor::ExecutorConfig executorConfig;
+            kairo::Executor executor;
+            kairo::ExecutorConfig executorConfig;
             RIN_CHECK(executor.initialize(executorConfig));
             std::shared_ptr<rin::IWorkflowEngine> engine =
                 fixture.makeFailing(executor, failNode, failOnFrame);
@@ -672,7 +672,7 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
                 RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
             }
             engine.reset();
-            RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+            RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
         }
     }
 }

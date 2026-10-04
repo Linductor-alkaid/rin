@@ -42,7 +42,7 @@ IMU 融合驱动的 3D 相机位姿视图，以及拖拽式节点编辑器承载
   逐节点耗时、显式丢弃计数）；Start/Stop 运行控制，运行中改图呈现"待生效"
   标注。
 - **Executor 承载的运行时** —— 全部异步任务、阻塞采集循环与跨线程通道运行在
-  pinned executor 库上：队列有界、协作式取消、失败显式成事件、关闭顺序经回归
+  pinned kairo 库上：队列有界、协作式取消、失败显式成事件、关闭顺序经回归
   测试；无隐藏线程、无 fire-and-forget 任务。
 - **当真事一样的测试** —— 状态机/边界/集成测试覆盖 debug/ASan/UBSan/TSan 四
   预设，并有针对真实 D435if 的硬件在环测试。848×480 典型 FFT 链实测吞吐：
@@ -68,7 +68,7 @@ SDK——插上相机即可使用。支持 Ubuntu 20.04（amd64）及以上；�
 
 依赖：CMake ≥ 3.25、Ninja、C++20 编译器（GCC 10+；CI 使用 GCC 12/13），以及
 libusb-1.0、libudev、libcurl、OpenGL/X11 开发包。全部第三方库（librealsense2、
-executor、EUI-NEO、kissfft）在
+kairo、EUI-NEO、kissfft）在
 [`third_party/dependencies.lock`](third_party/dependencies.lock) 中 pin 到精确
 commit，由 CMake 拉取源码构建，无需预装；CI 完整清单见
 [ci.yml](.github/workflows/ci.yml)。
@@ -99,18 +99,18 @@ cmake --build build/release --target package    # 产物位于 build/release/dis
 apps/viewer (rin)                 EUI-NEO 前端应用——页面导航、节点画布、各面板；
                                   Executor 生命周期 owner（AppRuntime）
 src/adapters/realsense            librealsense2 适配器——阻塞采集由 Executor
-  (rin_realsense_adapter)         blocking worker 承载；executor::comm 邮箱传递
+  (rin_realsense_adapter)         blocking worker 承载；kairo::comm 邮箱传递
 src/core (rin_core)               相机服务契约（ICameraService）、显式状态机、
                                   像素转换、IMU 融合、图像节点与工作流引擎——
                                   不含任何第三方类型
-third_party/executor, eui-neo,    pinned 依赖（configure 时 commit 校验）
+third_party/kairo, eui-neo,    pinned 依赖（configure 时 commit 校验）
   librealsense2, kissfft
 ```
 
 保持分层的仓库纪律：公开头文件不包含任何第三方类型；Adapter 依赖 Core 接口、
-绝不反向；全部并发经 Executor 公开能力，`executor::comm` 通道容量有界；每个
+绝不反向；全部并发经 Executor 公开能力，`kairo::comm` 通道容量有界；每个
 第三方依赖都有独立反馈台账
-（[`docs/executor_feedback/`](docs/executor_feedback/ledger.md)、
+（[`docs/kairo_feedback/`](docs/kairo_feedback/ledger.md)、
 [`docs/dependency_feedback/`](docs/dependency_feedback/README.md)）。
 
 ## 文档
@@ -129,6 +129,6 @@ third_party/executor, eui-neo,    pinned 依赖（configure 时 commit 校验）
 ## 许可证
 
 Rin 以 [MIT 许可证](LICENSE) 发布。第三方依赖保留其自身许可证——
-librealsense2、executor、EUI-NEO 为 Apache-2.0，kissfft 为 BSD-3-Clause；
+librealsense2、EUI-NEO 为 Apache-2.0，kairo 为 MIT，kissfft 为 BSD-3-Clause；
 详见 [`third_party/dependencies.lock`](third_party/dependencies.lock) 与
 [依赖反馈台账](docs/dependency_feedback/README.md)。

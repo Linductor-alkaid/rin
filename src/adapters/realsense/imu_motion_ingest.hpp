@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <memory>
 
-#include <executor/comm/mailbox.hpp>
+#include <kairo/comm/mailbox.hpp>
 
 #include "imu_fuser.hpp"
 #include "rin/camera_types.hpp"
@@ -26,8 +26,8 @@ namespace rin::detail {
 class MotionIngest {
 public:
     /// 不持有邮箱所有权（邮箱由服务对象持有，寿命覆盖本类）；融合器独占。
-    MotionIngest(executor::comm::LatestMailbox<MotionSample>& motionMailbox,
-                 executor::comm::LatestMailbox<ImuSnapshot>& poseMailbox,
+    MotionIngest(kairo::comm::LatestMailbox<MotionSample>& motionMailbox,
+                 kairo::comm::LatestMailbox<ImuSnapshot>& poseMailbox,
                  std::unique_ptr<ImuFuser> fuser) noexcept;
 
     /// 推进单个已到达的运动采样；无效采样（含损坏枚举/非有限轴值）直接丢弃，
@@ -49,8 +49,8 @@ private:
     /// 超过窗口阈值视为流中断重建窗口）。
     void updateRate(bool gyro, double timestampMs) noexcept;
 
-    executor::comm::LatestMailbox<MotionSample>& motionMailbox_;
-    executor::comm::LatestMailbox<ImuSnapshot>& poseMailbox_;
+    kairo::comm::LatestMailbox<MotionSample>& motionMailbox_;
+    kairo::comm::LatestMailbox<ImuSnapshot>& poseMailbox_;
     std::unique_ptr<ImuFuser> fuser_;
 
     std::uint64_t motionSequence_ = 0;  /// 运动通道会话序号（单调递增）

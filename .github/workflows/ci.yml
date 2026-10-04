@@ -56,7 +56,7 @@ jobs:
   package:
     # 20.04 (focal) 适配（v0.3.0 起）：deb 在 focal 容器内构建——产物按 focal 的
     # glibc 2.31 链接、shlibs 依赖按 focal 计算并随 Release 分发；在更新的宿主上
-    # 构建的产物无法在 focal 运行。executor 使用 std::atomic::wait/notify 与
+    # 构建的产物无法在 focal 运行。kairo 使用 std::atomic::wait/notify 与
     # concepts/requires 表达式（libstdc++ 需 GCC 11+），focal 默认 g++-9/10 不可用
     # → ubuntu-toolchain-r/test PPA 的 g++-12；并静态链接 libstdc++/libgcc，使产物
     # 不依赖 focal 之外的 GLIBCXX 版本。focal 系统 CMake 为 3.16（低于项目要求的

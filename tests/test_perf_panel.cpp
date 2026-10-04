@@ -39,7 +39,7 @@
 
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <rin/image_node.hpp>
 #include <rin/workflow_engine.hpp>
@@ -435,9 +435,9 @@ void testStubConsumeSemantics() {
 // --- 3. 对真引擎的集成管道（契约点 2/3/4/5/7） ---
 
 void testRealEnginePipeline() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -644,15 +644,15 @@ void testRealEnginePipeline() {
 
     engine->stop();  // 幂等
     engine.reset();
-    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
 // --- 4. 失败冻结（契约点 6；真引擎运行期注入） ---
 
 void testRealEngineFailureFreeze() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -723,7 +723,7 @@ void testRealEngineFailureFreeze() {
 
     engine->stop();  // 幂等
     engine.reset();
-    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
 }  // namespace

@@ -1,7 +1,7 @@
 # deb 打包（DEC-009）：自包含分发 —— 可执行文件 + 捆绑的 librealsense2 运行库
 # + udev 规则（设备免 root 可用）+ 桌面入口与图标。
 #
-# 组件模型：本项目安装规则全部归属 `rin` 组件；依赖（executor / eui-neo / librealsense2）
+# 组件模型：本项目安装规则全部归属 `rin` 组件；依赖（kairo / eui-neo / librealsense2）
 # 的 install 规则在 Dependencies.cmake 中被归入 deps-<name> 组件。CPack 只打包 rin 组件，
 # 依赖的启发性安装规则不会进入 deb。仅 Linux 目标提供本打包层。
 

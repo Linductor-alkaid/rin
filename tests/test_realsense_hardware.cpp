@@ -25,7 +25,7 @@
 // 全部等待为有界轮询（100ms 间隔），不使用裸 sleep 等待；退出前保证 stop() 收尾。
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -1036,9 +1036,9 @@ int runSmokeTest(ICameraService& service) {
 }  // namespace
 
 int main() {
-    executor::Executor executor;
-    if (!executor.initialize_ex({})) {
-        std::printf("FAIL: executor initialize_ex failed\n");
+    kairo::Executor executor;
+    if (!executor.initialize({})) {
+        std::printf("FAIL: kairo initialize failed\n");
         return 1;
     }
 

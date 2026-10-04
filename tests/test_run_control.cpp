@@ -82,7 +82,7 @@
 
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <rin/camera_service.hpp>
 #include <rin/camera_types.hpp>
@@ -522,9 +522,9 @@ bool pumpWorkflowEvents(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engin
 }
 
 void testRunControlStateMachine() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -649,15 +649,15 @@ void testRunControlStateMachine() {
 
     engine->stop();
     engine.reset();
-    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
 // --- 3. 引擎-UI 端到端（相机帧源 → 真引擎 → UI 消费管道） ---
 
 void testEngineUiEndToEnd() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -902,7 +902,7 @@ void testEngineUiEndToEnd() {
         RIN_CHECK(!canvas.perf.live() && canvas.perf.stats() == nullptr);
         RIN_CHECK_EQ(canvas.failures.size(), std::size_t{0});
         // 4) executor.shutdown(true)（非 worker 线程 = 测试主线程）。
-        RIN_CHECK_MSG(executor.shutdown(true) == executor::ShutdownResult::Completed,
+        RIN_CHECK_MSG(executor.shutdown(true) == kairo::ShutdownResult::Completed,
                       "e2e: app.cpp shutdown order converges cleanly");
         // reset 后无崩溃 + 引用释放后 shutdown 收敛（到达此处即回归通过）。
         return;  // 本节持有 executor 生命周期，收尾即返回。
@@ -912,9 +912,9 @@ void testEngineUiEndToEnd() {
 // --- 4. 关闭竞态防御（Running 中 executor.shutdown(false) 后 stop 有界收敛） ---
 
 void testShutdownRaceDefense() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -1116,9 +1116,9 @@ void testCameraSourceRenditionRouting() {
 // --- 6. 灰度链真引擎端到端（M6-03，DEC-017） ---
 
 void testGrayChainEndToEnd() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -1221,15 +1221,15 @@ void testGrayChainEndToEnd() {
     engine->stop();
     RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
     engine.reset();
-    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
 // --- 7. pumpNodeOutput 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源） ---
 
 void testPumpNodeOutputDriverPull() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -1317,7 +1317,7 @@ void testPumpNodeOutputDriverPull() {
     RIN_CHECK(!viewer::pumpNodeOutput(canvas, panel, *engine));
 
     engine.reset();
-    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
 // --- 8. 工作台布局状态（M7-03/04）：WorkflowCanvasState docking 字段默认值

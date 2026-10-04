@@ -4,7 +4,7 @@
 
 #include <librealsense2/rs.hpp>
 
-#include <executor/comm/mailbox.hpp>
+#include <kairo/comm/mailbox.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -25,7 +25,7 @@
 namespace rin {
 namespace {
 
-using executor::comm::LatestMailbox;
+using kairo::comm::LatestMailbox;
 
 constexpr auto kFrameWaitTimeout = std::chrono::milliseconds(1000);
 /// StopToken 无法中断 wait_for_frames；连续超时达到该值才判设备丢失/失败（约 3 秒）。
@@ -84,11 +84,11 @@ struct HotPlugBridge {
 class RealSenseCamera;
 
 /// Executor blocking worker：设备解析（Waiting）、打开（有界重试）与采集循环（EXEC-01）。
-class CaptureLoop final : public executor::IBlockingIoWorker {
+class CaptureLoop final : public kairo::IBlockingIoWorker {
 public:
     CaptureLoop(RealSenseCamera& owner, StreamRequest initialRequest);
 
-    void run(executor::StopToken stopToken) override;
+    void run(kairo::StopToken stopToken) override;
     void wakeup() noexcept override {
         // wait_for_frames / Waiting 轮询均带界返回即到达取消/命令检查点。
     }
@@ -97,13 +97,13 @@ private:
     enum class StreamExit { Stopped, DeviceLost, Fatal };
 
     /// 解析目标设备（requested 优先 > 唯一自动 > 未选即 Waiting）；空 = 停止或失败。
-    std::string resolveTarget(rs2::context& context, executor::StopToken stopToken);
+    std::string resolveTarget(rs2::context& context, kairo::StopToken stopToken);
     /// Streaming 域：绑定 serial 出流，处理命令/热插拔/设备移除。
     StreamExit streamLoop(rs2::context& context,
                           rs2::pipeline& pipeline,
                           rs2::pipeline_profile& profile,
                           const std::string& serial,
-                          executor::StopToken stopToken);
+                          kairo::StopToken stopToken);
     /// 枚举 + 选择策略发布目录（requested 在线优先 > 唯一自动 > 未选）。
     void refreshCatalog(rs2::context& context);
     /// 打开 pipeline（M3-04 混合配置 + 运动流降级）：wantMotion 时先按含 ACCEL/GYRO
@@ -118,7 +118,7 @@ private:
     /// 设备是否具备 IMU（查最近一次目录枚举；enableMotion 在无 IMU 设备上按契约
     /// 退化为纯视频流，运动通道保持空，不视为错误）。
     [[nodiscard]] bool deviceHasImu(const std::string& serial) const;
-    [[nodiscard]] bool sleepPoll(executor::StopToken stopToken);
+    [[nodiscard]] bool sleepPoll(kairo::StopToken stopToken);
 
     RealSenseCamera& owner_;
     StreamRequest request_;
@@ -141,7 +141,7 @@ private:
 
 class RealSenseCamera final : public ICameraService {
 public:
-    explicit RealSenseCamera(executor::Executor& executor) : executor_(executor) {
+    explicit RealSenseCamera(kairo::Executor& executor) : executor_(executor) {
         // 热插拔监视（DEC-006）：长驻 context；回调（librealsense 线程）只做 alive
         // 检查 + 邮箱投递（AGENTS.md 规则 11），枚举与状态推进在采集 worker 完成。
         context_ = std::make_unique<rs2::context>();
@@ -310,7 +310,7 @@ private:
         publishEvent(ServiceEventKind::Failed, message);
     }
 
-    executor::Executor& executor_;
+    kairo::Executor& executor_;
     detail::CameraStateMachine machine_;
 
     LatestMailbox<Frame> rgbFrames_{"rin.frames.rgb"};
@@ -329,7 +329,7 @@ private:
     LatestMailbox<ControlCommand> commands_{"rin.commands"};
     LatestMailbox<int> hotPlug_{"rin.hotplug"};
 
-    executor::WorkerHandle worker_{};
+    kairo::WorkerHandle worker_{};
     std::atomic<bool> workerRunning_{false};
     std::atomic<std::uint64_t> snapshotSequence_{0};
 
@@ -620,7 +620,7 @@ void CaptureLoop::refreshCatalog(rs2::context& context) {
 }
 
 /// 解析目标设备（Waiting 域）：空 = 停止或致命失败；非空 = 已选定可尝试打开。
-std::string CaptureLoop::resolveTarget(rs2::context& context, executor::StopToken stopToken) {
+std::string CaptureLoop::resolveTarget(rs2::context& context, kairo::StopToken stopToken) {
     std::string serial;
     for (;;) {
         refreshCatalog(context);
@@ -684,7 +684,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                                                 rs2::pipeline& pipeline,
                                                 rs2::pipeline_profile& profile,
                                                 const std::string& serial,
-                                                executor::StopToken stopToken) {
+                                                kairo::StopToken stopToken) {
     int consecutiveFailures = 0;
     std::uint64_t sequence = 0;
     std::vector<std::uint8_t> rgba;
@@ -1077,7 +1077,7 @@ void RealSenseCamera::stop() {
 
 /// 采集 worker 主循环：设备解析（Waiting，DEC-006）→ 打开（有界重试）→ 流送
 /// （Streaming）→ 设备丢失/切换回到解析域；Stop/致命错误退出。
-void CaptureLoop::run(executor::StopToken stopToken) {
+void CaptureLoop::run(kairo::StopToken stopToken) {
     bool failed = false;
     rs2::context context;
     try {
@@ -1136,7 +1136,7 @@ void CaptureLoop::run(executor::StopToken stopToken) {
                         failed ? errorMessage_ : std::string("capture loop stopped"));
 }
 
-[[nodiscard]] bool CaptureLoop::sleepPoll(executor::StopToken stopToken) {
+[[nodiscard]] bool CaptureLoop::sleepPoll(kairo::StopToken stopToken) {
     for (int i = 0; i < 10 && !stopToken.stop_requested(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
@@ -1157,7 +1157,7 @@ StartOutcome RealSenseCamera::start(const StreamRequest& request) {
     }
 
     // 启动不依赖相机连接（DEC-006）：无设备时 worker 进入 Waiting 等待接入。
-    executor::BlockingWorkerSpec spec;
+    kairo::BlockingWorkerSpec spec;
     spec.name = "rin-capture";
     spec.config.thread_name = "rin-capture";
     spec.config.startup_timeout = std::chrono::milliseconds(2000);
@@ -1176,7 +1176,7 @@ StartOutcome RealSenseCamera::start(const StreamRequest& request) {
     return outcome;
 }
 
-std::shared_ptr<ICameraService> createRealSenseCameraService(executor::Executor& executor) {
+std::shared_ptr<ICameraService> createRealSenseCameraService(kairo::Executor& executor) {
     return std::make_shared<RealSenseCamera>(executor);
 }
 

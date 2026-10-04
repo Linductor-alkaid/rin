@@ -17,7 +17,7 @@ English | [简体中文](README_zh.md)
 
 **Rin** is a real-time Intel RealSense workbench built with modern C++: live RGB/depth
 preview, a 3D camera-pose view driven by IMU fusion, and a drag-and-drop node editor
-for on-camera image processing — all on an executor-backed runtime with explicit
+for on-camera image processing — all on a kairo-backed runtime with explicit
 state machines and sanitizer-tested concurrency.
 
 ## Screenshots
@@ -44,7 +44,7 @@ state machines and sanitizer-tested concurrency.
   thumbnails, and a performance panel (end-to-end FPS, per-node cost, explicit drop
   counters). Start/Stop run control with "pending — applies next frame" graph edits.
 - **Executor-backed runtime** — every async task, blocking capture loop, and
-  cross-thread channel runs on a pinned executor library; bounded queues, cooperative
+  cross-thread channel runs on a pinned kairo library; bounded queues, cooperative
   cancellation, explicit failure events, and a tested shutdown order. No hidden threads,
   no fire-and-forget work.
 - **Tested like it matters** — state-machine, boundary, and integration tests across
@@ -74,7 +74,7 @@ UI renders correctly on systems without the bundled dev-layout fonts.
 
 Requirements: CMake ≥ 3.25, Ninja, a C++20 compiler (GCC 10+; GCC 12/13 in CI), and
 libusb-1.0, libudev, libcurl, OpenGL/X11 development packages. All third-party
-libraries (librealsense2, executor, EUI-NEO, kissfft) are pinned to exact commits in
+libraries (librealsense2, kairo, EUI-NEO, kissfft) are pinned to exact commits in
 [`third_party/dependencies.lock`](third_party/dependencies.lock) and fetched/built
 by CMake — nothing else to preinstall. The full CI dependency list lives in
 [ci.yml](.github/workflows/ci.yml).
@@ -106,19 +106,19 @@ Options: `RIN_BUILD_TESTS` (default ON), `RIN_BUILD_VIEWER` (default ON),
 apps/viewer (rin)                 EUI-NEO front end — page navigation, node canvas,
                                   panels; executor lifecycle owner (AppRuntime)
 src/adapters/realsense            librealsense2 adapter — blocking capture on an
-  (rin_realsense_adapter)         executor blocking worker; executor::comm mailboxes
+  (rin_realsense_adapter)         kairo blocking worker; kairo::comm mailboxes
 src/core (rin_core)               camera service contracts (ICameraService), explicit
                                   state machines, pixel conversion, IMU fusion,
                                   image nodes + workflow engine — no third-party types
-third_party/executor, eui-neo,    pinned dependencies (configure-time commit check)
+third_party/kairo, eui-neo,    pinned dependencies (configure-time commit check)
   librealsense2, kissfft
 ```
 
 House rules that hold the layers apart: public headers never include third-party
 types; adapters depend on core interfaces, never the reverse; all concurrency goes
-through the executor's public capabilities and `executor::comm` channels are bounded;
+through the Executor's public capabilities and `kairo::comm` channels are bounded;
 every third-party dependency gets a feedback ledger
-([`docs/executor_feedback/`](docs/executor_feedback/ledger.md),
+([`docs/kairo_feedback/`](docs/kairo_feedback/ledger.md),
 [`docs/dependency_feedback/`](docs/dependency_feedback/README.md)).
 
 ## Documentation
@@ -139,7 +139,7 @@ Per-release changes are tracked in [CHANGELOG.md](CHANGELOG.md) (Chinese).
 ## License
 
 Rin is released under the [MIT License](LICENSE). Third-party dependencies keep
-their own licenses — Apache-2.0 (librealsense2, executor, EUI-NEO) and
+their own licenses — Apache-2.0 (librealsense2, EUI-NEO), MIT (kairo) and
 BSD-3-Clause (kissfft); see
 [`third_party/dependencies.lock`](third_party/dependencies.lock) and the
 [dependency ledgers](docs/dependency_feedback/README.md) for details.

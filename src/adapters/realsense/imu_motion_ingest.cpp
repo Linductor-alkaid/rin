@@ -12,8 +12,8 @@ constexpr double kMotionRateGapResetMs = 1000.0;
 
 }  // namespace
 
-MotionIngest::MotionIngest(executor::comm::LatestMailbox<MotionSample>& motionMailbox,
-                           executor::comm::LatestMailbox<ImuSnapshot>& poseMailbox,
+MotionIngest::MotionIngest(kairo::comm::LatestMailbox<MotionSample>& motionMailbox,
+                           kairo::comm::LatestMailbox<ImuSnapshot>& poseMailbox,
                            std::unique_ptr<ImuFuser> fuser) noexcept
     : motionMailbox_(motionMailbox), poseMailbox_(poseMailbox), fuser_(std::move(fuser)) {}
 

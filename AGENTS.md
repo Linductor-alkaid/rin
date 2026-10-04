@@ -26,14 +26,14 @@ RGB 彩色图像与深度图像，允许选择输出分辨率，并显示当前�
 宿主能力只能通过 Adapter 接入，不得渗入 Core。优先围绕以下接口形成稳定边界：
 
 - `rin::ICameraService`：相机服务的生命周期与控制入口（启动、停止、切换分辨率、查询状态）。
-- `rin::IFrameSink` / `executor::comm` 邮箱：帧数据从采集上下文到消费上下文的有界传递。
+- `rin::IFrameSink` / `kairo::comm` 邮箱：帧数据从采集上下文到消费上下文的有界传递。
 - `rin::CameraEventSink`：设备错误、流状态变化等事件向观察者的通知通道。
 
 ## Executor 是强制并发基础设施
 
-Rin 必须依赖仓库中的 pinned `third_party/executor` 管理所有并发任务和运行
-生命周期。集成时以其公开头文件、`third_party/executor/docs/API.md` 和
-`third_party/executor/docs/skill/executor-integration/SKILL.md` 为准；本地资源与 pinned
+Rin 必须依赖仓库中的 pinned `third_party/kairo` 管理所有并发任务和运行
+生命周期。集成时以其公开头文件、`third_party/kairo/docs/API.md` 和
+`third_party/kairo/docs/skill/kairo-integration/SKILL.md` 为准；本地资源与 pinned
 版本一致，优先于其他版本的文档。
 
 以下规则是强制要求：
@@ -48,10 +48,10 @@ Rin 必须依赖仓库中的 pinned `third_party/executor` 管理所有并发任
    一节的边界处理。
 3. 普通有限任务优先使用 `submit_auto()`，并保留、消费其 `future`。成功入队只表示 admission，
    不等于执行成功；影响任务结果的异常不得被丢弃。
-4. 跨执行上下文通信按语义选用 `executor::comm` 组件：逐条 FIFO 用 `MpscChannel`，最新状态
+4. 跨执行上下文通信按语义选用 `kairo::comm` 组件：逐条 FIFO 用 `MpscChannel`，最新状态
    用 `LatestMailbox`，一致快照用 `DoubleBuffer`，实时路径用 `RealtimeChannel`，多订阅广播
    用 `Topic`，启动阶段协调用 `PhaseGate`。不得自建 ad-hoc 队列，也不得以"共享可变状态 +
-   mutex + 条件变量"替代 executor 通信。
+   mutex + 条件变量"替代 kairo 通信。
 5. 长期阻塞 I/O（librealsense 的 `wait_for_frames()` 轮询）使用 Executor 的 blocking
    worker 生命周期能力（`start_worker(BlockingWorkerSpec)`）；允许抖动的后台周期任务使用
    timer 能力；固定周期或低延迟控制使用 realtime/low-latency 能力。不得用普通周期任务
@@ -68,7 +68,7 @@ Rin 必须依赖仓库中的 pinned `third_party/executor` 管理所有并发任
    完成自等待或最终 teardown。
 8. Runtime、Service、Controller 和 Adapter 不得各自隐藏全局 Executor 生命周期。依赖通过
    构造参数或明确 context 传递；资源所有权、任务句柄和关闭顺序必须可见且可测试。
-9. 使用 Executor 的监控、状态、失败事件和 `executor::comm` 统计作为任务健康的事实源；新
+9. 使用 Executor 的监控、状态、失败事件和 `kairo::comm` 统计作为任务健康的事实源；新
    任务路径必须使 admission 拒绝、执行失败、超时/取消、背压和关闭状态可经 Executor 设施
    观察。不得建立平行任务监控子系统。
 10. 队列容量（含 `max_in_flight_tasks` 总量准入）、背压/drop 策略、超时、取消和关闭中的
@@ -81,11 +81,11 @@ Rin 必须依赖仓库中的 pinned `third_party/executor` 管理所有并发任
 设计和实现并发行为前，先使用 pinned 依赖自带的资源，按其路由说明只加载相关的 router 和
 capability card，不读取无关卡片或实现源码：
 
-- 应用集成：`third_party/executor/docs/skill/executor-integration/SKILL.md`。
+- 应用集成：`third_party/kairo/docs/skill/kairo-integration/SKILL.md`。
 - 仅在获得修改 Executor 本体的明确指示后，才使用
-  `third_party/executor/docs/skill/executor-maintainer/SKILL.md`，并遵循其 source、
+  `third_party/kairo/docs/skill/kairo-maintainer/SKILL.md`，并遵循其 source、
   invariant、test 和 documentation 检查。maintainer skill 不是修改依赖的隐式授权。
-- 用户指南：`third_party/executor/website/`（zh/en）中 lifecycle、submission、communication、
+- 用户指南：`third_party/kairo/website/`（zh/en）中 lifecycle、submission、communication、
   monitoring、failure、realtime 与 reliability 各节。公开头文件与 pinned 指南是权威，优先
   公共 facade 和文档化组件，而非本地抽象或实现细节。
 
@@ -96,13 +96,13 @@ capability card，不读取无关卡片或实现源码：
 
 1. 先核对当前版本的公开头文件、API 文档、集成指南及相关测试，排除 API 选型错误、配置
    错误、平台限制和应用层职责。
-2. 在 `docs/executor_feedback/ledger.md` 中新增唯一编号（`EXE-YYYYMMDD-NNN`）的反馈记录，
+2. 在 `docs/kairo_feedback/ledger.md` 中新增唯一编号（`EXE-YYYYMMDD-NNN`）的反馈记录，
    附可复现证据、影响范围、期望语义、建议的最小能力、延期影响和可验收结果。只写
    "Executor 不支持"不构成有效记录。
 3. 在相关代码、测试或设计文档中引用该反馈编号。
 4. 确需临时方案时，将其限制在单一 Adapter/compatibility boundary 内，说明行为差异、风险、
    移除条件和测试覆盖；临时方案不得创建线程、队列或调度器。
-5. 未经明确授权，不直接修改 `third_party/executor` 来掩盖集成问题，也不把项目特有策略
+5. 未经明确授权，不直接修改 `third_party/kairo` 来掩盖集成问题，也不把项目特有策略
    下沉到通用 Executor；先报告并等待明确指示。
 
 以下情况不是 Executor 能力缺口：RealSense 设备适配、窗口平台映射、业务状态机策略、
@@ -111,7 +111,7 @@ capability card，不读取无关卡片或实现源码：
 ### 依赖独立台账（本仓库扩展要求）
 
 所有第三方依赖必须分别建立独立反馈台账，一个依赖一份：Executor 使用模板固定路径
-`docs/executor_feedback/ledger.md`；librealsense、EUI-NEO 及后续新增依赖分别在
+`docs/kairo_feedback/ledger.md`；librealsense、EUI-NEO 及后续新增依赖分别在
 `docs/dependency_feedback/<dependency>/ledger.md` 建立，编号前缀按依赖区分
 （`LRS-YYYYMMDD-NNN`、`EUI-YYYYMMDD-NNN`）。台账记录依赖身份（来源、锁定版本、许可证）、
 集成决策、遇到的问题与绕行方案、能力缺口与上游反馈状态。索引见

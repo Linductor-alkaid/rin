@@ -1,5 +1,5 @@
 # 分层构建：rin_core（公开契约零第三方类型，RULE-01；kissfft 为实现私有链接，
-# DEC-012/M4-06）→ rin_realsense_adapter（executor + librealsense2）。
+# DEC-012/M4-06）→ rin_realsense_adapter（kairo + librealsense2）。
 
 add_library(rin_core STATIC
     core/camera_types.cpp
@@ -41,8 +41,8 @@ target_include_directories(rin_workflow
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/workflow>
 )
 target_compile_features(rin_workflow PUBLIC cxx_std_20)
-# executor 作为运行时契约 PUBLIC 传递（与 adapter 同纪律：引擎任务全部受 Executor 管理）。
-target_link_libraries(rin_workflow PUBLIC rin::core executor::executor)
+# kairo 作为运行时契约 PUBLIC 传递（与 adapter 同纪律：引擎任务全部受 Executor 管理）。
+target_link_libraries(rin_workflow PUBLIC rin::core kairo::kairo)
 
 add_library(rin_realsense_adapter STATIC
     adapters/realsense/realsense_camera_service.cpp
@@ -57,8 +57,8 @@ target_include_directories(rin_realsense_adapter
         ${CMAKE_CURRENT_SOURCE_DIR}/core
 )
 target_compile_features(rin_realsense_adapter PUBLIC cxx_std_20)
-# executor 作为运行时契约 PUBLIC 传递（viewer 持有 Executor 实例）；设备 SDK 保持 PRIVATE。
+# kairo 作为运行时契约 PUBLIC 传递（viewer 持有 Executor 实例）；设备 SDK 保持 PRIVATE。
 target_link_libraries(rin_realsense_adapter
-    PUBLIC rin::core executor::executor
+    PUBLIC rin::core kairo::kairo
     PRIVATE realsense2::realsense2
 )

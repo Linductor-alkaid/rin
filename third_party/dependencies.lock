@@ -3,7 +3,7 @@
 # class 取值：external（CMake 源码引入）、system（使用系统安装，find_package 校验版本）
 # 配置阶段由 cmake/Dependencies.cmake 校验：本地源目录（RIN_<NAME>_SOURCE_DIR）HEAD 必须等于
 # pinned_commit；否则按 URL 拉取 pinned_commit。class=system 依赖按 expected 版本 find_package 校验。
-executor|https://github.com/Linductor-alkaid/executor.git|4731b16493ae996311a9e85f55bd137aee69418a|4731b16493ae996311a9e85f55bd137aee69418a|OFF|external
+kairo|https://github.com/Linductor-alkaid/kairo.git|162aa5db7a8e7867aafa71cb9a5ebbd5f7867435|162aa5db7a8e7867aafa71cb9a5ebbd5f7867435|OFF|external
 eui-neo|https://github.com/sudoevolve/EUI-NEO.git|4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722|4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722|OFF|external
 realsense2|https://github.com/realsenseai/librealsense.git|7c3ee3fb7c640e9f315e663907208cb56c4febfd|7c3ee3fb7c640e9f315e663907208cb56c4febfd|OFF|external
 kissfft|https://github.com/mborgerding/kissfft.git|7bce4153c6bc8aba2db0e889e576f9d00505cbe1|7bce4153c6bc8aba2db0e889e576f9d00505cbe1|OFF|external
