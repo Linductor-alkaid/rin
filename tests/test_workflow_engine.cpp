@@ -54,7 +54,7 @@
 // 套件 + 特有检查整体设计 < 60s。
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -74,7 +74,7 @@
 
 namespace {
 
-using executor::ShutdownResult;
+using kairo::ShutdownResult;
 using rin::IImageNode;
 using rin::IWorkflowEngine;
 using rin::ImageU8;
@@ -312,13 +312,13 @@ private:
 /// 契约套件 fixture：标准引擎 + 跨代/跨会话计数故障注入（消费节点 crop）。
 rin_test::WorkflowEngineFixture makeFixture() {
     rin_test::WorkflowEngineFixture fixture;
-    fixture.make = [](executor::Executor& executor) -> std::shared_ptr<IWorkflowEngine> {
+    fixture.make = [](kairo::Executor& executor) -> std::shared_ptr<IWorkflowEngine> {
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
         return rin::createWorkflowEngine(executor, std::move(config));
     };
     fixture.makeFailing =
-        [](executor::Executor& executor, NodeId failNode,
+        [](kairo::Executor& executor, NodeId failNode,
            std::uint64_t failOnFrame) -> std::shared_ptr<IWorkflowEngine> {
         WorkflowEngineConfig config = baseConfig();
         // 计数器在本次 makeFailing 调用内创建并被工厂闭包捕获：同一引擎实例
@@ -355,8 +355,8 @@ int main() {
 
     // ---- 2) 工厂校验：非法配置抛 std::invalid_argument；paramQueueCapacity=0 按 1 处理 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         const auto rejectsInvalid = [&executor](WorkflowEngineConfig bad) {
             try {
@@ -406,8 +406,8 @@ int main() {
     // ---- 3) 默认目录一致性：真引擎 catalog() 与 makeDefaultImageNodeCatalog()
     // 逐字段相等（两引擎共同单一事实源；假引擎已随 M5-06 移除，基线即本函数）----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -478,8 +478,8 @@ int main() {
     //   1/2/3   (77+300+87+128)>>8    = 592>>8  = 2
     //   200/100/50 (15400+15000+1450+128)>>8 = 31978>>8 = 124
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         auto knownPixels = std::make_shared<const std::vector<std::uint8_t>>(
             std::vector<std::uint8_t>{255, 0, 0, 255,    0, 255, 0, 255,
@@ -549,8 +549,8 @@ int main() {
 
     // ---- 5) 参数"下一帧生效"（真实算子）：downscale scale 0.5→1.0，64×48→128×96 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -581,8 +581,8 @@ int main() {
 
     // ---- 6) 过载显式丢弃：maxInFlight=1 + 20ms 慢算子 + 2ms 泵 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.maxInFlight = 1;
@@ -635,8 +635,8 @@ int main() {
 
     // ---- 7) 帧源空闲：门控关闭 → 静默窗无帧推进且保持 Running；打开后恢复 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         GatedSource gated;
         WorkflowEngineConfig config = baseConfig();
@@ -679,8 +679,8 @@ int main() {
 
     // ---- 8) Running 图替换消费式语义：GraphApplied 不逐帧重发（假引擎 peek 缺陷探针）----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -749,8 +749,8 @@ int main() {
 
     // ---- 9) sourceSequence 传播：同帧两节点相等 + 运行期非递减 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         GatedSource gated;
         gated.open->store(true, std::memory_order_relaxed);
@@ -844,8 +844,8 @@ int main() {
         NodeId nodeFailedId = rin::kInvalidNode;
         bool reachedFailedOnce = false;
         for (int attempt = 0; attempt < kFailureAttempts && !sawNodeFailed; ++attempt) {
-            executor::Executor executor;
-            executor::ExecutorConfig executorConfig;
+            kairo::Executor executor;
+            kairo::ExecutorConfig executorConfig;
             RIN_CHECK(executor.initialize(executorConfig));
             WorkflowEngineConfig config = baseConfig();
             config.frameSource = alwaysSupplySource();
@@ -895,8 +895,8 @@ int main() {
 
     // ---- 11) 关停竞态防御：Running 中 executor.shutdown(false) 后 stop() 有界收敛 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -920,8 +920,8 @@ int main() {
 
     // ---- 12) owner 纪律正常路径收尾：stop + reset 后 shutdown(true) 干净 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -944,8 +944,8 @@ int main() {
 
     // ---- 13) 会话复位：processedFrames 复位从小值增长，统计通道序号实例内单调 ----
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -1011,8 +1011,8 @@ int main() {
     // 构造拒绝——受理前预编译校验必须同步拒绝（false + error），而非等帧边界
     // 重建失败。合法组合（highCut=0.9）受理。
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         WorkflowEngineConfig config = baseConfig();
         config.frameSource = alwaysSupplySource();
@@ -1054,8 +1054,8 @@ int main() {
     // true 携带无效图像时：无帧推进、无过载丢弃、保持 Running；恢复有效图像
     // 后正常推进。
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         auto supplyValid = std::make_shared<std::atomic<bool>>(false);
         WorkflowEngineConfig config = baseConfig();
@@ -1113,8 +1113,8 @@ int main() {
     // 在关源期间推进——DEC-013 §1.3 字面为"推迟换代（图保持待生效，不发布
     // 事件）"（两观察值应为 0）；实现为立即换代 + 覆盖检查推迟提交（见报告）。
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         GatedSource gated;
         gated.open->store(true, std::memory_order_relaxed);
@@ -1214,8 +1214,8 @@ int main() {
     // 序号越过水位（kWm×泵周期 >> kSwitchWindow），窗口内拉不到 → 回归失败；
     // 新实现共享邮箱 → 首个新代帧即命中。
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         SizedGatedSource source(64, 48);  // grayify 保持输入尺寸：图 A 输出 64x48。
         WorkflowEngineConfig config = baseConfig();
@@ -1358,8 +1358,8 @@ int main() {
     // "换代"机制但不发布 GraphApplied——本回归确保该路径的邮箱共享同样成立：
     // 同 id 节点以既有水位可拉到参数生效后的新尺寸快照。判别判据同 17）。
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         SizedGatedSource source(128, 96);
         WorkflowEngineConfig config = baseConfig();
@@ -1437,8 +1437,8 @@ int main() {
     // 发布旧图产物，静默窗检查读到新快照而失败。（注：本判据只在邮箱共享前提
     // 下判别"跳过缺失"；共享语义本身由 17）/18）锁定。）
     {
-        executor::Executor executor;
-        executor::ExecutorConfig executorConfig;
+        kairo::Executor executor;
+        kairo::ExecutorConfig executorConfig;
         RIN_CHECK(executor.initialize(executorConfig));
         SizedGatedSource source(128, 96);
         auto entered = std::make_shared<std::atomic<std::uint64_t>>(0);

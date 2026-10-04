@@ -1,6 +1,6 @@
 #pragma once
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -87,6 +87,6 @@ struct WorkflowEngineConfig {
 /// 工厂校验：frameSource 为空、maxInFlight == 0 或 pumpInterval <= 0 抛
 /// std::invalid_argument；paramQueueCapacity == 0 按 1 处理（与假引擎同）。
 [[nodiscard]] std::shared_ptr<IWorkflowEngine> createWorkflowEngine(
-    executor::Executor& executor, WorkflowEngineConfig config = {});
+    kairo::Executor& executor, WorkflowEngineConfig config = {});
 
 }  // namespace rin

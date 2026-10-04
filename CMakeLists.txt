@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(Rin
     VERSION 0.5.1
-    DESCRIPTION "Rin — real-time Intel RealSense RGB/depth preview with an executor-backed runtime"
+    DESCRIPTION "Rin — real-time Intel RealSense RGB/depth preview with a kairo-backed runtime"
     LANGUAGES C CXX
 )
 
@@ -23,14 +23,14 @@ option(RIN_BUILD_VIEWER "Build the EUI-NEO viewer application" ON)
 option(RIN_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 # 依赖构建裁剪：只引入库本体，不构建依赖的自测/示例/托盘。
-set(EXECUTOR_BUILD_TESTS OFF)
-set(EXECUTOR_BUILD_EXAMPLES OFF)
+set(KAIRO_BUILD_TESTS OFF)
+set(KAIRO_BUILD_EXAMPLES OFF)
 set(EUI_BUILD_APPS OFF)
 set(EUI_BUILD_USER_APPS OFF)
 set(EUI_BUILD_TEST_FIXTURES OFF)
 set(EUI_ENABLE_TRAY OFF)
 
-# 依赖解析与锁定校验（executor / eui-neo / librealsense2）。
+# 依赖解析与锁定校验（kairo / eui-neo / librealsense2）。
 # 需在定义目标前完成：EUI-NEO 的 eui_neo_configure_app() 依赖其配置阶段注册的入口源。
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "rin")
 include(Dependencies)

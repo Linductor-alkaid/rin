@@ -47,7 +47,7 @@
 
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <rin/camera_types.hpp>
 #include <rin/workflow_engine.hpp>
@@ -681,9 +681,9 @@ void testRealArrayGrid() {
 // --- 7. 节点中间产物有界缓存（对 M4-07 真引擎 + 合成帧源） ---
 
 void testNodeOutputCache() {
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
-    const bool initialized = executor.initialize(executorConfig);
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
     RIN_CHECK(initialized);
     if (!initialized) {
         return;
@@ -860,7 +860,7 @@ void testNodeOutputCache() {
     RIN_CHECK_MSG(cache.find(5) == nullptr, "cache: clear drains node 5");
 
     engine.reset();
-    RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
 // --- 8. 缩略图降采样 ---

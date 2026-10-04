@@ -13,7 +13,7 @@
 // 依次创建引擎 / start / stop / 析构 → shutdown(true)。引擎实例先于 executor
 // shutdown 结束生命周期；测量循环位于非 worker 线程（main）。
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include "engine.hpp"
 
@@ -224,7 +224,7 @@ bool pollUntil(Poll poll) {
 }
 
 /// 单轮测量：新引擎实例 → applyGraph/start → warmup → 测量窗 → 采样 → stop。
-RunResult runOnce(executor::Executor& executor, const ChainSpec& chain,
+RunResult runOnce(kairo::Executor& executor, const ChainSpec& chain,
                   rin::WorkflowFrameSource source) {
     RunResult result;
 
@@ -352,8 +352,8 @@ int main() {
                 static_cast<unsigned long long>(kMeasureFrames), kRepeats);
     std::printf("hw_concurrency=%u\n", std::thread::hardware_concurrency());
 
-    executor::Executor executor;
-    executor::ExecutorConfig executorConfig;
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
     if (!executor.initialize(executorConfig)) {
         std::fprintf(stderr, "executor initialize failed\n");
         return 1;

@@ -40,7 +40,7 @@ namespace rin {
 ///   {1,6,11,16,21,26,31,36}）；欠帧首帧填充、空历史全 0（对齐部署
 ///   参考 sample_depth_history 两分支）。单写者约定：append/sample 由
 ///   同一执行上下文调用（50 Hz 策略 tick 内），类不加内部锁；跨上下文
-///   使用由上层经 executor::comm 交付语义保证。
+///   使用由上层经 kairo::comm 交付语义保证。
 
 /// 单帧米制深度字节预算（镜像 kMaxImageBytes；848×480 F32 ≈ 1.6 MiB）。
 inline constexpr std::uint64_t kMaxDepthFrameBytes = 16u * 1024u * 1024u;

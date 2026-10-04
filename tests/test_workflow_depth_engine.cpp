@@ -30,7 +30,7 @@
 // 实现代码。
 #include "test_util.hpp"
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -57,7 +57,7 @@
 
 namespace {
 
-using executor::ShutdownResult;
+using kairo::ShutdownResult;
 using rin::IImageNode;
 using rin::ImageNodeFactory;
 using rin::ImageU8;
@@ -293,7 +293,7 @@ bool readLatestOutput(rin::IWorkflowEngine& engine, NodeId node, rin::NodeOutput
 /// 引擎运行骨架：独立 Executor + 引擎；析构按 owner 顺序回收（engine stop →
 /// executor shutdown）。
 struct EngineRun {
-    executor::Executor executor;
+    kairo::Executor executor;
     std::shared_ptr<rin::IWorkflowEngine> engine;
 
     ~EngineRun() {
@@ -309,7 +309,7 @@ std::unique_ptr<EngineRun> startEngine(
     std::chrono::milliseconds statefulDelay = std::chrono::milliseconds{0},
     std::chrono::milliseconds statelessDelay = std::chrono::milliseconds{0}) {
     auto run = std::make_unique<EngineRun>();
-    executor::ExecutorConfig executorConfig;
+    kairo::ExecutorConfig executorConfig;
     RIN_CHECK(run->executor.initialize(executorConfig));
     config.pumpInterval = std::chrono::milliseconds{2};
     config.frameSource = source.fn();

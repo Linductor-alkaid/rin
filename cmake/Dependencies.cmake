@@ -89,7 +89,7 @@ function(_rin_declare_external dep_name dep_url dep_commit)
     # 只保留运行时库本体，禁用示例/工具/更新检查/录制与静态捆绑，控制构建面与体积。
     # 注意：librealsense 的 cmake_minimum_required 为 3.10（CMP0077 OLD），普通变量会被
     # 其 option() 覆盖，必须写 cache FORCE 才能生效；cache 是全局持久的，配置完成后必须
-    # 恢复原值，否则会污染后续（或重配置时先行的）executor / eui-neo 构建面。
+    # 恢复原值，否则会污染后续（或重配置时先行的）kairo / eui-neo 构建面。
     if(dep_name STREQUAL "realsense2")
         foreach(_opt IN
                 ITEMS BUILD_SHARED_LIBS BUILD_EXAMPLES BUILD_GRAPHICAL_EXAMPLES

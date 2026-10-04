@@ -25,7 +25,7 @@
 
 #include <eui_neo.h>
 
-#include <executor/executor.hpp>
+#include <kairo/executor.hpp>
 
 #include <realsense_camera_service.hpp>
 
@@ -70,7 +70,7 @@ struct DeviceUiOption {
 };
 
 struct ViewerContext {
-    executor::Executor executor;
+    kairo::Executor executor;
     std::shared_ptr<rin::ICameraService> service;
     GpuFrameView rgbView;
     GpuFrameView depthView;
@@ -166,7 +166,7 @@ void refreshSourceRouter(ViewerContext& ctx) {
 void ensureStarted() {
     static const bool once = [] {
         ViewerContext& ctx = context();
-        if (const auto init = ctx.executor.initialize_ex({}); !init) {
+        if (const auto init = ctx.executor.initialize({}); !init) {
             ctx.startError = init.message;
             ctx.statusMessage = "executor init failed";
             return false;

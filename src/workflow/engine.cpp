@@ -2,10 +2,10 @@
 
 #include "rin/image_node.hpp"
 
-#include <executor/comm/channel.hpp>
-#include <executor/comm/mailbox.hpp>
-#include <executor/task_cancellation.hpp>
-#include <executor/timer.hpp>
+#include <kairo/comm/channel.hpp>
+#include <kairo/comm/mailbox.hpp>
+#include <kairo/task_cancellation.hpp>
+#include <kairo/timer.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -27,7 +27,7 @@
 namespace rin {
 namespace {
 
-using executor::comm::LatestMailbox;
+using kairo::comm::LatestMailbox;
 using workflow_detail::findNodeInstance;
 using workflow_detail::findParamDescriptor;
 using workflow_detail::paramValueMatches;
@@ -66,10 +66,10 @@ struct ParamCommand {
     ParamValue value;
 };
 
-executor::comm::ChannelOptions paramChannelOptions(std::size_t capacity) {
-    executor::comm::ChannelOptions options;
+kairo::comm::ChannelOptions paramChannelOptions(std::size_t capacity) {
+    kairo::comm::ChannelOptions options;
     options.capacity = capacity == 0 ? 1 : capacity;
-    options.drop_policy = executor::comm::DropPolicy::RejectNewest;
+    options.drop_policy = kairo::comm::DropPolicy::RejectNewest;
     options.enable_stats = true;
     options.name = "rin.workflow.params";
     return options;
@@ -79,11 +79,11 @@ executor::comm::ChannelOptions paramChannelOptions(std::size_t capacity) {
 
 /// M4-07 工作流真引擎（DEC-013 执行模型：帧泵采样 + 最新帧快照 + 有界在飞
 /// 显式丢弃）。线程模型与假引擎一致：控制面 owner 线程、观测面 UI 线程、
-/// 帧泵 tick 与帧任务在 Executor 上下文；全部跨上下文交接经 executor::comm。
+/// 帧泵 tick 与帧任务在 Executor 上下文；全部跨上下文交接经 kairo::comm。
 class WorkflowEngine final : public std::enable_shared_from_this<WorkflowEngine>,
                              public IWorkflowEngine {
 public:
-    WorkflowEngine(executor::Executor& executor, WorkflowEngineConfig config)
+    WorkflowEngine(kairo::Executor& executor, WorkflowEngineConfig config)
         : executor_(executor),
           config_(std::move(config)),
           paramQueue_(paramChannelOptions(config_.paramQueueCapacity)) {
@@ -275,11 +275,11 @@ public:
         effective_.store(std::move(generation));
 
         state_.store(WorkflowEngineState::Running, std::memory_order_relaxed);
-        timerHandle_ = executor_.submit_periodic_cancellable_with_handle(
+        timerHandle_ = executor_.submit_periodic_cancellable(
             static_cast<std::int64_t>(config_.pumpInterval.count()),
             // 掉队 tick 生命周期闭合：闭包只持弱引用（假引擎同款，见 M5-08）。
             [weak =
-                 std::weak_ptr<WorkflowEngine>(shared_from_this())](executor::StopToken tickToken) {
+                 std::weak_ptr<WorkflowEngine>(shared_from_this())](kairo::StopToken tickToken) {
                 if (std::shared_ptr<WorkflowEngine> self = weak.lock()) {
                     self->tick(tickToken);
                 }
@@ -384,7 +384,7 @@ private:
     using GenerationPtr = std::shared_ptr<const Generation>;
 
     struct InFlight {
-        executor::TaskHandle handle;
+        kairo::TaskHandle handle;
         std::future<void> future;
     };
 
@@ -466,7 +466,7 @@ private:
     // --- 帧泵（tick 在 Executor 周期任务上下文；持 lifecycleMutex_ 贯穿，
     //        与 stop()/applyGraph()/requestParamUpdate() 互斥） ---
 
-    void tick(executor::StopToken /*tickToken*/) {
+    void tick(kairo::StopToken /*tickToken*/) {
         std::scoped_lock lock(lifecycleMutex_);
         if (state_.load(std::memory_order_relaxed) != WorkflowEngineState::Running) {
             return;
@@ -532,8 +532,8 @@ private:
         auto inputs =
             std::make_shared<const std::unordered_map<NodeId, WorkflowFrameInput>>(staged_);
         const std::uint64_t frameSeq = ++submitSeq_;
-        executor::TaskSubmission<void> submission = executor_.submit_cancellable(
-            [this, current, inputs, frameSeq](executor::StopToken token) {
+        kairo::TaskSubmission<void> submission = executor_.submit_cancellable(
+            [this, current, inputs, frameSeq](kairo::StopToken token) {
                 executeFrame(current, inputs, frameSeq, token);
             });
         if (!submission.handle.valid()) {
@@ -665,7 +665,7 @@ private:
     void executeFrame(
         const GenerationPtr& generation,
         const std::shared_ptr<const std::unordered_map<NodeId, WorkflowFrameInput>>& inputs,
-        std::uint64_t frameSeq, executor::StopToken token) {
+        std::uint64_t frameSeq, kairo::StopToken token) {
         // 帧边界取消检查（DEC-013：取消在帧边界生效；已开始的帧为有界工作
         // 单元，完整完成并发布，不在节点间中断）。
         if (token.stop_requested()) {
@@ -819,7 +819,7 @@ private:
     void handleTaskFailure(std::exception_ptr error) {
         try {
             std::rethrow_exception(std::move(error));
-        } catch (const executor::TaskCancelled&) {
+        } catch (const kairo::TaskCancelled&) {
             return;  // 取消不是失败（stop 排空/关停清理）。
         } catch (const WorkflowNodeFailure& failure) {
             reportFailure(failure.node(), failure.what());
@@ -851,7 +851,7 @@ private:
     void consumeFailureDuringStop(std::exception_ptr error) {
         try {
             std::rethrow_exception(std::move(error));
-        } catch (const executor::TaskCancelled&) {
+        } catch (const kairo::TaskCancelled&) {
             return;
         } catch (const WorkflowNodeFailure& failure) {
             setLastError(failure.what());
@@ -938,13 +938,13 @@ private:
         lastError_ = message;
     }
 
-    executor::Executor& executor_;
+    kairo::Executor& executor_;
     WorkflowEngineConfig config_;
 
     LatestMailbox<WorkflowStats> stats_{"rin.workflow.stats"};
     LatestMailbox<WorkflowEvent> events_{"rin.workflow.events"};
     LatestMailbox<PendingGraph> graphQueue_{"rin.workflow.graph"};
-    executor::comm::MpscChannel<ParamCommand> paramQueue_;
+    kairo::comm::MpscChannel<ParamCommand> paramQueue_;
 
     std::atomic<GenerationPtr> effective_{nullptr};
     std::shared_ptr<const WorkflowGraph> pendingStart_;  // owner 线程（lifecycleMutex_ 下）
@@ -956,7 +956,7 @@ private:
     std::atomic<std::size_t> inFlightCount_{0};
     std::atomic<std::uint64_t> droppedFrames_{0};
     std::atomic<WorkflowEngineState> state_{WorkflowEngineState::Idle};
-    executor::TimerHandle timerHandle_{};
+    kairo::TimerHandle timerHandle_{};
     std::string buildFailureMessage_;  // buildGeneration 失败原因（lifecycleMutex_ 下）
     std::uint64_t submitSeq_ = 0;      // 帧提交序（lifecycleMutex_ 下）
 
@@ -980,7 +980,7 @@ private:
 
 namespace rin {
 
-std::shared_ptr<IWorkflowEngine> createWorkflowEngine(executor::Executor& executor,
+std::shared_ptr<IWorkflowEngine> createWorkflowEngine(kairo::Executor& executor,
                                                       WorkflowEngineConfig config) {
     if (!config.frameSource) {
         throw std::invalid_argument("workflow engine: frameSource must be set");

@@ -29,8 +29,8 @@
 // 试生产者不抛出，异常路径由 Executor 自身设施保证）。
 #include "test_util.hpp"
 
-#include <executor/comm/mailbox.hpp>
-#include <executor/executor.hpp>
+#include <kairo/comm/mailbox.hpp>
+#include <kairo/executor.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -42,7 +42,7 @@
 
 namespace {
 
-using executor::comm::LatestMailbox;
+using kairo::comm::LatestMailbox;
 using rin::detail::createImuFuser;
 using rin::detail::ImuFuser;
 using rin::detail::MotionIngest;
@@ -404,8 +404,8 @@ int main() {
 
     // --- 10) 跨上下文（Executor 生产者 + 主线程消费者）+ shutdown ---
     {
-        executor::Executor executor;
-        RIN_CHECK(executor.initialize_ex({}));
+        kairo::Executor executor;
+        RIN_CHECK(executor.initialize({}));
 
         LatestMailbox<MotionSample> motion{"test.motion.concurrent"};
         LatestMailbox<ImuSnapshot> pose{"test.pose.concurrent"};

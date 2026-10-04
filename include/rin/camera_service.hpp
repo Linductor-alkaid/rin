@@ -6,7 +6,7 @@ namespace rin {
 
 /// 相机服务契约：生命周期入口 + 有界最新态数据通道。
 ///
-/// 公开头零第三方类型（RULE-01）；实现方（adapter）内部用 executor::comm 邮箱承载，
+/// 公开头零第三方类型（RULE-01）；实现方（adapter）内部用 kairo::comm 邮箱承载，
 /// 以 "上次已见序号" 语义向调用方暴露最新快照。
 ///
 /// 线程模型：start/stop/requestResolution 供 owner 线程（主线程）调用；

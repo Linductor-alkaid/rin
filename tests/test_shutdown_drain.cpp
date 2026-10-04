@@ -38,8 +38,8 @@
 // 轮询以有界尝试数上限兜底（不悬挂即超时防线）。
 #include "test_util.hpp"
 
-#include <executor/comm/mailbox.hpp>
-#include <executor/executor.hpp>
+#include <kairo/comm/mailbox.hpp>
+#include <kairo/executor.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -52,7 +52,7 @@
 
 namespace {
 
-using executor::comm::LatestMailbox;
+using kairo::comm::LatestMailbox;
 using rin::detail::createImuFuser;
 using rin::detail::MotionIngest;
 using rin::ImuSnapshot;
@@ -118,8 +118,8 @@ bool approx(float value, float expected, float tolerance) {
 int main() {
     // --- 1) + 2) 正常完成：跨上下文发布/消费；停止后无新发布 ---
     {
-        executor::Executor executor;
-        RIN_CHECK(executor.initialize_ex({}));
+        kairo::Executor executor;
+        RIN_CHECK(executor.initialize({}));
 
         LatestMailbox<MotionSample> motion{"test.drain.motion.main"};
         LatestMailbox<ImuSnapshot> pose{"test.drain.pose.main"};
@@ -201,13 +201,13 @@ int main() {
         RIN_CHECK((view.baseline == std::array<float, 4>{1.0f, 0.0f, 0.0f, 0.0f}));
 
         // --- 4) 关闭顺序收尾：排空完成后 executor.shutdown(true)（主线程）收敛 ---
-        RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+        RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
     }
 
     // --- 5) 任务异常（DOD-02）：生产者中掷异常 → 传播可观察 → 排空/shutdown 仍收敛 ---
     {
-        executor::Executor executor;
-        RIN_CHECK(executor.initialize_ex({}));
+        kairo::Executor executor;
+        RIN_CHECK(executor.initialize({}));
 
         LatestMailbox<MotionSample> motion{"test.drain.motion.fail"};
         LatestMailbox<ImuSnapshot> pose{"test.drain.pose.fail"};
@@ -237,13 +237,13 @@ int main() {
         // 失败路径下同样走排空 → shutdown（viewer 对 Failed 事件的处置同构）。
         pumpPose(pose, lastSeen, view, UiStreamState::Other);
         RIN_CHECK(!view.available);
-        RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+        RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
     }
 
     // --- 6) 排空后新会话：复活只能来自新会话新数据（序号连续、不回退）---
     {
-        executor::Executor executor;
-        RIN_CHECK(executor.initialize_ex({}));
+        kairo::Executor executor;
+        RIN_CHECK(executor.initialize({}));
 
         LatestMailbox<MotionSample> motion{"test.drain.motion.session"};
         LatestMailbox<ImuSnapshot> pose{"test.drain.pose.session"};
@@ -292,7 +292,7 @@ int main() {
 
         pumpPose(pose, lastSeen, view, UiStreamState::Other);
         RIN_CHECK(!view.available);
-        RIN_CHECK(executor.shutdown(true) == executor::ShutdownResult::Completed);
+        RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
     }
 
     return rin_test::exitStatus();
