@@ -103,6 +103,16 @@
   改动全部回滚，绕行恢复。勘误：dev 验证会话（2026-10-03）中"gpu_image_probe
   通过 ⇒ #71 已验证"的推断不成立——该探针覆盖的是 `importGpuImage` 外部导入
   路径（即绕行所走路径），非 ImageStream 上传路径。待持探针证据跟进上游 #71。
+  2026-10-04 同机 A/B 对照（独立验证，bundled GLFW 3.4 X11 + Mesa 25.2.8，
+  唯一变量为 eui 版本）：OLD `782c569` / NEW `4691fc0` × 官方 dynamic_texture
+  / RGBA8 合成探针四格——RGBA8 探针在两版症状**逐位一致**（仅 x=52-53 两条
+  2px 窄条帧间变化 0.18%、图像区其余逐像素冻结、seq 正常推进；交叉验证含
+  Rin 构建树二进制三份一致），判定 e5ca594 对该症状零改善。官方 YUV 示例在
+  两版均正常——2026-09 报告中的"竖向色带"未在 GLFW 3.4 环境复现（当时为
+  系统 GLFW 3.3），该簇症状疑与 GLFW/环境相关，与 RGBA8 窄条非同因。上游
+  修复配套探针仅做 `glGetTexImage` 内容回读验证、不覆盖屏幕渲染结果，故其
+  通过不构成修复有效的证据。附加线索：探针在同上下文含 EUI 文字渲染时即
+  复现，指向同上下文其他 GL 上传方与 ImageStream 渲染路径的交互。
 
 ### EUI-20260923-004：`eui_neo_configure_app` 目标被施加 `-fno-exceptions`，与 Executor 异常式 API 冲突
 
@@ -313,7 +323,7 @@
 | --- | --- | --- | --- |
 | EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
-| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 真机回归证实 dev e5ca594 对本机无效（合成探针独立复现），切回已回滚，待持证据跟进上游 |
+| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 同机 A/B 证实 e5ca594 对 RGBA8 流路径零改善（症状逐位一致），切回已回滚，待持证据跟进上游 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
