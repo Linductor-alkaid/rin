@@ -246,8 +246,13 @@
   dev 包、走默认 Wayland+X11。
 - 移除条件：上游修复 #79 并被锁定版本包含后，恢复 `FetchContent_MakeAvailable`
   原生路径并删除该特例。
-- 状态：Reported（上游 issue sudoevolve/EUI-NEO#79）
-- 跟进：2026-10-03 登记；2026-10-03 在干净 dev 检出复现并上报 #79。
+- 状态：PR 已提交（上游 sudoevolve/EUI-NEO#85；2026-10-05 受开发者邀请在
+  Linux 本机复现、修复并提交）
+- 跟进：2026-10-03 登记；同日干净 dev 检出复现并上报 #79。2026-10-05 修复：
+  `window_backend.cpp` 桌面标识 hint 宏守卫 + auto 模式 `find_package(glfw3 3.4)`
+  回退 bundled（PR #85）。独立验证：预定义系统 3.3 目标路径编译通过（阴性
+  对照 base 复现报错）、auto 回退 bundled 生效、bundled 3.4 下 `.appId` 运行时
+  WM_CLASS 读回一致；上游合并后随锁清单升级移除 Rin 侧同型绕行。
 
 ### EUI-20261003-002：dev `4691fc0` GLFW X11 IME 补丁脚本哈希常量与真实 GLFW 3.4 不符，bundled/fetch 路径配置期 FATAL
 
@@ -277,7 +282,13 @@
   校正（`expected_output_hash` → `8CE625AA...`），仅供跑上游自带测试套件使用，
   不影响 Rin 构建。
 - 移除条件：上游修正脚本（#80）并被锁定版本包含后，恢复原生路径并还原本地克隆。
-- 状态：Reported（上游 issue sudoevolve/EUI-NEO#80；哈希取证：官方 3.4=`7C5A60A5...`、脚本变换产物=dev 捆绑文件=`8CE625AA...`）
+- 状态：PR 已提交（上游 sudoevolve/EUI-NEO#84；d7ccfc2 仅修正 source hash，
+  output hash 仍错——Linux bundled/fetch 双路径 configure 期依然 FATAL，已在
+  #80 评论附证据并提一行修复 PR #84）
+- 跟进：2026-10-03 登记+哈希取证（官方 3.4=`7C5A60A5...`、变换产物=dev 捆绑
+  文件=`8CE625AA...`）；2026-10-04 上游 d7ccfc2 关闭 #80（半修）；2026-10-05
+  复测发现残余缺陷（bundled 源 8CE625AA 两分支均不匹配 / fetch 产物校验
+  mismatch），评论 #80 + PR #84（expected_output_hash → 8CE625AA）。
 - 跟进：2026-10-03 登记。
 
 ### EUI-20261003-003：dev `c7efcf1`（#76 修复）在库本体引入 `catch(...)`，与 `eui_apply_compile_options` 非 Debug 的 `-fno-exceptions` 冲突，eui_neo 库非 Debug 配置无法编译
@@ -304,7 +315,13 @@
   的 app 目标绕行同型；Debug 配置上游本就不施加）。本机 debug/release 两预设
   全量构建验证通过。
 - 移除条件：上游修复 #81 并被锁定版本包含后，删除该追加。
-- 状态：Reported（上游 issue sudoevolve/EUI-NEO#81；干净 dev 检出 + bundled + Release 复现 platform.cpp:286 编译失败）
+- 状态：PR 已提交（上游 sudoevolve/EUI-NEO#86；2026-10-05 受开发者邀请在
+  Linux 本机复现、修复并提交）
+- 跟进：2026-10-03 登记；同日干净 dev 检出 + Release 复现 platform.cpp:286
+  编译失败。2026-10-05 修复：`temp_directory_path()` 抛出重载 + `catch(...)`
+  改 `error_code` 非抛出重载（PR #86）。独立验证：Release `-fno-exceptions`
+  下库本体建成；platform_dialog Debug 常规通过 + Release 经 `-fexceptions`
+  fixture 链接 Release 库运行通过。附带发现测试侧同型缺口（上游 #87）。
 
 ### EUI-20261003-004：上游测试 `tests/unit/image_stream.cpp` 与实现脱节，Debug 构建下确定性 SIGABRT
 
@@ -317,7 +334,24 @@
   - 与本次 5 个修复提交无关（e5ca594 未触碰该文件），为 dev HEAD 既有脱节。
 - 影响：上游测试套件在 Debug 下不可用（本次验证 33 项中唯一失败）。
 - 期望语义：测试断言与当前实现语义对齐（BGRA8 合法或恢复拒绝）。
-- 状态：Reported（上游 issue sudoevolve/EUI-NEO#82；Debug 构建下 3/3 复现 SIGABRT）
+- 状态：Resolved（上游 #82 已由 dev `123f0c5` 修复：BGRA8 用例更新，2026-10-05
+  Release/Debug 复测均通过）
+- 跟进：2026-10-03 登记+上报；2026-10-05 上游修复复测关闭。
+
+### EUI-20261005-001：非 Debug 配置下测试夹具与应用目标自身异常语法与 `-fno-exceptions` 冲突
+
+- 级别：P3（上游测试构建缺陷：`EUI_BUILD_TEST_FIXTURES=ON` 的 Release 下
+  `platform_dialog`/`dsl_app_lifecycle_probe` 等编不过、ctest Not Run；不阻断
+  Rin 集成——Rin 不构建上游 fixtures）
+- 现象/证据（2026-10-05，dev `123f0c5`，验证 #81 修复时发现）：`tests/unit/
+  platform_dialog.cpp:17` 的 `throw` 与 `include/eui/detail/dsl_app_impl.h:301`
+  的 try/catch 在豁免清单（仅 vcd_viewer/gpu_image_probe）之外，Release 33 项
+  ctest 31 过 2 Not Run；base 123f0c5 即如此（预存在）。platform_dialog 以
+  `-fexceptions` fixture 链接 Release（`-fno-exceptions`）库本体运行通过
+  （exit 0），逻辑本身可跑。
+- 状态：Reported（上游 issue sudoevolve/EUI-NEO#87）
+- 跟进：2026-10-05 登记 + 上报 #87（建议：断言改非抛出或豁免清单补测试/应用
+  目标）。
 
 ## 跟进记录表
 
@@ -329,10 +363,11 @@
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
-| EUI-20261003-001 | Reported | P2 | 上游 #79；dev `d7b15ea` 硬依赖 GLFW 3.4，auto+系统 3.3 编译失败；绕行 `-DEUI_DEPS_MODE=bundled -DGLFW_BUILD_WAYLAND=OFF` |
-| EUI-20261003-002 | Reported | P2 | 上游 #80；dev `4691fc0` IME 补丁脚本哈希常量与真实 GLFW 3.4 不符（取证：变换产物=dev 捆绑文件=`8CE625AA...`）；本地测试克隆哈希校正绕行（未提交） |
-| EUI-20261003-003 | Reported | P1 | 上游 #81；dev `c7efcf1` 库本体 `catch(...)` × 非 Debug `-fno-exceptions`，release/dist 预设阻断；`-fexceptions` 追加绕行已实施 |
-| EUI-20261003-004 | Reported | P3 | 上游 #82；`tests/unit/image_stream.cpp` 陈旧断言（源自 a969ed5），Debug 下确定性 SIGABRT，与 5 个修复提交无关 |
+| EUI-20261003-001 | PR 提交 | P2 | 上游 #79 → PR #85（2026-10-05 Linux 本机修复+验证）；Rin 侧 bundled 绕行维持至上游合并 |
+| EUI-20261003-002 | PR 提交 | P2 | 上游 #80 半修（d7ccfc2 仅 source hash）；残余 output hash 缺陷评论 #80 + PR #84（2026-10-05） |
+| EUI-20261003-003 | PR 提交 | P1 | 上游 #81 → PR #86（2026-10-05 error_code 非抛出重载修复+验证）；Rin 侧 `-fexceptions` 追加绕行维持至上游合并 |
+| EUI-20261003-004 | Resolved | P3 | 上游 #82 已由 123f0c5 修复（`tests/unit/image_stream.cpp` 陈旧断言，2026-10-05 Release/Debug 复测通过） |
+| EUI-20261005-001 | Reported | P3 | 上游 #87；Release 下测试夹具/应用目标异常语法编不过（platform_dialog throw、dsl_app_impl try/catch），预存在豁免缺口；不阻断 Rin |
 
 ## dev 分支验证会话（2026-10-03）
 
