@@ -2013,7 +2013,9 @@ inline void composeWorkflowResolutionMenu(eui::Ui& ui, WorkflowCanvasState& stat
                     .states(transparent, tokens.menuHover, tokens.menuHover)
                     .onClick([&state, cameraResolution, index] {
                         state.resolutionMenuOpen = false;
-                        cameraResolution->onPick(index);
+                        if (cameraResolution->onPick) {
+                            cameraResolution->onPick(index);
+                        }
                     })
                     .build();
                 ui.text(base + ".label")
