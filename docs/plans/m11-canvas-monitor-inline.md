@@ -154,4 +154,15 @@ pipeline/enable_device/独立枚举 context/内参读取）不换档正常、换
 848x480→1280x720 后帧计数持续增长（227→632/14s）、引擎保持 Running、
 "resolution applied"。
 
+2026-10-07（晚）：**用户验收通过后追加需求：监看器视窗大小可调**。落地：
+`CanvasNode::monitorPreviewHeight`（节点级 UI 私有状态，position 先例；默认
+kMonitorPreviewHeight=140，范围 [96,640]，拖拽写入即夹取）；几何族
+nodeHeight/nodeBounds/portPosition/portsOffsetY 增尾参 monitorPreviewHeight
+（默认参数保持旧调用兼容，模型命中/框选/连线全链路携带节点值）；预览窗
+右下角缩放手柄（三道斜杠视觉 + mouseArea 拖拽，dockDrag 槽位 2 与页面
+分隔条互斥；向下拖增高，画布单位增量随缩放换算），端口锚点随高度联动
+（revision 驱动连线重绘）；未运行占位符态亦可缩放。验证（像素差分断言）：
+程序化置 height=400 后节点底缘 y=1216=(108+40+460)×2 精确匹配公式，
+默认底缘 696=(148+200)×2；拖拽手势归用户验收。
+
 **遗留观察**（非 M11 回归）：M10 深度域 typeId（`source_depth_metric`/`depth_*`）不在 `paletteGroupFor` 分组表，调色板落 "Other"（HEAD 同此，M10 遗留呈现缺口，建议择期登记修复）；conv_kernel 的 size 枚举切换不自动重排 kernel 形状（M5-04 既有语义保持，切换后需手动 R+/C+ 步进，否则构造期拒绝经 NodeFailed 呈现）。

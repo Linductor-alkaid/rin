@@ -154,7 +154,8 @@ struct WorkflowCanvasState {
     /// 调色板宽与底部高可调，会话级，不持久化。
     float paletteWidth = 200.0f;  /// 调色板宽 [150, 400]
     float bottomHeight = 120.0f;  /// 底部校验/事件区高 [72, 300]
-    /// 活动分隔条（-1 无；0 = palette 右缘、1 = 底部上缘）与拖拽起始。
+    /// 活动拖拽槽位（-1 无；0 = palette 右缘、1 = 底部上缘分隔条；
+    /// 2 = 监看器预览缩放手柄，M11 验收反馈）与拖拽起始。
     int dockDrag = -1;
     float dockDragStartPointer = 0.0f;
     float dockDragStartValue = 0.0f;
@@ -1186,7 +1187,10 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
     const float s = state.view.scale;
     const CanvasPoint origin = state.view.toScreen(node.position);
     const float w = kNodeWidth * s;
-    const float h = nodeHeight(*descriptor, node.params) * s;
+    const float h = nodeHeight(*descriptor, node.params, node.monitorPreviewHeight) * s;
+    // 预览高度 compose 期夹取（手柄拖拽写入原始值，此处归一呈现与几何）。
+    const float previewH = std::clamp(node.monitorPreviewHeight, kMonitorPreviewMinHeight,
+                                      kMonitorPreviewMaxHeight);
     const bool selected =
         std::find(state.model.selection.begin(), state.model.selection.end(), node.id) !=
         state.model.selection.end();
@@ -1241,12 +1245,12 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
             // contain 适配预览区；meta 行悬浮右上（宽高 · 源帧序号）。
             if (monitor) {
                 const float previewY = (kNodeHeaderHeight + kParamSectionGap * 0.5f) * s;
-                const float previewH = (kMonitorPreviewHeight - kParamSectionGap * 0.5f) * s;
+                const float previewHpx = (previewH - kParamSectionGap * 0.5f) * s;
                 const float previewW = (kNodeWidth - kParamPadX * 2.0f) * s;
                 const float previewX = kParamPadX * s;
                 ui.rect(base + ".previewArea")
                     .position(previewX, previewY)
-                    .size(previewW, previewH)
+                    .size(previewW, previewHpx)
                     .radius(kRadiusSm * s)
                     .color(tokens.surface)
                     .border(kBorderHairline, tokens.border)
@@ -1255,7 +1259,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                                                                  it->second.view.valid()) {
                     ui.image(base + ".previewImg")
                         .position(previewX, previewY)
-                        .size(previewW, previewH)
+                        .size(previewW, previewHpx)
                         .texture(it->second.view.image(), it->second.view.revision())
                         .contain()
                         .radius(kRadiusSm * s)
@@ -1275,7 +1279,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                 } else {
                     ui.text(base + ".previewEmpty")
                         .position(previewX, previewY)
-                        .size(previewW, previewH)
+                        .size(previewW, previewHpx)
                         .text("connect & run to preview")
                         .fontSize(scaledFont(kFontXs, s, 6.0f))
                         .color(tokens.fgSubtlest)
@@ -1283,6 +1287,56 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                         .verticalAlign(eui::VerticalAlign::Center)
                         .build();
                 }
+                    // 缩放手柄（M11 验收反馈：视窗大小可调）——预览窗右下角
+                    // 三道斜杠示意；拖拽改节点级 previewHeight（画布单位，向下
+                    // 增高），compose 期夹取 [min,max]。回调按值捕获节点 id。
+                    const float grip = 14.0f * s;
+                    const float gripX = previewX + previewW - grip;
+                    const float gripY = previewY + previewHpx - grip;
+                    for (int g = 1; g <= 3; ++g) {
+                        const float off = 3.0f * s * static_cast<float>(g);
+                        ui.rect(base + ".grip" + std::to_string(g))
+                            .position(gripX + grip - off - 2.0f * s, gripY + off)
+                            .size(8.0f * s, std::max(1.0f, 1.5f * s))
+                            .radius(std::max(0.5f, 0.75f * s))
+                            .color(tokens.fgSubtlest)
+                            .build();
+                    }
+                    const rin::NodeId gripNode = node.id;
+                    components::mouseArea(ui, base + ".gripHit")
+                        .position(gripX - 4.0f * s, gripY - 4.0f * s)
+                        .size(grip + 8.0f * s, grip + 8.0f * s)
+                        .cursor(eui::CursorShape::Hand)  // EUI 仅 Arrow/Hand（input_types.h），与分隔条同款
+                        .onDragStart([&state, gripNode, s](const components::MouseEvent& event) {
+                            state.dockDrag = 2;  // 复用布局拖拽槽位语义（-1 无、
+                            state.dockDragStartPointer = event.globalY;  // 0/1 页面分隔条、
+                            if (CanvasNode* n = state.model.findNode(gripNode)) {  // 2 手柄）
+                                state.dockDragStartValue = n->monitorPreviewHeight;
+                            }
+                            (void)s;
+                        })
+                        .onDrag([&state, gripNode](const components::MouseDragEvent& event) {
+                            if (state.dockDrag != 2) {
+                                return;
+                            }
+                            if (CanvasNode* n = state.model.findNode(gripNode)) {
+                                n->monitorPreviewHeight =
+                                    std::clamp(state.dockDragStartValue +
+                                                   (event.globalY -
+                                                    state.dockDragStartPointer) /
+                                                       state.view.scale,
+                                               kMonitorPreviewMinHeight,
+                                               kMonitorPreviewMaxHeight);
+                                ++state.revision;  // 端口锚点随高度移动，连线重绘。
+                            }
+                        })
+                        .onDragEnd([&state](const components::MouseEvent&) {
+                            if (state.dockDrag == 2) {
+                                state.dockDrag = -1;
+                            }
+                        })
+                        .build();
+
             } else {
                 // 内嵌参数区（M11/DEC-021 决策 3）。
                 composeInlineParams(ui, state, node, *descriptor, engine, cameraResolution, s);
