@@ -1002,6 +1002,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 composeWorkflowCreateMenu(ui, ctx.workflowCanvas, ctx.workflow.get(), screen.width,
                                           screen.height);
                 composeWorkflowDragGhost(ui, ctx.workflowCanvas);
+                ctx.cameraResolutionBinding.selectedIndex = ctx.resolutionIndex.get();
+                composeWorkflowResolutionMenu(ui, ctx.workflowCanvas, &ctx.cameraResolutionBinding,
+                                              screen.width, screen.height);
             } else if (ctx.nav.current == WorkbenchPage::Preview) {
                 std::vector<std::string> deviceLabels;
                 deviceLabels.reserve(ctx.deviceOptions.size());
@@ -1113,6 +1116,7 @@ DslAppConfig makeDslAppConfig() {
                             canvas.menuOpen = false;
                             canvas.menuFilter.set("");
                         }
+                        canvas.resolutionMenuOpen = false;
                         // 取消进行中的拖拽（框选/连线/平移；§5.3 空白松开语义）。
                         canvas.interaction.mode = viewer::InteractionMode::None;
                         canvas.interaction.draggedNode = rin::kInvalidNode;

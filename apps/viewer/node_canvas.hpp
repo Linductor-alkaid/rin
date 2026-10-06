@@ -833,10 +833,11 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
             .maxWidth(innerW * 0.55f * s)
             .build();
         // 下拉触发器（M11 验收反馈：下拉选择；点击打开窗口级选项浮层，
-        // composeWorkflowResolutionMenu）。触发用 rect.onClick——与本位置
-        // 既有实证机制一致（M11 首轮点击循环胶囊即此路径；components::
-        // mouseArea 在此嵌套下不响应，验收实证）。浮层窗口坐标 compose 期
-        // 精确计算（画布区矩形 + 节点屏幕原点 + 触发器屏幕偏移）。
+        // composeWorkflowResolutionMenu，由 app.cpp overlay 层合成）。触发用
+        // rect.onClick；浮层窗口坐标 compose 期精确计算（画布区矩形 + 节点
+        // 屏幕原点 + 触发器屏幕偏移）。勘误（resolve 升级分析）：首版
+        // "mouseArea 在此嵌套下不响应"的结论不成立——EUI 输入路径经无头
+        // 探针实证正常，真实断点是浮层 composer 从未接线。
         const float pillW = innerW * 0.45f - kSpace1;
         const float pillX = (innerX + innerW - pillW) * s;
         const float pillY = (rowY + 2.0f) * s;
@@ -852,6 +853,7 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
             .border(kBorderHairline, tokens.inputBorder)
             .states(tokens.input, tokens.inputBorderHover, tokens.inputBorderHover)
             .onClick([&state, menuX, menuY] {
+                state.menuOpen = false;  // 与创建菜单互斥（双 scrim 不可叠加）。
                 state.resolutionMenuOpen = true;
                 state.resolutionMenuPos = {menuX, menuY};
             })
@@ -1418,6 +1420,16 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                                                   event.modifiers.alt);
                     if (!result.message.empty()) {
                         state.feedback = result.message;
+                    }
+                    if (result.kind == PressResult::Kind::ContextMenu) {
+                        // 右键空白处打开创建菜单（§5.2.2；menuPos 为窗口坐标，
+                        // composeWorkflowCreateMenu 全窗浮层）。接线修复：自
+                        // M5-03 起 menuOpen 仅被消费从未被置位，真实右键从未
+                        // 打开过（脚本化验证只直改状态），随 M11 验收排查一并
+                        // 修复；与分辨率浮层互斥（双 scrim 不可叠加）。
+                        state.menuOpen = true;
+                        state.menuPos = {event.globalX, event.globalY};
+                        state.resolutionMenuOpen = false;
                     }
                     if (result.graphChanged) {
                         // 右键删除节点等即时变更：与松开路径同一引擎同步出口。
