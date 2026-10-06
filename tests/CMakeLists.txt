@@ -242,6 +242,28 @@ target_include_directories(test_node_canvas PRIVATE
 add_test(NAME node_canvas COMMAND test_node_canvas)
 set_tests_properties(node_canvas PROPERTIES LABELS "unit")
 
+# M11 监看器节点与 Any 端口类型契约（DEC-021；Independent Verification Agent
+# 设计）：PortType::Any 基元（toString/elementSize=0/make+wrap 拒绝）、
+# validateWorkflowGraph Any 判据全矩阵（Any 输入×三具体型输出合法、Any 输出→
+# 具体型输入 TypeMismatch、Any→Any 合法、等值/错配回归）、默认目录 viewer 项
+# （签名 Any→Any、无参数、追加于末尾、source 居首、既有 22 项顺序不变）、
+# 恒等节点（透传零拷贝、输入数≠1/无效图抛 invalid_argument）、runNodeGraph
+# 三格式注入集成（viewer 输出与注入帧逐字节一致 + Any 输出防御核对）、
+# canvas_model M11 纯逻辑（paramSectionHeight 全分支含 RealArray 实例形状
+# 9→3/25→5、viewer 节点高度/端口偏移、connect Any 判据、portAt 跳过监看器
+# 输出端口、View 分组、isMonitorNode/isCameraSourceNode 谓词）。单线程纯逻辑
+# （DOD-02 矩阵不适用）；WorkflowCanvasState 清扫与 pump 生命周期语义需
+# eui_neo/真引擎，在 test_run_control 覆盖。
+add_executable(test_monitor_any test_monitor_any.cpp)
+target_link_libraries(test_monitor_any PRIVATE rin::core)
+target_include_directories(test_monitor_any PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include
+    # 默认目录单一事实源（纯头文件，与 test_workflow_contracts 同纪律）。
+    ${CMAKE_SOURCE_DIR}/src/workflow)
+add_test(NAME monitor_any COMMAND test_monitor_any)
+set_tests_properties(monitor_any PROPERTIES LABELS "unit")
+
 # M5-04 参数面板与中间结果查看纯逻辑（apps/viewer/param_model.hpp 与
 # canvas_model.hpp 参数赋值变换，DEC-015 决策 2；ui_workspace_design.md
 # §5.5/§5.6/§7 测试清单）：控件-参数绑定（严格文本解析、值对声明校验——种类/

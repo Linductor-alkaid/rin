@@ -340,7 +340,7 @@ void testViewTransform() {
         const rin::NodeId ib = make(fx.model, "a", 500.0f, 200.0f);
         RIN_CHECK((ia != rin::kInvalidNode && ib != rin::kInvalidNode));
         const viewer::CanvasRect bounds = fx.model.graphBounds();
-        RIN_CHECK_MSG((bounds.x == 0.0f && bounds.y == 0.0f && nearF(bounds.width, 648.0f) &&
+        RIN_CHECK_MSG((bounds.x == 0.0f && bounds.y == 0.0f && nearF(bounds.width, 700.0f) &&
                        nearF(bounds.height, 254.0f)),
                       "graphBounds is the union of node bounds");
         viewer::CanvasView view;
@@ -372,31 +372,87 @@ void testGeometry() {
         return;
     }
 
-    // nodeHeight = 26 + max(inputs, outputs, 1)*20 + 8。
-    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*a), 54.0f), "a: 26+1*20+8");
-    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*b), 74.0f), "b: 26+2*20+8");
-    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*c), 54.0f), "c: 26+1*20+8");
+    // nodeHeight = 26 + 参数区 + max(inputs, outputs, 1)*20 + 8（M11/DEC-021 起
+    // 参数区参与几何：无参数且非相机源为 0，标量参数行 14+12 + 行间距 4 + 首距 6）。
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*a), 54.0f), "a: 26+0+1*20+8 (no params)");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*b), 74.0f), "b: 26+0+2*20+8");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*c), 90.0f),
+                  "c: 26+(6+26+4)+1*20+8 (one ranged Real param row)");
     RIN_CHECK_MSG(nearF(viewer::nodeHeight(*monitor), 54.0f),
                   "monitor: 0 inputs falls back to 1 row");
     RIN_CHECK_MSG(nearF(viewer::nodeHeight(*blank), 54.0f), "blank: no ports still one row");
+    // 带 RealArray 参数（默认 9 值 → 3x3）时高度随实例赋值形状联动（M11）。
+    {
+        rin::NodeCatalog arrayCatalog;
+        rin::ParamDescriptor kernel;
+        kernel.id = "kernel";
+        kernel.label = "Kernel";
+        kernel.kind = rin::ParamKind::RealArray;
+        kernel.defaultValue = std::vector<double>{0, 0, 0, 0, 1, 0, 0, 0, 0};
+        arrayCatalog.nodes.push_back(
+            {"arr", "Array", {rin::PortType::Gray8}, {rin::PortType::Gray8}, {kernel}});
+        const rin::NodeDescriptor* arr = rin::findNodeDescriptor(arrayCatalog, "arr");
+        RIN_CHECK(arr != nullptr);
+        if (arr != nullptr) {
+            // 默认 9 值 → fromFlat 3x3 → 形状行 14 + 3*20 网格 + 行间距 4 + 首距 6。
+            RIN_CHECK_MSG(nearF(viewer::nodeHeight(*arr), 26.0f + 6.0f + 14.0f + 60.0f + 4.0f +
+                                              20.0f + 8.0f),
+                          "arr default: 3x3 grid rows");
+            // 实例赋值 25 值 → 5x5 网格（行数随实例形状联动）。
+            std::vector<rin::ParamAssignment> wide;
+            wide.push_back({"kernel", std::vector<double>(25, 1.0)});
+            RIN_CHECK_MSG(nearF(viewer::nodeHeight(*arr, wide),
+                                26.0f + 6.0f + 14.0f + 100.0f + 4.0f + 20.0f + 8.0f),
+                          "arr 25-value assignment: 5x5 grid rows");
+            // 实例赋值 9 值但非平方（10 值 → 1x10）：行数坍缩为 1。
+            std::vector<rin::ParamAssignment> flat;
+            flat.push_back({"kernel", std::vector<double>(10, 1.0)});
+            RIN_CHECK_MSG(nearF(viewer::nodeHeight(*arr, flat),
+                                26.0f + 6.0f + 14.0f + 20.0f + 4.0f + 20.0f + 8.0f),
+                          "arr 10-value assignment: 1x10 single grid row");
+        }
+    }
 
     // nodeBounds。
     const viewer::CanvasRect boundsA = viewer::nodeBounds({200.0f, 100.0f}, *a);
-    RIN_CHECK_MSG((boundsA.x == 200.0f && boundsA.y == 100.0f && boundsA.width == 148.0f &&
+    RIN_CHECK_MSG((boundsA.x == 200.0f && boundsA.y == 100.0f && boundsA.width == 200.0f &&
                    boundsA.height == 54.0f),
                   "nodeBounds = position + kNodeWidth x nodeHeight");
 
-    // portPosition：输入靠左缘、输出靠右缘，y 按 index*20 + 行中点。
+    // portPosition（M11 四参签名）：输入靠左缘、输出靠右缘，y 按 index*20 + 行中点。
     {
-        const viewer::CanvasPoint in0 =
-            viewer::portPosition({200.0f, 100.0f}, {99, rin::PortDirection::Input, 0});
+        const viewer::CanvasPoint in0 = viewer::portPosition({200.0f, 100.0f}, *a, {},
+                                                             {99, rin::PortDirection::Input, 0});
         RIN_CHECK_MSG(nearPoint(in0, {200.0f, 136.0f}), "input port at left edge, row midpoint");
         const viewer::CanvasPoint out0 =
-            viewer::portPosition({200.0f, 100.0f}, {99, rin::PortDirection::Output, 0});
-        RIN_CHECK_MSG(nearPoint(out0, {348.0f, 136.0f}), "output port at right edge");
+            viewer::portPosition({200.0f, 100.0f}, *a, {}, {99, rin::PortDirection::Output, 0});
+        RIN_CHECK_MSG(nearPoint(out0, {400.0f, 136.0f}), "output port at right edge");
         const viewer::CanvasPoint in1 =
-            viewer::portPosition({400.0f, 100.0f}, {99, rin::PortDirection::Input, 1});
+            viewer::portPosition({400.0f, 100.0f}, *b, {}, {99, rin::PortDirection::Input, 1});
         RIN_CHECK_MSG(nearPoint(in1, {400.0f, 156.0f}), "second input one row below");
+        // 端口纵向偏移含参数区（M11）：c 的输入 0 比无参节点低一个参数区。
+        const viewer::CanvasPoint cIn0 =
+            viewer::portPosition({0.0f, 0.0f}, *c, {}, {99, rin::PortDirection::Input, 0});
+        RIN_CHECK_MSG(nearPoint(cIn0, {0.0f, 26.0f + 36.0f + 10.0f}),
+                      "param section shifts the port row down");
+        // params 实参参与：RealArray 赋值改变形状时端口同步下移（几何与实例联动）。
+        rin::NodeCatalog arrayCatalog;
+        rin::ParamDescriptor kernel;
+        kernel.id = "kernel";
+        kernel.label = "Kernel";
+        kernel.kind = rin::ParamKind::RealArray;
+        kernel.defaultValue = std::vector<double>{0, 0, 0, 0, 1, 0, 0, 0, 0};
+        arrayCatalog.nodes.push_back(
+            {"arr", "Array", {rin::PortType::Gray8}, {rin::PortType::Gray8}, {kernel}});
+        if (const rin::NodeDescriptor* arr = rin::findNodeDescriptor(arrayCatalog, "arr")) {
+            std::vector<rin::ParamAssignment> wide;
+            wide.push_back({"kernel", std::vector<double>(25, 1.0)});
+            const viewer::CanvasPoint wideIn0 =
+                viewer::portPosition({0.0f, 0.0f}, *arr, wide, {99, rin::PortDirection::Input, 0});
+            const float expectedY = 26.0f + 6.0f + 14.0f + 100.0f + 4.0f + 10.0f;
+            RIN_CHECK_MSG(nearPoint(wideIn0, {0.0f, expectedY}),
+                          "RealArray instance shape moves the port anchor");
+        }
     }
 
     // canvasRectBetween：负向拖拽归一。
@@ -878,8 +934,8 @@ void testHitTesting() {
     }
 
     // wireAt：需要连线。两条水平连线 y=136 与 y=143（相距 7px）。
-    const rin::NodeId iw1 = make(fx.model, "a", 100.0f, 100.0f);   // out0 (248,136)
-    const rin::NodeId iw2 = make(fx.model, "a", 100.0f, 107.0f);   // out0 (248,143)
+    const rin::NodeId iw1 = make(fx.model, "a", 100.0f, 100.0f);   // out0 (300,136)
+    const rin::NodeId iw2 = make(fx.model, "a", 100.0f, 107.0f);   // out0 (300,143)
     const rin::NodeId ib2 = make(fx.model, "b", 400.0f, 107.0f);   // in0 (400,143)
     const rin::Connection w1{{iw1, rin::PortDirection::Output, 0},
                              {ib, rin::PortDirection::Input, 0}};
@@ -1119,7 +1175,7 @@ void testInteractionConnectFlow() {
         viewer::CanvasView view;
         viewer::CanvasInteraction it;
         const viewer::PressResult pr =
-            it.onPress(fx.model, {348.0f, 136.0f}, 0, false, false);  // a.out0
+            it.onPress(fx.model, {400.0f, 136.0f}, 0, false, false);  // a.out0
         RIN_CHECK_MSG((pr.kind == viewer::PressResult::Kind::PortPressed && pr.message.empty()),
                       "output port press reported");
         RIN_CHECK_MSG((it.connecting() && it.mode == viewer::InteractionMode::Connect),
@@ -1150,7 +1206,7 @@ void testInteractionConnectFlow() {
         RIN_CHECK(make(fx.model, "b", 500.0f, 100.0f) != rin::kInvalidNode);
         viewer::CanvasView view;
         viewer::CanvasInteraction it;
-        pressIgnore(it, fx.model, {348.0f, 136.0f});
+        pressIgnore(it, fx.model, {400.0f, 136.0f});
         it.onDrag(fx.model, view, {600.0f, 300.0f}, {600.0f, 300.0f});
         const viewer::ReleaseResult rr = it.onRelease(fx.model, {700.0f, 400.0f}, false);
         RIN_CHECK_MSG((!rr.graphChanged && rr.message.empty()),
@@ -1158,15 +1214,16 @@ void testInteractionConnectFlow() {
         RIN_CHECK_MSG(fx.model.connections.empty(), "no edge created on cancel");
     }
 
-    // 松开在不兼容输入端口：connect 拒绝消息透传。
+    // 松开在不兼容输入端口：connect 拒绝消息透传。c 带 1 个参数（M11 起参数区
+    // 参与几何），其输入端口锚点在 y = 100 + 26 + 36 + 10 = 172。
     {
         GraphFixture fx;
         RIN_CHECK(make(fx.model, "a", 200.0f, 100.0f) != rin::kInvalidNode);
         RIN_CHECK(make(fx.model, "c", 500.0f, 100.0f) != rin::kInvalidNode);
         viewer::CanvasView view;
         viewer::CanvasInteraction it;
-        pressIgnore(it, fx.model, {348.0f, 136.0f});
-        const viewer::ReleaseResult rr = it.onRelease(fx.model, {500.0f, 136.0f}, false);
+        pressIgnore(it, fx.model, {400.0f, 136.0f});
+        const viewer::ReleaseResult rr = it.onRelease(fx.model, {500.0f, 172.0f}, false);
         RIN_CHECK_MSG(!rr.graphChanged, "incompatible target changes nothing");
         RIN_CHECK_MSG((rr.message.find("Gray8") != std::string::npos &&
                        rr.message.find("Rgba8") != std::string::npos),
@@ -1181,8 +1238,8 @@ void testInteractionConnectFlow() {
         RIN_CHECK(make(fx.model, "a", 500.0f, 100.0f) != rin::kInvalidNode);
         viewer::CanvasView view;
         viewer::CanvasInteraction it;
-        pressIgnore(it, fx.model, {348.0f, 136.0f});
-        const viewer::ReleaseResult rr = it.onRelease(fx.model, {648.0f, 136.0f}, false);
+        pressIgnore(it, fx.model, {400.0f, 136.0f});
+        const viewer::ReleaseResult rr = it.onRelease(fx.model, {700.0f, 136.0f}, false);
         RIN_CHECK_MSG((!rr.graphChanged && rr.message == "wires end at an input port"),
                       "release on an output port reports guidance");
         RIN_CHECK_MSG(fx.model.connections.empty(), "no edge created");
@@ -1240,7 +1297,7 @@ void testInteractionConnectFlow() {
         RIN_CHECK(make(fx.model, "a", 200.0f, 100.0f) != rin::kInvalidNode);
         viewer::CanvasView view;
         viewer::CanvasInteraction it;
-        pressIgnore(it, fx.model, {348.0f, 136.0f});
+        pressIgnore(it, fx.model, {400.0f, 136.0f});
         const viewer::ReleaseResult rr = it.onRelease(fx.model, {200.0f, 136.0f}, false);
         RIN_CHECK_MSG((!rr.graphChanged && rr.message.find("self") != std::string::npos),
                       "self-loop release passes the rejection message through");
@@ -1474,7 +1531,7 @@ void testDefectProbes() {
         GraphFixture fx;
         RIN_CHECK(make(fx.model, "a", 200.0f, 100.0f) != rin::kInvalidNode);  // 主体被穿越
         RIN_CHECK(make(fx.model, "a", 0.0f, 100.0f) != rin::kInvalidNode);    // 目标在左侧
-        // 连线 (348,136) -> (0,136)：水平穿过 (200..348)x(100..154) 的节点主体。
+        // 连线 (400,136) -> (0,136)：水平穿过 (200..400)x(100..154) 的节点主体。
         RIN_CHECK((fx.model.connect({1, rin::PortDirection::Output, 0},
                                     {2, rin::PortDirection::Input, 0})
                        .ok));
