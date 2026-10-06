@@ -833,20 +833,32 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
             .maxWidth(innerW * 0.55f * s)
             .build();
         // 下拉触发器（M11 验收反馈：下拉选择；点击打开窗口级选项浮层，
-        // composeWorkflowResolutionMenu）。mouseArea 取全局坐标定位浮层。
+        // composeWorkflowResolutionMenu）。触发用 rect.onClick——与本位置
+        // 既有实证机制一致（M11 首轮点击循环胶囊即此路径；components::
+        // mouseArea 在此嵌套下不响应，验收实证）。浮层窗口坐标 compose 期
+        // 精确计算（画布区矩形 + 节点屏幕原点 + 触发器屏幕偏移）。
         const float pillW = innerW * 0.45f - kSpace1;
         const float pillX = (innerX + innerW - pillW) * s;
         const float pillY = (rowY + 2.0f) * s;
+        const float pillH = (kParamPillHeight - 4.0f) * s;
+        const CanvasPoint nodeScreen = state.view.toScreen(node.position);
+        const float menuX = state.areaRect.x + nodeScreen.x + pillX;
+        const float menuY = state.areaRect.y + nodeScreen.y + pillY + pillH;
         ui.rect(base + ".pill")
             .position(pillX, pillY)
-            .size(pillW * s, (kParamPillHeight - 4.0f) * s)
+            .size(pillW * s, pillH)
             .radius(kRadiusSm * s)
             .color(tokens.input)
             .border(kBorderHairline, tokens.inputBorder)
+            .states(tokens.input, tokens.inputBorderHover, tokens.inputBorderHover)
+            .onClick([&state, menuX, menuY] {
+                state.resolutionMenuOpen = true;
+                state.resolutionMenuPos = {menuX, menuY};
+            })
             .build();
         ui.text(base + ".value")
             .position(pillX + kSpace1 * s, pillY)
-            .size((pillW - 14.0f) * s, (kParamPillHeight - 4.0f) * s)
+            .size((pillW - 14.0f) * s, pillH)
             .text((*cameraResolution->labels)[static_cast<std::size_t>(selectedIndex)])
             .fontSize(scaledFont(kFontXs, s, 6.0f))
             .color(tokens.fg)
@@ -855,21 +867,12 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
             .build();
         ui.text(base + ".chevron")
             .position(pillX + (pillW - 12.0f) * s, pillY)
-            .size(12.0f * s, (kParamPillHeight - 4.0f) * s)
+            .size(12.0f * s, pillH)
             .text("\u25BE")
             .fontSize(scaledFont(kFontXs, s, 6.0f))
             .color(tokens.brand)
             .horizontalAlign(eui::HorizontalAlign::Center)
             .verticalAlign(eui::VerticalAlign::Center)
-            .build();
-        components::mouseArea(ui, base + ".pillHit")
-            .position(pillX, pillY)
-            .size(pillW * s, (kParamPillHeight - 4.0f) * s)
-            .cursor(eui::CursorShape::Hand)
-            .onTap([&state](const components::MouseEvent& event) {
-                state.resolutionMenuOpen = true;
-                state.resolutionMenuPos = {event.globalX, event.globalY};
-            })
             .build();
         rowY += kParamPillHeight + kParamRowGap;
     }
