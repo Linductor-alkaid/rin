@@ -116,17 +116,7 @@ struct DriverOutputSize {
 struct CameraResolutionBinding {
     const std::vector<std::string>* labels = nullptr;
     int selectedIndex = -1;
-    std::function<void(int)> onPick;
-
-    /// 点击循环到下一档位（末项环绕）；无档位 no-op。
-    void cycle() const {
-        if (labels == nullptr || labels->empty() || !onPick) {
-            return;
-        }
-        const int count = static_cast<int>(labels->size());
-        const int next = selectedIndex + 1 >= count ? 0 : selectedIndex + 1;
-        onPick(next);
-    }
+    std::function<void(int)> onPick;  /// 浮层选项点击（M11 验收反馈：下拉选择）。
 };
 
 /// 工作流页画布会话状态（ViewerContext 持有，地址稳定供闭包引用；DEC-014
@@ -150,6 +140,10 @@ struct WorkflowCanvasState {
     // 画布右键创建菜单（§5.2.2，自绘浮层；即输即筛）。
     bool menuOpen = false;
     CanvasPoint menuPos{0.0f, 0.0f};
+    // 相机分辨率下拉浮层（M11 用户验收反馈：下拉选择替代点击循环；同
+    // 创建菜单的窗口级 overlay 模式——画布 clip 视口内组件弹层会被裁剪）。
+    bool resolutionMenuOpen = false;
+    CanvasPoint resolutionMenuPos{0.0f, 0.0f};  // 窗口逻辑坐标。
     eui::Signal<std::string> menuFilter;
     eui::Signal<std::string> paletteFilter;
     /// 调色板滚动偏移（M7-03，scrollView bind；目录/过滤变化由 contentKey
@@ -838,26 +832,44 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
             .verticalAlign(eui::VerticalAlign::Center)
             .maxWidth(innerW * 0.55f * s)
             .build();
+        // 下拉触发器（M11 验收反馈：下拉选择；点击打开窗口级选项浮层，
+        // composeWorkflowResolutionMenu）。mouseArea 取全局坐标定位浮层。
         const float pillW = innerW * 0.45f - kSpace1;
+        const float pillX = (innerX + innerW - pillW) * s;
+        const float pillY = (rowY + 2.0f) * s;
         ui.rect(base + ".pill")
-            .position((innerX + innerW - pillW) * s, (rowY + 2.0f) * s)
+            .position(pillX, pillY)
             .size(pillW * s, (kParamPillHeight - 4.0f) * s)
-            .radius(kParamPillHeight * 0.5f * s)
+            .radius(kRadiusSm * s)
             .color(tokens.input)
             .border(kBorderHairline, tokens.inputBorder)
-            .states(tokens.input, tokens.inputBorderHover, tokens.inputBorderHover)
-            .onClick([cameraResolution] { cameraResolution->cycle(); })
             .build();
         ui.text(base + ".value")
-            .position((innerX + innerW - pillW) * s, (rowY + 2.0f) * s)
-            .size(pillW * s, (kParamPillHeight - 4.0f) * s)
-            .text((*cameraResolution->labels)[static_cast<std::size_t>(selectedIndex)] +
-                  " \u203A")
+            .position(pillX + kSpace1 * s, pillY)
+            .size((pillW - 14.0f) * s, (kParamPillHeight - 4.0f) * s)
+            .text((*cameraResolution->labels)[static_cast<std::size_t>(selectedIndex)])
             .fontSize(scaledFont(kFontXs, s, 6.0f))
             .color(tokens.fg)
+            .verticalAlign(eui::VerticalAlign::Center)
+            .maxWidth((pillW - 14.0f) * s)
+            .build();
+        ui.text(base + ".chevron")
+            .position(pillX + (pillW - 12.0f) * s, pillY)
+            .size(12.0f * s, (kParamPillHeight - 4.0f) * s)
+            .text("\u25BE")
+            .fontSize(scaledFont(kFontXs, s, 6.0f))
+            .color(tokens.brand)
             .horizontalAlign(eui::HorizontalAlign::Center)
             .verticalAlign(eui::VerticalAlign::Center)
-            .maxWidth(pillW * s)
+            .build();
+        components::mouseArea(ui, base + ".pillHit")
+            .position(pillX, pillY)
+            .size(pillW * s, (kParamPillHeight - 4.0f) * s)
+            .cursor(eui::CursorShape::Hand)
+            .onTap([&state](const components::MouseEvent& event) {
+                state.resolutionMenuOpen = true;
+                state.resolutionMenuPos = {event.globalX, event.globalY};
+            })
             .build();
         rowY += kParamPillHeight + kParamRowGap;
     }
@@ -1388,6 +1400,10 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                         state.menuFilter.set("");
                         return;
                     }
+                    if (state.resolutionMenuOpen) {  // 分辨率浮层同理（scrim 已
+                        state.resolutionMenuOpen = false;  // 拦截画布外点击）。
+                        return;
+                    }
                     const int button =
                         event.button == eui::PointerButton::Middle ? 1
                         : event.button == eui::PointerButton::Right ? 2
@@ -1915,6 +1931,97 @@ inline void composeWorkflowDragGhost(eui::Ui& ui, WorkflowCanvasState& state) {
                 .color(tokens.fg)
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
+        })
+        .build();
+}
+
+// --- 相机分辨率下拉浮层（M11 验收反馈：窗口级 overlay，创建菜单同款模式；
+// 画布 clip 视口内的组件弹层会被裁剪，浮层由 app.cpp overlay 层最后合成） ---
+inline void composeWorkflowResolutionMenu(eui::Ui& ui, WorkflowCanvasState& state,
+                                          const CameraResolutionBinding* cameraResolution,
+                                          const float windowWidth, const float windowHeight) {
+    if (!state.resolutionMenuOpen || cameraResolution == nullptr ||
+        cameraResolution->labels == nullptr || cameraResolution->labels->empty()) {
+        return;
+    }
+    const theme::ThemeTokens& tokens = theme::dark();
+    const float pad = kSpace2;
+    const float width = 176.0f;
+    const float titleHeight = kFontXs + kSpace2;
+    const float itemHeight = 26.0f;
+    const int count = static_cast<int>(cameraResolution->labels->size());
+    const float height = pad * 2.0f + titleHeight + static_cast<float>(count) * itemHeight;
+    const float x = std::clamp(state.resolutionMenuPos.x, 8.0f,
+                               std::max(8.0f, windowWidth - width - 8.0f));
+    const float y = std::clamp(state.resolutionMenuPos.y, 8.0f,
+                               std::max(8.0f, windowHeight - height - 8.0f));
+
+    // 全窗口透明阻挡层：菜单外任意点击收起（模态浮层）。
+    ui.rect("workflow.resMenu.scrim")
+        .position(0.0f, 0.0f)
+        .size(windowWidth, windowHeight)
+        .color({0.0f, 0.0f, 0.0f, 0.0f})
+        .onClick([&state] { state.resolutionMenuOpen = false; })
+        .build();
+
+    ui.stack("workflow.resMenu")
+        .position(x, y)
+        .size(width, height)
+        .content([&] {
+            ui.rect("workflow.resMenu.panel")
+                .size(width, height)
+                .radius(kRadiusLg)
+                .color(tokens.menu)
+                .border(kBorderHairline, tokens.border)
+                .shadow(18.0f, 10.0f, 8.0f, {0.0f, 0.0f, 0.0f, 0.35f})
+                .build();
+            ui.text("workflow.resMenu.title")
+                .position(pad, pad)
+                .size(width - pad * 2.0f, titleHeight)
+                .text("Camera resolution")
+                .fontSize(kFontXs)
+                .color(tokens.fgSubtlest)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
+            const int selected = std::clamp(cameraResolution->selectedIndex, 0, count - 1);
+            float rowY = pad + titleHeight;
+            for (int index = 0; index < count; ++index) {
+                const std::string base =
+                    "workflow.resMenu.item." + std::to_string(index);
+                const bool active = index == selected;
+                const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                ui.rect(base)
+                    .position(pad, rowY)
+                    .size(width - pad * 2.0f, itemHeight)
+                    .radius(kRadiusSm)
+                    .color(transparent)
+                    .states(transparent, tokens.menuHover, tokens.menuHover)
+                    .onClick([&state, cameraResolution, index] {
+                        state.resolutionMenuOpen = false;
+                        cameraResolution->onPick(index);
+                    })
+                    .build();
+                ui.text(base + ".label")
+                    .position(pad + kSpace2, rowY)
+                    .size(width - pad * 2.0f - kSpace2 - 14.0f, itemHeight)
+                    .text((*cameraResolution->labels)[static_cast<std::size_t>(index)])
+                    .fontSize(kFontCaption)
+                    .color(active ? tokens.brand : tokens.fg)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+                if (active) {
+                    ui.text(base + ".check")
+                        .position(width - pad - 14.0f, rowY)
+                        .size(14.0f, itemHeight)
+                        .text("\u2713")
+                        .fontSize(kFontXs)
+                        .color(tokens.brand)
+                        .horizontalAlign(eui::HorizontalAlign::Center)
+                        .verticalAlign(eui::VerticalAlign::Center)
+                        .build();
+                }
+                rowY += itemHeight;
+            }
         })
         .build();
 }

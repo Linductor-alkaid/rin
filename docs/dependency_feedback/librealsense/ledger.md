@@ -112,7 +112,11 @@
 - 跟进：2026-10-07 登记（Independent-Verification-Agent 受控实验证据链 +
   主循环复跑实证）；2026-10-07 增加应用侧最小绕行：viewer 启动请求支持
   `RIN_DISABLE_MOTION=1` 环境变量跳过运动流（用户手动测试/无 IMU 场景，
-  随 M11 分支提交；运动流自动降级策略仍待 owner 裁定）。
+  随 M11 分支提交；运动流自动降级策略仍待 owner 裁定）；同日修复该绕行的
+  第二入口泄漏——分辨率档位的 enableMotion 粘性恒取默认请求 true，restream
+  命令会在禁用会话中重新带回运动流（用户验收发现"切换分辨率后输入停更"，
+  根因即本条目饿死机理），现已将环境变量升级为会话级标志（启动请求与档位
+  粘性同源，`ViewerContext::motionDisabledByEnv`）。
 
 ## 跟进记录表
 

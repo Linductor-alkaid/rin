@@ -72,6 +72,11 @@
    （小选项集 2..5 个即时可遍历；下拉弹层在画布 `clip` 视口内会被裁剪，
    overlay 浮层则引入全局单例状态，循环切换是两者中侵入最小的等价表达）。
 
+   > 2026-10-07 用户验收修订：**相机分辨率入口改为下拉选择**——画布内触发器
+   > 打开窗口级选项浮层（composeWorkflowCreateMenu 同款 overlay 模式：scrim
+   > + 面板 + 选中项 ✓，Esc/外击收起），点击选项经同一 onPick 命令路径；枚举
+   > 参数维持点击循环（未被反馈覆盖）。
+
 ## 后果
 
 - `validateWorkflowGraph`、`runNodeGraph`、`elementSize`、`toString(PortType)`

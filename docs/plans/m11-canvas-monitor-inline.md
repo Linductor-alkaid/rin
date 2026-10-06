@@ -117,4 +117,26 @@ source_depth_jet→监看器 848x480 jet 深度色图直连，"任意输出线�
 end-to-end 0.0 fps 冻结呈现）。运动流真机验收（M3-08 项）在本机被
 LRS-20261007-001 阻断，补跑条件见台账。
 
+2026-10-07：**用户真机验收反馈两项处理完毕**（手动测试 RIN_DISABLE_MOTION=1
+会话）。
+
+**反馈 A（交互）：相机源分辨率入口期望下拉选择**。落地：源节点内嵌行改为
+下拉触发器（值 + ▾），点击打开窗口级选项浮层（`composeWorkflowResolutionMenu`，
+创建菜单同款 overlay 模式：scrim + 面板 + 选中项 ✓，Esc/画布外击收起，选项
+点击经既有 onPick 命令路径）；DEC-021 决策 6 相应修订（枚举参数维持点击
+循环）。截图 `screenshots/m11/m11_resolution_menu.png`（1280 x 720 选中 ✓）。
+
+**反馈 B（缺陷）：切换分辨率后相机输入不再更新**。根因链（主循环仪表化
+复现 + 裸 librealsense 探针对照定位）：分辨率档位的 `enableMotion` 粘性取自
+`kDefaultRequest`（恒 true）——`RIN_DISABLE_MOTION=1` 会话下，restream 命令
+把运动流重新带回，在本机坏 IIO 环境（LRS-20261007-001）即合成帧同步器饿死：
+restream 分支全部成功返回、服务保持 Streaming，但 `wait_for_frames` 永久超时
+（3 次后 Fatal 重试循环），采集零帧。裸探针复刻适配器全部调用序列（默认构造
+pipeline/enable_device/独立枚举 context/内参读取）不换档正常、换档亦正常，
+排除 librealsense 序列差异，锁定 enableMotion 粘性泄漏。修复：`RIN_DISABLE_MOTION`
+升级为会话级标志（`ViewerContext::motionDisabledByEnv`），启动请求与分辨率
+档位粘性同源（`rebuildResolutionOptions` 同步消费）。运行验证：切换
+848x480→1280x720 后帧计数持续增长（227→632/14s）、引擎保持 Running、
+"resolution applied"。
+
 **遗留观察**（非 M11 回归）：M10 深度域 typeId（`source_depth_metric`/`depth_*`）不在 `paletteGroupFor` 分组表，调色板落 "Other"（HEAD 同此，M10 遗留呈现缺口，建议择期登记修复）；conv_kernel 的 size 枚举切换不自动重排 kernel 形状（M5-04 既有语义保持，切换后需手动 R+/C+ 步进，否则构造期拒绝经 NodeFailed 呈现）。

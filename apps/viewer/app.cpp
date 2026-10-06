@@ -34,7 +34,6 @@
 
 #include "engine.hpp"
 
-#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
@@ -104,6 +103,10 @@ struct ViewerContext {
     /// 均稳定存续，onPick 捕获 &ctx（静态单例）；selectedIndex 每次 compose
     /// 前从 resolutionIndex 刷新（仅 compose 期读取）。
     viewer::CameraResolutionBinding cameraResolutionBinding;
+    /// 会话级运动流禁用（RIN_DISABLE_MOTION=1，LRS-20261007-001 宿主绕行）：
+    /// 启动请求与分辨率档位的 enableMotion 粘性都以此为准——否则分辨率
+    /// restream 命令会把运动流重新带回（坏 IIO 宿主上即合成帧饿死）。
+    const bool motionDisabledByEnv = getenv("RIN_DISABLE_MOTION") != nullptr;
     /// 深度配色（DEC-007）：0 = Jet，1 = Grayscale，2 = AdaptiveGrayscale；
     /// 不依赖设备目录，Waiting 可预设。
     eui::Signal<int> paletteIndex{0};
@@ -146,6 +149,7 @@ ViewerContext& context() {
     static ViewerContext instance;
     return instance;
 }
+
 
 /// 重建帧源路由快照（M6-05，DEC-017）：source 节点 typeId → rendition。
 /// ensureStarted 与 pump（画布修订号脏标记）调用；整体换新对帧泵 tick 原子
@@ -190,13 +194,10 @@ void ensureStarted() {
             ctx.applyResolutionChoice(index);
         };
         // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
-        // RIN_DISABLE_MOTION=1：跳过运动流（LRS-20261007-001 宿主绕行——本机内核
-        // IIO/hid-sensor 无 IMU 数据时，启用运动流会连带饿死视频/深度合成帧；
-        // 亦适用于无 IMU 机型只测视频面的场景）。
+        // RIN_DISABLE_MOTION=1：跳过运动流（会话级，含后续分辨率档位粘性；
+        // LRS-20261007-001 宿主绕行，见 ViewerContext::motionDisabledByEnv）。
         rin::StreamRequest startRequest = kDefaultRequest;
-        if (getenv("RIN_DISABLE_MOTION") != nullptr) {
-            startRequest.enableMotion = false;
-        }
+        startRequest.enableMotion = kDefaultRequest.enableMotion && !ctx.motionDisabledByEnv;
         const rin::StartOutcome outcome = ctx.service->start(startRequest);
         if (!outcome.admitted) {
             ctx.startError = outcome.error;
@@ -310,10 +311,11 @@ void ViewerContext::rebuildResolutionOptions() {
         option.request.depthHeight = color.height;
         option.request.depthFps = kDefaultRequest.depthFps;
         // enableMotion 粘性保持（StreamRequest 契约，camera_types.hpp）：分辨率档位
-        // 只覆盖视频字段，运动流意图沿用默认请求——否则 restream 命令携带
-        // enableMotion=false，适配器按新请求重建 pipeline 时静默关闭 IMU 流，
-        // 姿态通道停止发布（IMU 面板/3D 视图停留在陈旧快照）。
-        option.request.enableMotion = kDefaultRequest.enableMotion;
+        // 只覆盖视频字段，运动流意图沿用会话默认（RIN_DISABLE_MOTION 会话级
+        // 禁用时为 false——否则 restream 命令重新带回运动流，坏 IIO 宿主上
+        // 即 LRS-20261007-001 合成帧饿死的第二入口）。
+        option.request.enableMotion =
+            kDefaultRequest.enableMotion && !motionDisabledByEnv;
         option.label = std::to_string(color.width) + " x " + std::to_string(color.height);
         resolutionLabels.push_back(option.label);
         resolutionOptions.push_back(std::move(option));
