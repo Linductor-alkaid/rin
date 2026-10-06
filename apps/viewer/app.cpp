@@ -190,7 +190,14 @@ void ensureStarted() {
             ctx.applyResolutionChoice(index);
         };
         // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
-        const rin::StartOutcome outcome = ctx.service->start(kDefaultRequest);
+        // RIN_DISABLE_MOTION=1：跳过运动流（LRS-20261007-001 宿主绕行——本机内核
+        // IIO/hid-sensor 无 IMU 数据时，启用运动流会连带饿死视频/深度合成帧；
+        // 亦适用于无 IMU 机型只测视频面的场景）。
+        rin::StreamRequest startRequest = kDefaultRequest;
+        if (getenv("RIN_DISABLE_MOTION") != nullptr) {
+            startRequest.enableMotion = false;
+        }
+        const rin::StartOutcome outcome = ctx.service->start(startRequest);
         if (!outcome.admitted) {
             ctx.startError = outcome.error;
             ctx.statusMessage = "start failed";

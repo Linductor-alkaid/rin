@@ -110,7 +110,9 @@
   流修复后 `test_realsense_hardware` 全绿 + 默认请求复跑。
 - 状态：Open（等待环境修复复跑或 owner 对降级策略的裁定）
 - 跟进：2026-10-07 登记（Independent-Verification-Agent 受控实验证据链 +
-  主循环复跑实证）。
+  主循环复跑实证）；2026-10-07 增加应用侧最小绕行：viewer 启动请求支持
+  `RIN_DISABLE_MOTION=1` 环境变量跳过运动流（用户手动测试/无 IMU 场景，
+  随 M11 分支提交；运动流自动降级策略仍待 owner 裁定）。
 
 ## 跟进记录表
 
