@@ -19,7 +19,6 @@
 #include "imu_panel.hpp"
 #include "navigation.hpp"
 #include "node_canvas.hpp"
-#include "param_panel.hpp"
 #include "pose_view.hpp"
 #include "viewer_theme.hpp"
 
@@ -35,7 +34,6 @@
 
 #include "engine.hpp"
 
-#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
@@ -105,6 +103,10 @@ struct ViewerContext {
     /// 均稳定存续，onPick 捕获 &ctx（静态单例）；selectedIndex 每次 compose
     /// 前从 resolutionIndex 刷新（仅 compose 期读取）。
     viewer::CameraResolutionBinding cameraResolutionBinding;
+    /// 会话级运动流禁用（RIN_DISABLE_MOTION=1，LRS-20261007-001 宿主绕行）：
+    /// 启动请求与分辨率档位的 enableMotion 粘性都以此为准——否则分辨率
+    /// restream 命令会把运动流重新带回（坏 IIO 宿主上即合成帧饿死）。
+    const bool motionDisabledByEnv = getenv("RIN_DISABLE_MOTION") != nullptr;
     /// 深度配色（DEC-007）：0 = Jet，1 = Grayscale，2 = AdaptiveGrayscale；
     /// 不依赖设备目录，Waiting 可预设。
     eui::Signal<int> paletteIndex{0};
@@ -123,11 +125,9 @@ struct ViewerContext {
     /// 即整体换新（原子共享，帧泵 tick 只读）；pump 以画布修订号为脏标记刷新。
     viewer::WorkflowSourceRouter sourceRouter;
     std::uint64_t sourceRouterRevision = 0;
-    /// 工作流页画布会话状态（node_canvas.hpp；DEC-014 决策 4：切页保持）。
+    /// 工作流页画布会话状态（node_canvas.hpp；DEC-014 决策 4：切页保持；
+    /// M11/DEC-021 起含内嵌参数控件、监看器预览与驱动尺寸缓存）。
     WorkflowCanvasState workflowCanvas;
-    /// 工作流页参数面板会话状态（param_panel.hpp，M5-04：控件绑定/缩略图缓存；
-    /// 切页保持）。
-    WorkflowPanelState workflowPanel;
 
     /// 工作台导航状态（M5-02）：四页模型与当前页；页面 UI 状态由本上下文各字段
     /// 持有，导航不触碰（页面切换状态保持，navigation.hpp）。
@@ -149,6 +149,7 @@ ViewerContext& context() {
     static ViewerContext instance;
     return instance;
 }
+
 
 /// 重建帧源路由快照（M6-05，DEC-017）：source 节点 typeId → rendition。
 /// ensureStarted 与 pump（画布修订号脏标记）调用；整体换新对帧泵 tick 原子
@@ -188,13 +189,16 @@ void ensureStarted() {
         // 成员、onPick 捕获静态单例 &ctx、open 指向面板成员），一次性接线；
         // selectedIndex 由 compose 每帧从 resolutionIndex 刷新。
         ctx.cameraResolutionBinding.labels = &ctx.resolutionLabels;
-        ctx.cameraResolutionBinding.open = &ctx.workflowPanel.cameraResolutionOpen;
         ctx.cameraResolutionBinding.onPick = [&ctx](int index) {
             ctx.resolutionIndex.set(index);
             ctx.applyResolutionChoice(index);
         };
         // 启动不依赖相机连接（DEC-006）：无设备时服务进入 Waiting，接入后自动出流。
-        const rin::StartOutcome outcome = ctx.service->start(kDefaultRequest);
+        // RIN_DISABLE_MOTION=1：跳过运动流（会话级，含后续分辨率档位粘性；
+        // LRS-20261007-001 宿主绕行，见 ViewerContext::motionDisabledByEnv）。
+        rin::StreamRequest startRequest = kDefaultRequest;
+        startRequest.enableMotion = kDefaultRequest.enableMotion && !ctx.motionDisabledByEnv;
+        const rin::StartOutcome outcome = ctx.service->start(startRequest);
         if (!outcome.admitted) {
             ctx.startError = outcome.error;
             ctx.statusMessage = "start failed";
@@ -307,10 +311,11 @@ void ViewerContext::rebuildResolutionOptions() {
         option.request.depthHeight = color.height;
         option.request.depthFps = kDefaultRequest.depthFps;
         // enableMotion 粘性保持（StreamRequest 契约，camera_types.hpp）：分辨率档位
-        // 只覆盖视频字段，运动流意图沿用默认请求——否则 restream 命令携带
-        // enableMotion=false，适配器按新请求重建 pipeline 时静默关闭 IMU 流，
-        // 姿态通道停止发布（IMU 面板/3D 视图停留在陈旧快照）。
-        option.request.enableMotion = kDefaultRequest.enableMotion;
+        // 只覆盖视频字段，运动流意图沿用会话默认（RIN_DISABLE_MOTION 会话级
+        // 禁用时为 false——否则 restream 命令重新带回运动流，坏 IIO 宿主上
+        // 即 LRS-20261007-001 合成帧饿死的第二入口）。
+        option.request.enableMotion =
+            kDefaultRequest.enableMotion && !motionDisabledByEnv;
         option.label = std::to_string(color.width) + " x " + std::to_string(color.height);
         resolutionLabels.push_back(option.label);
         resolutionOptions.push_back(std::move(option));
@@ -435,9 +440,11 @@ void ViewerContext::pump() {
             workflowCanvas.graphPending = false;
             app::requestUpdate();
         }
-        // 中间结果消费（M5-04 §5.6）：Running 拉取单选节点最新产物上传缩略图；
-        // 非 Running 排空（§4 停止/关闭排空）。返回 true 需重绘。
-        if (pumpNodeOutput(workflowCanvas, workflowPanel, *workflow)) {
+        // 监看器预览消费（M11/DEC-021 §5.6 替代）：Running 逐监看器拉取最新
+        // 产物上传节点内嵌预览；非 Running 整体排空释放（§4 停止/关闭排空）。
+        // 驱动尺寸刷新（ROI 联动约束的输入尺寸源）同址有界消费。
+        if (pumpMonitorViews(workflowCanvas, *workflow) |
+            pumpDriverSizes(workflowCanvas, *workflow)) {
             app::requestUpdate();
         }
         // 性能统计消费（M5-05 §5.7）：sequence 推进拉取最新快照 + 活动/冻结
@@ -493,13 +500,17 @@ void ViewerContext::shutdown() {
         workflow.reset();  // （契约 stop 排空语义：stale 数据不得恢复活动状态）。
         workflowCanvas.graphPending = false;
     }
-    // 工作流面板 UI 侧排空（M5-04 §4）：快照缩略图清空、控件绑定复位、失败
-    // 标注清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址
-    // 排空（M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
-    workflowPanel.outputs.clear();
-    workflowPanel.thumbnail.release();
-    workflowPanel.thumbMeta.clear();
-    workflowPanel.resetBindings();
+    // 工作流画布 UI 侧排空（M5-04 §4 语义随 M11/DEC-021 迁移）：监看器预览
+    // GL 引用释放（GPU 设备销毁前）、内嵌控件与驱动尺寸缓存清空、失败标注
+    // 清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址排空
+    // （M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
+    for (auto& [id, monitor] : workflowCanvas.monitors) {
+        (void)id;
+        monitor.view.release();
+    }
+    workflowCanvas.monitors.clear();
+    workflowCanvas.controls.clear();
+    workflowCanvas.driverSizes.clear();
     workflowCanvas.failures.clear();
     workflowCanvas.perf.clear();
     rgbView.release();  // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
@@ -975,9 +986,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     // 为 ViewerContext 成员（retained 回调持有安全），仅
                     // selectedIndex 每帧从共享信号刷新。
                     ctx.cameraResolutionBinding.selectedIndex = ctx.resolutionIndex.get();
-                    composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflowPanel,
-                                        ctx.workflow.get(), &ctx.cameraResolutionBinding, ox,
-                                        pageTop, contentWidth, pageHeight);
+                    composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflow.get(),
+                                        &ctx.cameraResolutionBinding, ox, pageTop,
+                                        contentWidth, pageHeight);
                     break;
                 }
                 case WorkbenchPage::Settings:
@@ -991,6 +1002,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 composeWorkflowCreateMenu(ui, ctx.workflowCanvas, ctx.workflow.get(), screen.width,
                                           screen.height);
                 composeWorkflowDragGhost(ui, ctx.workflowCanvas);
+                ctx.cameraResolutionBinding.selectedIndex = ctx.resolutionIndex.get();
+                composeWorkflowResolutionMenu(ui, ctx.workflowCanvas, &ctx.cameraResolutionBinding,
+                                              screen.width, screen.height);
             } else if (ctx.nav.current == WorkbenchPage::Preview) {
                 std::vector<std::string> deviceLabels;
                 deviceLabels.reserve(ctx.deviceOptions.size());
@@ -1102,6 +1116,7 @@ DslAppConfig makeDslAppConfig() {
                             canvas.menuOpen = false;
                             canvas.menuFilter.set("");
                         }
+                        canvas.resolutionMenuOpen = false;
                         // 取消进行中的拖拽（框选/连线/平移；§5.3 空白松开语义）。
                         canvas.interaction.mode = viewer::InteractionMode::None;
                         canvas.interaction.draggedNode = rin::kInvalidNode;

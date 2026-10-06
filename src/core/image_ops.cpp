@@ -1081,6 +1081,35 @@ private:
     mutable std::shared_ptr<const std::vector<std::uint8_t>> lastPixels_;
 };
 
+// 监看器恒等节点（M11/DEC-021）：Any→Any 透传 sink——apply 返回输入本身
+// （共享不可变像素，零拷贝），输出格式随输入动态（runNodeGraph 对声明 Any
+// 的输出端口接受任意具体格式）。引擎产物通道照常按节点发布最新快照，UI 经
+// tryLoadNodeOutput 在节点内嵌预览窗消费。不能复用 singleInput：其格式核对
+// 要求实际格式 == 声明输入，Any 声明下恒不成立。
+class ViewerNode final : public IImageNode {
+public:
+    explicit ViewerNode(NodeDescriptor descriptor) noexcept
+        : descriptor_(std::move(descriptor)) {}
+
+    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+
+    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
+        if (inputs.size() != 1) {
+            throw std::invalid_argument("'viewer' expects exactly one input, got " +
+                                        std::to_string(inputs.size()));
+        }
+        if (!inputs.front().valid()) {
+            throw std::invalid_argument("'viewer' input image is invalid");
+        }
+        return {inputs.front()};  // 共享像素透传；Any 输入接受全部具体格式。
+    }
+
+private:
+    NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
+};
+
 std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descriptor,
                                                  const NodeInstance& instance) {
     // 注入型源节点（M4-07 引擎注入相机帧；M6-03 深度 rendition 源同型，DEC-017；
@@ -1089,6 +1118,9 @@ std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descripto
         descriptor.typeId == "source_depth_gray" || descriptor.typeId == "source_depth_adaptive" ||
         descriptor.typeId == "source_depth_metric") {
         return nullptr;
+    }
+    if (descriptor.typeId == "viewer") {
+        return std::make_unique<ViewerNode>(descriptor);  // 无参数（M11 目录）。
     }
     if (descriptor.typeId == "depth_fill_invalid") {
         return std::make_unique<DepthFillInvalidNode>(descriptor, instance);

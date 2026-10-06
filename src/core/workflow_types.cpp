@@ -15,6 +15,8 @@ const char* toString(PortType type) noexcept {
             return "Rgba8";
         case PortType::Depth32F:
             return "Depth32F";
+        case PortType::Any:
+            return "Any";  // 仅目录声明位（M11/DEC-021），非实际图像格式。
     }
     return "Unknown";
 }
@@ -264,8 +266,11 @@ WorkflowValidation validateWorkflowGraph(const WorkflowGraph& graph, const NodeC
             reject(ValidationIssueKind::PortOutOfRange, connection.to.node, "输入端口序号越界");
             continue;
         }
+        // 连线兼容性（M11/DEC-021）：两端相等，或输入端口声明 Any（通配，
+        // 接受任意具体类型输出）。Any 输出只能连入 Any 输入（判据自然给出）。
         if (fromIt->second->outputs[connection.from.index] !=
-            toIt->second->inputs[connection.to.index]) {
+                toIt->second->inputs[connection.to.index] &&
+            toIt->second->inputs[connection.to.index] != PortType::Any) {
             reject(ValidationIssueKind::TypeMismatch, connection.to.node,
                    std::string("端口类型不匹配: ") +
                        toString(fromIt->second->outputs[connection.from.index]) + " -> " +

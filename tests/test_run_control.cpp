@@ -39,15 +39,19 @@
 //      source_depth_gray → crop_gray → gaussian_blur：各节点产物 valid、格式
 //      Gray8、尺寸符合冻结公式（源 32x24 / 裁切 16x12 / 模糊 16x12）、
 //      sourceSequence 透传、引擎保持 Running 无失败；
-//   7. pumpNodeOutput 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源）：选中
-//      crop 节点（入边来自 source）Running 后 panel.outputs 同时含选中节点与
-//      驱动节点快照（尺寸可得）；引擎回 Idle 后整体排空（一次 true、幂等
-//      二次 false）；
-//   8. 工作台布局状态（M7-03/04）：WorkflowCanvasState 五区 docking 字段默认值
-//      见证（= M5-02 冻结骨架几何 200/264/120/148、dockDrag==-1、paletteScroll
-//      初值 0）与 compose 期 std::clamp 夹取边界常量语义（默认值在范围内恒等、
-//      越界拖拽收敛边界、范围内值不被修改）；分隔条 mouseArea 回调时序与视觉
-//      呈现 headless 不可测（归真机验收）。
+//   7. pumpDriverSizes 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源；M11 起
+//      per-node 驱动缓存经 pumpDriverSizes 刷新，含 pumpMonitorViews 的无产物
+//      no-op 前置行为）：Running 后驱动节点（source 32x24）尺寸入缓存、非驱动
+//      节点不入、水位推进（无新产物 no-op）、驱动边摘除条目清除（扇出保留）、
+//      引擎回 Idle 整体排空（一次 true、幂等二次 false）；
+//   8. 工作台布局状态（M7-03/04；M11/DEC-021 四区）：WorkflowCanvasState 两处
+//      docking 字段默认值见证（= 冻结骨架几何 200/120、dockDrag==-1、
+//      paletteScroll 初值 0）与 compose 期 std::clamp 夹取边界常量语义（默认值
+//      在范围内恒等、越界拖拽收敛边界、范围内值不被修改）；分隔条 mouseArea
+//      回调时序与视觉呈现 headless 不可测（归真机验收）。
+//   9. afterGraphChange 节点状态清扫（M11）：删除节点后 controls/driverSizes
+//      无残留条目、存续节点条目不受影响；monitors 含 GL 引用归 pump 清理
+//      （不在此处清扫）。
 //
 // DOD-02 适用性说明（与 tests/test_shutdown_drain.cpp 同纪律，如实取舍）：
 // 正常完成——§3 全链路覆盖（发布→捕获→执行→发布→UI 消费）；任务异常——节点
@@ -76,7 +80,8 @@
 // shutdown 取舍与 §1-§4 既有说明一致（失败归因归 test_workflow_engine §10，
 // stop 排空与关停竞态归 §3/§4，全部等待有界不悬挂）。
 
-#include "param_panel.hpp"  // WorkflowPanelState / pumpNodeOutput（含 node_canvas.hpp）
+#include "node_canvas.hpp"  // WorkflowCanvasState / pumpMonitorViews / pumpDriverSizes
+                            //（M11/DEC-021：param_panel.hpp 已并入本头，右栏移除）
 
 #include "workflow_frame_source.hpp"
 
@@ -106,7 +111,6 @@
 namespace {
 
 using viewer::WorkflowCanvasState;
-using viewer::WorkflowPanelState;
 
 // --- 断言与有界等待辅助（与 test_param_panel.cpp 同纪律） ---
 
@@ -760,12 +764,48 @@ void testEngineUiEndToEnd() {
 
     // stop 排空（§4）：stop 返回后状态 Idle、缓存清空语义、无新发布、stale
     // 保持旧值、幂等双 stop。
+    // M11/DEC-021 起 pump 消费面 = pumpMonitorViews（监看器预览）+ pumpDriverSizes
+    // （ROI 联动尺寸源），替代 M5-04 的 WorkflowPanelState/pumpNodeOutput。GL 上传
+    // 分支（GpuFrameView::update）headless 不可测，本处驱动其平台无关分支：
+    // Running 无产物 no-op、已删节点条目清理、非 Running 排空（一次 true、幂等
+    // 二次 false）。画布节点用引擎图之外的 id（引擎产物通道只覆盖图内节点 1..3，
+    // pump 拉取恒"无产物"，不触 GL 路径）。
     viewer::WorkflowCanvasState canvas;
-    viewer::WorkflowPanelState panel;
-    // 预置面板缓存（缩略图缓存承载"非 Running 清空"的排空对象；GL 上传分支
-    // headless 不可测，本处只驱动 pumpNodeOutput 的平台无关清空分支）。
-    RIN_CHECK(panel.outputs.pull(*engine, 1));
-    RIN_CHECK(panel.outputs.size() > 0);
+    canvas.model.catalog = &engine->catalog();
+    canvas.model.nextNodeId = 10;
+    RIN_CHECK(canvas.model.createNode("viewer", {0.0f, 0.0f}).ok);   // id 10（监看器）
+    RIN_CHECK(canvas.model.createNode("source", {300.0f, 0.0f}).ok);  // id 11（驱动）
+    RIN_CHECK(canvas.model.createNode("crop", {600.0f, 0.0f}).ok);    // id 12
+    RIN_CHECK(canvas.model
+                  .connect({11, rin::PortDirection::Output, 0},
+                           {12, rin::PortDirection::Input, 0})
+                  .ok);
+    // 已删除节点的监看器条目（meta 见证；GL view headless 恒 valid()==false，
+    // release() 不做 GL 调用，可安全驱动）与不再是驱动的尺寸缓存条目。
+    canvas.monitors[42].meta = "128 x 96 · seq 3";
+    canvas.monitors[42].lastSeen = 7;
+    canvas.driverSizes[7] = {5, 128, 96};
+
+    // Running 且无产物：首次 pump 清理已删条目（true）；随后 no-op（false）——
+    // 画布 viewer/驱动节点在引擎图中无产物通道，不触 GL 上传。
+    RIN_CHECK_MSG(viewer::pumpMonitorViews(canvas, *engine),
+                  "e2e: stale monitor entry for a deleted node is cleaned up");
+    RIN_CHECK_MSG(canvas.monitors.find(42) == canvas.monitors.end(),
+                  "e2e: deleted node's monitor entry removed");
+    RIN_CHECK_MSG(canvas.monitors.find(10) != canvas.monitors.end(),
+                  "e2e: live viewer node keeps its monitor entry while Running");
+    RIN_CHECK_MSG(!viewer::pumpMonitorViews(canvas, *engine),
+                  "e2e: Running with no products for the viewer node is a no-op");
+    RIN_CHECK_MSG(canvas.monitors[10].meta.empty(),
+                  "e2e: no-op pump leaves the monitor meta untouched");
+    RIN_CHECK_MSG(viewer::pumpDriverSizes(canvas, *engine),
+                  "e2e: non-driver size entry is dropped while Running");
+    RIN_CHECK_MSG(canvas.driverSizes.find(7) == canvas.driverSizes.end(),
+                  "e2e: entry for a node that no longer drives anything removed");
+    RIN_CHECK_MSG(canvas.driverSizes.find(11) != canvas.driverSizes.end(),
+                  "e2e: live driver gets a size entry while Running");
+    RIN_CHECK_MSG(!viewer::pumpDriverSizes(canvas, *engine),
+                  "e2e: Running with no driver products is a no-op");
 
     // stop 前排空统计水位（等在飞帧收敛），记录停止前末次序号。
     std::uint64_t statsSeen = 0;
@@ -809,12 +849,23 @@ void testEngineUiEndToEnd() {
     engine->stop();
     RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
 
-    // pumpNodeOutput 非 Running 分支：缩略图缓存整体清空（返回 true = 有可见
-    // 变更）；再次调用无变更（幂等）。
-    RIN_CHECK_MSG(viewer::pumpNodeOutput(canvas, panel, *engine),
-                  "e2e: pumpNodeOutput drains the thumbnail cache once stopped");
-    RIN_CHECK_EQ(panel.outputs.size(), std::size_t{0});
-    RIN_CHECK(!viewer::pumpNodeOutput(canvas, panel, *engine));
+    // 非 Running 排空（§4"停止/关闭排空"）：pumpDriverSizes 整体清空（一次
+    // true、幂等二次 false）；pumpMonitorViews 释放可见状态（meta 清空、水位
+    // 归零，一次 true、幂等二次 false；条目保留——节点仍在画布，仅视觉排空）。
+    RIN_CHECK_MSG(viewer::pumpDriverSizes(canvas, *engine),
+                  "e2e: pumpDriverSizes drains the size cache once stopped");
+    RIN_CHECK_MSG(canvas.driverSizes.empty(),
+                  "e2e: driver size cache empty after the drain");
+    RIN_CHECK_MSG(!viewer::pumpDriverSizes(canvas, *engine),
+                  "e2e: second drain call reports no change");
+    canvas.monitors[10].meta = "128 x 96 · seq 3";  // 预置可见状态（排空对象）。
+    canvas.monitors[10].lastSeen = 9;
+    RIN_CHECK_MSG(viewer::pumpMonitorViews(canvas, *engine),
+                  "e2e: pumpMonitorViews drains visible monitor state once stopped");
+    RIN_CHECK_MSG(canvas.monitors[10].meta.empty() && canvas.monitors[10].lastSeen == 0,
+                  "e2e: monitor meta cleared and watermark reset by the drain");
+    RIN_CHECK_MSG(!viewer::pumpMonitorViews(canvas, *engine),
+                  "e2e: second monitor drain call reports no change");
 
     // stop 返回后有界稳定窗：无新统计、无新节点产物（发布停止语义）。
     RIN_CHECK_MSG(quietFor(
@@ -891,14 +942,20 @@ void testEngineUiEndToEnd() {
         RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
         engine.reset();
         canvas.graphPending = false;
-        // 3) 工作流面板 UI 侧排空（app.cpp shutdown 同序）。
-        panel.outputs.clear();
-        panel.thumbnail.release();
-        panel.thumbMeta.clear();
-        panel.resetBindings();
+        // 3) 工作流画布 UI 侧排空（app.cpp shutdown 同序；M11/DEC-021：监看器
+        //    GL 引用释放 → 内嵌控件/驱动尺寸/监看器条目清空 → 失败标注/统计）。
+        for (auto& [id, monitor] : canvas.monitors) {
+            (void)id;
+            monitor.view.release();
+        }
+        canvas.monitors.clear();
+        canvas.controls.clear();
+        canvas.driverSizes.clear();
         canvas.failures.clear();
         canvas.perf.clear();
-        RIN_CHECK_EQ(panel.outputs.size(), std::size_t{0});
+        RIN_CHECK_MSG(canvas.monitors.empty() && canvas.controls.empty() &&
+                          canvas.driverSizes.empty(),
+                      "e2e: canvas pump state drained in shutdown order");
         RIN_CHECK(!canvas.perf.live() && canvas.perf.stats() == nullptr);
         RIN_CHECK_EQ(canvas.failures.size(), std::size_t{0});
         // 4) executor.shutdown(true)（非 worker 线程 = 测试主线程）。
@@ -1224,9 +1281,10 @@ void testGrayChainEndToEnd() {
     RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
-// --- 7. pumpNodeOutput 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源） ---
+// --- 7. pumpDriverSizes 输入驱动节点拉取（M6-06 ROI 联动约束的尺寸源；M11 起
+//        per-node 驱动缓存经 pumpDriverSizes 刷新，替代右面板 pumpNodeOutput） ---
 
-void testPumpNodeOutputDriverPull() {
+void testPumpDriverSizesPull() {
     kairo::Executor executor;
     kairo::ExecutorConfig executorConfig;
     const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
@@ -1247,11 +1305,15 @@ void testPumpNodeOutputDriverPull() {
         return;
     }
 
-    // 画布：source(1) -> crop(2)，选中 crop（入边来自 source）。
+    // 画布：source(1) -> crop(2)（入边来自 source；crop 显式合法 ROI 32x24 帧下
+    // 16x12）。另置一个监看器节点（id 3）连 source 输出：引擎图中无该节点，
+    // pumpMonitorViews 的 Running 分支对其"无产物"no-op（GL 上传分支 headless
+    // 不可测，此为不触 GL 的前置行为）。
     WorkflowCanvasState canvas;
     canvas.model.catalog = &engine->catalog();
     RIN_CHECK(canvas.model.createNode("source", {0.0f, 0.0f}).ok);
     RIN_CHECK(canvas.model.createNode("crop", {300.0f, 0.0f}).ok);
+    RIN_CHECK(canvas.model.createNode("viewer", {600.0f, 0.0f}).ok);
     // 32x24 帧下默认 64x64 ROI 会被真实 crop 算子运行期拒绝：显式给合法 ROI。
     RIN_CHECK(canvas.model.setParam(2, {"x", rin::ParamValue{static_cast<std::int64_t>(0)}}).ok);
     RIN_CHECK(canvas.model.setParam(2, {"y", rin::ParamValue{static_cast<std::int64_t>(0)}}).ok);
@@ -1265,9 +1327,35 @@ void testPumpNodeOutputDriverPull() {
                   .connect({1, rin::PortDirection::Output, 0},
                            {2, rin::PortDirection::Input, 0})
                   .ok);
-    canvas.afterGraphChange(engine.get());
-    RIN_CHECK(canvas.model.validation.ok);
-    canvas.model.selection.assign(1, 2);
+    RIN_CHECK(canvas.model
+                  .connect({1, rin::PortDirection::Output, 0},
+                           {3, rin::PortDirection::Input, 0})
+                  .ok);
+    canvas.model.revalidate();
+    // 引擎侧只应用 source→crop（画布 viewer 节点不进引擎图：其产物通道为空，
+    // pumpMonitorViews 的 Running 分支保持"无产物"no-op，GL 上传路径不被触发；
+    // headless 不可测纪律，见文件头说明）。
+    {
+        rin::WorkflowGraph engineGraph;
+        rin::NodeInstance sourceNode;
+        sourceNode.id = 1;
+        sourceNode.typeId = "source";
+        rin::NodeInstance cropNode;
+        cropNode.id = 2;
+        cropNode.typeId = "crop";
+        cropNode.params = {
+            {"x", rin::ParamValue{static_cast<std::int64_t>(0)}},
+            {"y", rin::ParamValue{static_cast<std::int64_t>(0)}},
+            {"width", rin::ParamValue{static_cast<std::int64_t>(16)}},
+            {"height", rin::ParamValue{static_cast<std::int64_t>(12)}},
+        };
+        engineGraph.nodes = {sourceNode, cropNode};
+        engineGraph.connections = {
+            rin::Connection{{1, rin::PortDirection::Output, 0},
+                            {2, rin::PortDirection::Input, 0}},
+        };
+        RIN_CHECK(engine->applyGraph(engineGraph).ok);
+    }
 
     const rin::AdmissionResult admission = engine->start();
     RIN_CHECK(admission.admitted);
@@ -1278,79 +1366,116 @@ void testPumpNodeOutputDriverPull() {
         return;
     }
 
-    // Running 后 pump：panel.outputs 同时含选中节点（crop 16x12）与输入驱动
-    // 节点（source 32x24）快照——驱动拉取即 ROI 联动约束的尺寸源。
-    // 谓词必须同时要求两节点快照到位：publishOutputs 按执行序先发布 source(1)
-    // 后发布 crop(2)，两次邮箱发布之间 UI 线程可插入 pump——只查 driver 的谓词
-    // 会在此窗口退出，紧随其后的 find(2) 断言偶发失败（CI ubuntu runner 实报；
-    // 生产行为正确：同一次 publishOutputs 两节点都发布，下一轮 pump 即齐）。
-    WorkflowPanelState panel;
+    // Running 后 pump：driverSizes 收录输入端口 0 的上游驱动（source，32x24
+    // 最新产物尺寸）——驱动拉取即 ROI 联动约束的尺寸源；非驱动节点（crop 的
+    // 输出无人消费、viewer 是消费者非驱动）不入缓存。监看器（引擎图中无产物）
+    // Running 分支 no-op：条目保留、无可见变更、不触 GL。
     std::uint64_t publishSeq = 0;
     RIN_CHECK_MSG(pollUntil([&] {
                       service->publish(makeFrame(++publishSeq, 32, 24));
-                      (void)viewer::pumpNodeOutput(canvas, panel, *engine);
-                      const rin::NodeOutputSnapshot* driver = panel.outputs.find(1);
-                      const rin::NodeOutputSnapshot* selected =
-                          panel.outputs.find(2);
-                      return driver != nullptr && driver->valid() &&
-                             driver->width == 32 && driver->height == 24 &&
-                             selected != nullptr && selected->valid() &&
-                             selected->width == 16 && selected->height == 12;
+                      (void)viewer::pumpDriverSizes(canvas, *engine);
+                      const auto driver = canvas.driverSizes.find(1);
+                      return driver != canvas.driverSizes.end() &&
+                             driver->second.width == 32 && driver->second.height == 24;
                   }),
-                  "pump: driver (32x24) and selected (16x12) outputs are cached "
-                  "together");
-    const rin::NodeOutputSnapshot* selected = panel.outputs.find(2);
-    RIN_CHECK_MSG(selected != nullptr && selected->valid(),
-                  "pump: selected node output cached alongside the driver");
-    if (selected != nullptr) {
-        RIN_CHECK_EQ(selected->width, 16u);
-        RIN_CHECK_EQ(selected->height, 12u);
-    }
-    RIN_CHECK(panel.outputs.size() >= 2);
+                  "pump: driver (source 32x24) size cached while Running");
+    RIN_CHECK_MSG(canvas.driverSizes.find(2) == canvas.driverSizes.end(),
+                  "pump: non-driver node (crop) is not tracked");
+    RIN_CHECK_MSG(!viewer::pumpMonitorViews(canvas, *engine),
+                  "pump: viewer node without engine products is a no-op");
+    RIN_CHECK_MSG(canvas.monitors.find(3) != canvas.monitors.end(),
+                  "pump: live viewer keeps its monitor entry (engine has no products)");
+    const auto& driverEntry = canvas.driverSizes.find(1)->second;
+    RIN_CHECK_MSG(driverEntry.lastSeen > 0, "pump: driver watermark advanced past 0");
 
-    // 引擎回 Idle：pumpNodeOutput 整体排空（一次 true、幂等二次 false）。
+    // 水位推进：无新帧时再 pump 不改变已见序号（最新态过滤，非重复拉取）。
+    const std::uint64_t settledSeen = driverEntry.lastSeen;
+    RIN_CHECK_MSG(!viewer::pumpDriverSizes(canvas, *engine),
+                  "pump: no new driver products reports no change");
+    RIN_CHECK_EQ(canvas.driverSizes.find(1)->second.lastSeen, settledSeen);
+
+    // 断开 crop 边后节点 1 仍是 viewer 输入 0 的驱动（驱动集按连线计算，
+    // 扇出保留）——条目保持；再断 viewer 边后节点 1 不再驱动任何输入，条目清除。
+    const rin::Connection cropEdge{{1, rin::PortDirection::Output, 0},
+                                   {2, rin::PortDirection::Input, 0}};
+    const rin::Connection viewerEdge{{1, rin::PortDirection::Output, 0},
+                                     {3, rin::PortDirection::Input, 0}};
+    RIN_CHECK(canvas.model.disconnect(cropEdge).ok);
+    (void)viewer::pumpDriverSizes(canvas, *engine);
+    RIN_CHECK_MSG(canvas.driverSizes.find(1) != canvas.driverSizes.end(),
+                  "pump: node 1 still drives the viewer input after crop edge cut");
+    RIN_CHECK(canvas.model.disconnect(viewerEdge).ok);
+    RIN_CHECK_MSG(viewer::pumpDriverSizes(canvas, *engine),
+                  "pump: dropped driver entry is removed");
+    RIN_CHECK_MSG(canvas.driverSizes.find(1) == canvas.driverSizes.end(),
+                  "pump: node 1 no longer drives anything after both edges cut");
+    RIN_CHECK_MSG(canvas.driverSizes.find(3) == canvas.driverSizes.end(),
+                  "pump: viewer node is never a driver (consumes input 0 only)");
+
+    // 重建驱动边并 pump 回填条目（新条目 lastSeen=0 → 最新态通道重投最新快照），
+    // 供停止排空检查持有非空缓存。
+    RIN_CHECK(canvas.model.connect(cropEdge.from, cropEdge.to).ok);
+    RIN_CHECK_MSG(viewer::pumpDriverSizes(canvas, *engine),
+                  "pump: reconnected driver entry repopulates from the latest snapshot");
+    RIN_CHECK_MSG(canvas.driverSizes.find(1) != canvas.driverSizes.end() &&
+                      canvas.driverSizes.find(1)->second.width == 32,
+                  "pump: repopulated entry carries the latest driver size");
+
+    // 引擎回 Idle：pumpDriverSizes 整体排空（一次 true、幂等二次 false）；
+    // pumpMonitorViews 非 Running 排空可见状态（headless 无 GL 引用，meta 见证）。
+    canvas.monitors[3].meta = "32 x 24 · seq 1";
     engine->stop();
     RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
-    RIN_CHECK_MSG(viewer::pumpNodeOutput(canvas, panel, *engine),
-                  "pump: leaving Running drains the panel cache once");
-    RIN_CHECK_EQ(panel.outputs.size(), std::size_t{0});
-    RIN_CHECK(!viewer::pumpNodeOutput(canvas, panel, *engine));
+    RIN_CHECK_MSG(viewer::pumpDriverSizes(canvas, *engine),
+                  "pump: leaving Running drains the size cache once");
+    RIN_CHECK_MSG(canvas.driverSizes.empty(), "pump: size cache empty after drain");
+    RIN_CHECK_MSG(!viewer::pumpDriverSizes(canvas, *engine),
+                  "pump: second drain call reports no change");
+    RIN_CHECK_MSG(viewer::pumpMonitorViews(canvas, *engine),
+                  "pump: leaving Running drains visible monitor state once");
+    RIN_CHECK_MSG(canvas.monitors[3].meta.empty() && canvas.monitors[3].lastSeen == 0,
+                  "pump: monitor meta cleared and watermark reset");
+    RIN_CHECK_MSG(!viewer::pumpMonitorViews(canvas, *engine),
+                  "pump: second monitor drain call reports no change");
 
     engine.reset();
     RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
 }
 
-// --- 8. 工作台布局状态（M7-03/04）：WorkflowCanvasState docking 字段默认值
-//        见证 + compose 期夹取边界常量语义 ---
+// --- 8. 工作台布局状态（M7-03/04 引入；M11/DEC-021 移除右栏后余两处分隔条）：
+//        WorkflowCanvasState docking 字段默认值见证 + compose 期夹取边界常量语义 ---
 //
-// 被测契约（apps/viewer/node_canvas.hpp WorkflowCanvasState + param_panel.hpp
-// composeWorkflowPage/composeWorkflowContext 的 std::clamp 夹取）：
-//   - 五区 docking 布局字段默认值 = M5-02 冻结骨架几何（调色板 200 / 上下文
-//     264 / 底部 120 / Context 输出块 148），无活动拖拽（dockDrag == -1）、
-//     拖拽起始状态归零；M7-03 调色板滚动偏移信号默认 0（scrollView bind 初值）；
+// 被测契约（apps/viewer/node_canvas.hpp WorkflowCanvasState + composeWorkflowPage
+// 的 std::clamp 夹取；M11 四区：paletteWidth/bottomHeight）：
+//   - docking 布局字段默认值 = 冻结骨架几何（调色板 200 / 底部 120），无活动
+//     拖拽（dockDrag == -1）、拖拽起始状态归零；调色板滚动偏移信号默认 0
+//     （scrollView bind 初值）；
 //   - 夹取边界常量语义：分隔条 onDrag 把未夹取值写入状态字段，compose 期以
-//     [150,400]/[220,460]/[72,300]/[96,340] 夹取。headless 以与 compose 同式的
-//     std::clamp 见证三点不变量：默认值在范围内（夹取恒等——出厂几何即骨架）、
-//     越界拖拽写入收敛到边界、范围内任意拖拽值不被修改。
-// 分隔条/输出块分隔条的 mouseArea 回调时序（onDragStart/onDrag/onDragEnd）与
-// 视觉呈现需活动 EUI 运行时，headless 不可测——归真机验收（M7-05 冒烟）。
+//     [150,400]/[72,300] 夹取。headless 以与 compose 同式的 std::clamp 见证
+//     三点不变量：默认值在范围内（夹取恒等——出厂几何即骨架）、越界拖拽写入
+//     收敛到边界、范围内任意拖拽值不被修改。
+// 分隔条 mouseArea 回调时序（onDragStart/onDrag/onDragEnd）与视觉呈现需活动
+// EUI 运行时，headless 不可测——归真机验收（M11-06 冒烟）。
 
 void testWorkflowCanvasLayoutState() {
     viewer::WorkflowCanvasState canvas;
 
     // 默认值见证（DEC-014"画布布局为 UI 私有状态"：值语义构造，无隐式全局）。
-    RIN_CHECK_MSG(canvas.paletteWidth == 200.0f && canvas.contextWidth == 264.0f &&
-                      canvas.bottomHeight == 120.0f &&
-                      canvas.outputBlockHeight == 148.0f,
-                  "layout: defaults match the frozen M5-02 five-zone skeleton");
+    RIN_CHECK_MSG(canvas.paletteWidth == 200.0f && canvas.bottomHeight == 120.0f,
+                  "layout: defaults match the frozen four-zone skeleton");
     RIN_CHECK_MSG(canvas.dockDrag == -1 && canvas.dockDragStartPointer == 0.0f &&
                       canvas.dockDragStartValue == 0.0f,
                   "layout: no active dock drag after construction");
     RIN_CHECK_MSG(canvas.paletteScroll.get() == 0.0f,
                   "layout: palette scroll offset starts at 0 (scrollView bind)");
+    // M11/DEC-021：pump 消费面初始为空（右栏移除后 controls/monitors/driverSizes
+    // 均从空起，无遗留面板状态）。
+    RIN_CHECK_MSG(canvas.controls.empty() && canvas.monitors.empty() &&
+                      canvas.driverSizes.empty(),
+                  "layout: pump-side maps start empty");
 
-    // compose 期夹取（param_panel.hpp composeWorkflowPage:1092-1094 与
-    // composeWorkflowContext:447 的 std::clamp 同式）：拖拽写入 → 夹取读取。
+    // compose 期夹取（composeWorkflowPage 的 std::clamp 同式）：拖拽写入 →
+    // 夹取读取。
     struct DockField {
         float value;
         float lo;
@@ -1359,9 +1484,7 @@ void testWorkflowCanvasLayoutState() {
     };
     const DockField fields[] = {
         {canvas.paletteWidth, 150.0f, 400.0f, "paletteWidth"},
-        {canvas.contextWidth, 220.0f, 460.0f, "contextWidth"},
         {canvas.bottomHeight, 72.0f, 300.0f, "bottomHeight"},
-        {canvas.outputBlockHeight, 96.0f, 340.0f, "outputBlockHeight"},
     };
     for (const DockField& field : fields) {
         RIN_CHECK_MSG(field.lo < field.value && field.value < field.hi,
@@ -1384,6 +1507,70 @@ void testWorkflowCanvasLayoutState() {
     }
 }
 
+// --- 9. afterGraphChange 节点状态清扫（M11/DEC-021：UI 状态不跨节点存续） ---
+//
+// 被测契约（node_canvas.hpp WorkflowCanvasState::sweepStaleNodeState，经
+// afterGraphChange 调用）：删除画布节点后其 controls/driverSizes 条目同步清除；
+// 存续节点的条目不受影响；monitors 条目含 GL 引用，清扫归 pumpMonitorViews
+// （渲染线程纪律），不在此处（headless 覆盖见 §3/§7 的 pump 分支）。
+
+void testAfterGraphChangeSweepsNodeState() {
+    kairo::Executor executor;
+    kairo::ExecutorConfig executorConfig;
+    const bool initialized = static_cast<bool>(executor.initialize(executorConfig));
+    RIN_CHECK(initialized);
+    if (!initialized) {
+        return;
+    }
+    rin::WorkflowEngineConfig config;
+    config.pumpInterval = std::chrono::milliseconds{2};
+    // 空帧源（null service 恒"无新帧"）：本节不驱动帧流动，只测 UI 侧清扫。
+    viewer::WorkflowSourceRouter router;
+    config.frameSource = viewer::makeCameraFrameSource(nullptr, router);
+    std::shared_ptr<rin::IWorkflowEngine> engine =
+        rin::createWorkflowEngine(executor, std::move(config));
+    RIN_CHECK(static_cast<bool>(engine));
+    if (!engine) {
+        return;
+    }
+
+    WorkflowCanvasState canvas;
+    canvas.model.catalog = &engine->catalog();
+    RIN_CHECK(canvas.model.createNode("gaussian_blur", {0.0f, 0.0f}).ok);   // id 1
+    RIN_CHECK(canvas.model.createNode("gaussian_blur", {300.0f, 0.0f}).ok);  // id 2
+    // 预置两节点的内嵌控件与驱动尺寸条目（纯逻辑直填：清扫只看键是否存在）。
+    canvas.controls[1].controls["sigma"];
+    canvas.controls[2].controls["sigma"];
+    canvas.driverSizes[1] = {3, 32, 24};
+    canvas.driverSizes[2] = {4, 16, 12};
+
+    canvas.afterGraphChange(engine.get());
+    RIN_CHECK_MSG(canvas.controls.size() == 2 && canvas.driverSizes.size() == 2,
+                  "sweep: entries for live nodes survive afterGraphChange");
+
+    RIN_CHECK(canvas.model.deleteNodes({2}).ok);
+    canvas.afterGraphChange(engine.get());
+    RIN_CHECK_MSG(canvas.controls.find(2) == canvas.controls.end(),
+                  "sweep: deleted node's control entry removed");
+    RIN_CHECK_MSG(canvas.driverSizes.find(2) == canvas.driverSizes.end(),
+                  "sweep: deleted node's driver size entry removed");
+    RIN_CHECK_MSG(canvas.controls.find(1) != canvas.controls.end() &&
+                      canvas.driverSizes.find(1) != canvas.driverSizes.end(),
+                  "sweep: surviving node's entries kept");
+
+    // monitors 不在 afterGraphChange 清扫面（GL 释放归 pumpMonitorViews）：
+    // 已删节点的监看器条目仍保留，由 pump 完成（§3 已证其清理语义）。
+    canvas.monitors[99].meta = "kept until pump";
+    RIN_CHECK(canvas.model.deleteNodes({1}).ok);
+    canvas.afterGraphChange(engine.get());
+    RIN_CHECK_MSG(canvas.monitors.find(99) != canvas.monitors.end(),
+                  "sweep: monitor entries wait for the render-thread pump");
+
+    engine->stop();
+    engine.reset();
+    RIN_CHECK(executor.shutdown(true) == kairo::ShutdownResult::Completed);
+}
+
 }  // namespace
 
 int main() {
@@ -1393,7 +1580,8 @@ int main() {
     runSection("shutdown_race_defense", testShutdownRaceDefense);
     runSection("camera_source_rendition_routing", testCameraSourceRenditionRouting);
     runSection("gray_chain_end_to_end", testGrayChainEndToEnd);
-    runSection("pump_node_output_driver_pull", testPumpNodeOutputDriverPull);
+    runSection("pump_driver_sizes_pull", testPumpDriverSizesPull);
     runSection("workflow_canvas_layout_state", testWorkflowCanvasLayoutState);
+    runSection("after_graph_change_sweeps_node_state", testAfterGraphChangeSweepsNodeState);
     return rin_test::exitStatus();
 }

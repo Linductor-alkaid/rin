@@ -13,7 +13,7 @@
 //   达成列对齐）。
 //
 // 本头文件不包含 EUI-NEO 类型（纯逻辑单测对象，tests/test_perf_panel.cpp）；
-// EUI 组装见 node_canvas.hpp（工具栏徽标/节点耗时徽标）与 param_panel.hpp
+// EUI 组装见 node_canvas.hpp（工具栏徽标/节点耗时徽标/底部总览，M11 起四区）
 // （右面板工作流总览/选中节点耗时展开），消费入口在 app.cpp pump。
 
 #include <rin/workflow_engine.hpp>

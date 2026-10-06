@@ -142,7 +142,8 @@ inline const PortTypeTokens& portTypes() {
     return tokens;
 }
 
-/// 端口类型 → 类型色。
+/// 端口类型 → 类型色。Any（M11/DEC-021 通配输入，监看器）取中性次级色——
+/// 通配无类型语义，不参与三型类型色编码。
 inline eui::Color portTypeColor(const rin::PortType type) {
     const PortTypeTokens& tokens = portTypes();
     switch (type) {
@@ -152,6 +153,8 @@ inline eui::Color portTypeColor(const rin::PortType type) {
             return tokens.rgba8;
         case rin::PortType::Depth32F:
             return tokens.depth32f;
+        case rin::PortType::Any:
+            return dark().fgSubtle;
     }
     return tokens.gray8;
 }

@@ -10,6 +10,9 @@ std::uint32_t elementSize(PortType type) noexcept {
             return 4;
         case PortType::Depth32F:
             return 4;  // float32 单通道（DEC-020：字节容器 host 端序承载）。
+        case PortType::Any:
+            return 0;  // 仅目录声明位通配（M11/DEC-021）：实际图像格式不可为
+                       // Any，elementSize=0 使 make/wrap 元数据校验天然拒绝。
     }
     return 0;
 }

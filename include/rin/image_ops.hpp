@@ -36,6 +36,9 @@ namespace rin {
 ///   归一化后裁回原尺寸、round-half-up 饱和量化；数值语义见设计文档 §7
 ///   （DEC-012：FFT 后端为 pinned kissfft float，实现私有链接）。
 /// - "source"：返回 nullptr（注入型源节点，执行时由引擎注入相机帧）。
+/// - "viewer"：监看器恒等透传（M11/DEC-021）。Any→Any 单输入单输出，apply
+///   返回输入本身（共享像素零拷贝）；引擎按节点照常发布产物快照，UI 在节点
+///   内嵌预览窗消费；无参数。
 /// - 其他 typeId：抛 std::invalid_argument（M4 目录类型已全部实现，此为未知
 ///   类型的显式暴露路径，不静默）。
 ///

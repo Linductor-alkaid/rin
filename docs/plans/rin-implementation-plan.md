@@ -1,7 +1,7 @@
 # Rin 实施总计划
 
 > 状态：In Progress
-> 最后更新：2026-09-29
+> 最后更新：2026-10-07
 > 负责人：Linductor-alkaid
 
 ## 当前整体状态
@@ -143,7 +143,18 @@ RealSense 真机侧与仿真部署参考逐位对齐）并当日完成关闭：
 M9 固定预览卡片移除（被组合能力取代）；独立验证一轮 PASS：三预设
 31/31 全绿（节点 golden 258 + 引擎时序 83 + 帧源/缩略图 94 + 边界 78
 项检查）+ tsan 全绿，实现零缺陷；真机画布组装验收待用户。M8/M9/M10 经用户授权合并发布为
-v0.5.1（2026-09-30）。
+v0.5.1（2026-09-30）。2026-10-06 用户需求立项 [M11](m11-canvas-monitor-inline.md)
+并当日完成关闭：[DEC-021](../decisions/DEC-021-monitor-node-and-inline-editing.md)
+冻结——画布节点内嵌参数编辑（ComfyUI/蓝图范式，右栏移除、五区改四区）、
+`PortType::Any` 通配端口与监看器节点（Any→Any 恒等透传 sink，UI 无输出端口、
+节点内嵌实时预览，任意输出线可接入）、枚举点击循环与总览迁底部区；关键可行性
+取证为 EUI pinned 4691fc0 命中测试源码（画布 mouseArea 先合成 = 内嵌控件优先
+命中，非交互视觉穿透）。独立验证一轮 PASS：三份 UI 测试映射新 API + 新建
+`test_monitor_any`（Any 全矩阵/恒等 golden/几何族），四预设 32/32 全绿
+（tsan `setarch -R`，无相机硬件项跳过），实现零缺陷；真机冒烟（合成帧源 +
+脚本化时序 + 截图 `screenshots/m11/`）验证内嵌编辑、监看器预览随参数联动
+（424x240→212x120）与停止排空。遗留观察：M10 深度域 typeId 调色板落
+"Other"（M10 遗留，非 M11 回归）。
 
 ## 交付边界（SCOPE）
 
@@ -239,6 +250,7 @@ v0.5.1（2026-09-30）。
 | M8 深度策略预处理算子（Core） | [m8-depth-policy-preproc.md](m8-depth-policy-preproc.md) | 无（M4 纪律前置） | v0.5.1 |
 | M9 米制深度通道与策略深度预览 | [m9-metric-depth-channel.md](m9-metric-depth-channel.md) | M8 | v0.5.1 |
 | M10 工作流深度域（米制算子进画布） | [m10-workflow-depth-domain.md](m10-workflow-depth-domain.md) | M8、M9 | v0.5.1 |
+| M11 监看器节点与画布内嵌参数编辑 | [m11-canvas-monitor-inline.md](m11-canvas-monitor-inline.md) | M10 | v0.5.2 |
 
 ## 暂定决策（未冻结）
 

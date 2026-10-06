@@ -998,6 +998,92 @@ void testThumbnailRgba() {
     }
 }
 
+// --- 8b. 枚举点击循环与监看器预览上限（M11/DEC-021 决策 5/6 纯逻辑） ---
+
+void testCycleEnumOptionAndMonitorPreviewCap() {
+    // cycleEnumOption：current 的下一选项、末项环绕回首项。
+    {
+        const std::vector<std::string> options{"nearest", "bilinear"};
+        RIN_CHECK_MSG(viewer::cycleEnumOption(options, "nearest") ==
+                          std::optional<std::string>{"bilinear"},
+                      "cycle: first option advances to the second");
+        RIN_CHECK_MSG(viewer::cycleEnumOption(options, "bilinear") ==
+                          std::optional<std::string>{"nearest"},
+                      "cycle: last option wraps to the first");
+    }
+    {
+        const std::vector<std::string> options{"clamp", "reflect", "zero"};
+        RIN_CHECK(viewer::cycleEnumOption(options, "clamp") == std::optional<std::string>{"reflect"});
+        RIN_CHECK(viewer::cycleEnumOption(options, "reflect") == std::optional<std::string>{"zero"});
+        RIN_CHECK_MSG(viewer::cycleEnumOption(options, "zero") ==
+                          std::optional<std::string>{"clamp"},
+                      "cycle: three options wrap end to start");
+    }
+    // 单选项：环绕到自身。
+    {
+        const std::vector<std::string> options{"only"};
+        RIN_CHECK_MSG(viewer::cycleEnumOption(options, "only") ==
+                          std::optional<std::string>{"only"},
+                      "cycle: single option cycles to itself");
+    }
+    // current 不在选项内 / 空选项 → nullopt（调用方保持现值不变）。
+    {
+        const std::vector<std::string> options{"a", "b"};
+        RIN_CHECK_MSG(!viewer::cycleEnumOption(options, "c").has_value(),
+                      "cycle: unknown current yields nullopt");
+        RIN_CHECK_MSG(!viewer::cycleEnumOption(options, "").has_value(),
+                      "cycle: empty current yields nullopt");
+        const std::vector<std::string> empty;
+        RIN_CHECK_MSG(!viewer::cycleEnumOption(empty, "a").has_value(),
+                      "cycle: empty options yield nullopt");
+    }
+    // 完整遍历回到起点（点击循环经全选项）。
+    {
+        const std::vector<std::string> options{"1", "3", "5"};
+        std::string current = "1";
+        for (std::size_t i = 0; i < options.size(); ++i) {
+            const std::optional<std::string> next = viewer::cycleEnumOption(options, current);
+            RIN_CHECK(next.has_value());
+            if (next) {
+                current = *next;
+            }
+        }
+        RIN_CHECK_MSG(current == "1", "cycle: full traversal returns to the start");
+    }
+
+    // 监看器预览最长边上限（M11/DEC-021：有界；> 缩略图 256，放大档清晰。
+    // 2026-10-07 视窗宽高双向可调（28685c3）后窗口可达 800x640 画布单位，
+    // 上限 512→1024 保证宽窗常见放大档清晰）。
+    RIN_CHECK_EQ(viewer::kMonitorPreviewMaxDim, std::uint32_t{1024});
+    RIN_CHECK_MSG(viewer::kMonitorPreviewMaxDim > viewer::kThumbnailMaxDim,
+                  "monitor: preview cap exceeds the thumbnail cap");
+    // maxDim=1024 下降采样边界：1200x600 快照 → 1024x512（保持宽高比、只缩
+    // 不放）；maxDim=512 旧边界行为回归（600x300 → 512x256）。
+    {
+        rin::NodeOutputSnapshot snapshot;
+        snapshot.node = 1;
+        snapshot.format = rin::PortType::Gray8;
+        snapshot.width = 1200;
+        snapshot.height = 600;
+        snapshot.stride = 1200;
+        snapshot.sourceSequence = 11;
+        snapshot.pixels = std::make_shared<const std::vector<std::uint8_t>>(
+            static_cast<std::size_t>(1200) * 600, 0x55);
+        rin::Frame out;
+        RIN_CHECK(viewer::thumbnailRgbaFromSnapshot(snapshot, viewer::kMonitorPreviewMaxDim, out));
+        RIN_CHECK_EQ(out.width, 1024u);
+        RIN_CHECK_EQ(out.height, 512u);
+        // 显式 maxDim=512 旧边界行为回归：600x300 → 512x256（函数语义与常量
+        // 上限解耦，上限抬升不改变下降采样数学）。
+        rin::NodeOutputSnapshot legacy = snapshot;
+        legacy.sourceSequence = 12;
+        rin::Frame legacyOut;
+        RIN_CHECK(viewer::thumbnailRgbaFromSnapshot(legacy, 512u, legacyOut));
+        RIN_CHECK_EQ(legacyOut.width, 512u);
+        RIN_CHECK_EQ(legacyOut.height, 256u);
+    }
+}
+
 // --- 9. 节点执行失败标注 ---
 
 void testNodeFailureMarks() {
@@ -1473,6 +1559,7 @@ int main() {
     runSection("slider_mapping", testSliderMapping);
     runSection("effective_value_and_text", testEffectiveValueAndText);
     runSection("real_array_grid", testRealArrayGrid);
+    runSection("cycle_enum_and_monitor_cap", testCycleEnumOptionAndMonitorPreviewCap);
     runSection("node_output_cache", testNodeOutputCache);
     runSection("thumbnail_rgba", testThumbnailRgba);
     runSection("node_failure_marks", testNodeFailureMarks);

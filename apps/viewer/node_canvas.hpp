@@ -1,34 +1,51 @@
 #pragma once
 
-// 节点编辑器画布组装（M5-03，[DEC-014] 五区骨架的工作流页填充 / [DEC-015]
-// EUI-NEO 原语自研画布）。替代 M5-02 的 workflow_shell.hpp 静态骨架（五区几何
-// 不变：工具栏 44 / 调色板 200 / 画布 / 上下文 264 / 底部 120，间距 kSpace3）；
-// M5-04 起上下文面板（参数面板/缩略图）与五区组装迁移至 param_panel.hpp。
+// 节点编辑器画布组装（M5-03 起；M11/DEC-021 重构为工作流页唯一组装层）。
+// 五区骨架（DEC-014）随右栏移除改四区：顶工具栏 / 左调色板 / 中画布 / 底部
+// 校验事件（右列并排工作流总览，M5-05 语义不变）。参数编辑（M5-04 右面板）
+// 迁移为画布节点内嵌控件（ComfyUI/蓝图范式），中间结果查看（M5-04 缩略图）
+// 由监看器节点承担（Any→Any 透传 sink，节点内嵌预览窗）。
 //
-// 交互结构（DEC-015 决策 2：交互几何下沉纯逻辑）：画布内全部指针语义由覆盖
+// 交互结构（DEC-015 决策 2 + M11/DEC-021 决策 4）：画布内全部指针语义由覆盖
 // 视口的一层 `components::mouseArea` 承载，经 canvas_model.hpp 的命中检测与
-// 交互状态机分发——节点/连线为非交互视觉元素，不参与命中（retained layer 的
-// polygon 绘制签名缺陷按 EUI-20260924-001 以 dirtyKey 键控绕行，画布修订号
-// 作脏键：交互期间逐帧直绘，静止时键稳定）。连线即时类型过滤（§5.3）：拖线
-// 中兼容输入端口高亮 brand、不兼容端口降为次级色。
+// 交互状态机分发；**该层先合成（视觉层之下）**，节点内嵌交互控件（滑条/输入/
+// 开关/胶囊）后合成——EUI 命中测试自顶向下、子先于父、仅 interactive 元素
+// 拦截（pinned 4691fc0 core/runtime/runtime_input.h 取证），控件优先接收事件、
+// 节点标题/卡片等非交互视觉穿透至画布 mouseArea（拖动/框选/连线语义不变）；
+// 滚轮缩放不受影响（hitTestScrollable 谓词控件不匹配则穿透）。
 //
-// 引擎同步（§5.3/§5.4）：每次图变更经 afterGraphChange 调用 `applyGraph`——
-// UI 预检与引擎准入共用 validateWorkflowGraph 唯一判据，中间态（悬空输入）
-// 以校验标注呈现而非阻塞搭图；被拒绝的连线操作以反馈行显式说明（不静默）。
+// 内嵌参数控件（M11/DEC-021 决策 3）：节点纵向结构 = 标题 → 参数区（按声明
+// 序）→ 端口区 → 页脚（last·avg 耗时徽标）。控件映射复用 §5.5 纪律与
+// param_model 纯逻辑：Boolean→toggleSwitch、带范围 Integer/Real→slider+当前
+// 值文本、Enumeration→点击循环胶囊（决策 6）、RealArray→紧凑矩阵网格（行列
+// 步进 + 单元输入）；编辑即经 requestParamUpdate 提交（下一帧生效）、同步
+// 拒绝就地报错（control.error）、引擎接受后记入画布模型。相机源节点内嵌全局
+// 分辨率入口（DEC-017 决策 4：与预览页共享档位/状态/命令，点击循环档位）。
+// ROI 联动约束（M6-06）沿用，输入尺寸源为 per-node 驱动尺寸缓存（pump 刷新）。
+//
+// 监看器（M11/DEC-021 决策 2）：typeId "viewer"，画布隐藏输出端口（纯逻辑
+// portAt 同步跳过），节点内嵌预览窗显示输入图像（pumpMonitorViews 拉取
+// tryLoadNodeOutput 上传 GpuFrameView；非 Running 整体排空释放，§4 语义）。
+//
+// 连线即时类型过滤（§5.3）：拖线中兼容输入端口高亮 brand、不兼容端口降为
+// 次级色；Any 输入端口（监看器）恒兼容。
+//
+// 引擎同步（§5.3/§5.4）：每次图变更经 afterGraphChange 调用 `applyGraph`
+// ——UI 预检与引擎准入共用 validateWorkflowGraph 唯一判据；afterGraphChange
+// 同时清扫已删节点的内联控件/监看器/驱动尺寸缓存（UI 状态不跨节点存续）。
 //
 // 原语映射（ui_workspace_design.md §6）：画布视口 stack+clip、节点 rect、
-// 端口 rect、连线 polygon（贝塞尔采样 + 法向偏移带状轮廓——polygon 为填充
-// 语义，开放点集会渲染成弦-曲线封闭区域，粗细一致曲线经 wireRibbon 构造）、
-// 右键创建菜单为自绘浮层（沿用
-// EUI-20260928-001 的 rect/text 退化先例，未用 components::contextMenu）、
-// 调色板过滤输入为 components::input（样式字段逐一取 viewer 令牌，不引入
-// 组件主题度量）。键盘路径（F/Del/Esc）在 app.cpp 的 DslAppConfig::onKeyEvent，
-// 每项均有鼠标等价路径（Fit 按钮/右键删除/点击空白）。
+// 端口 rect、连线 polygon（贝塞尔采样 + 法向偏移带状轮廓 wireRibbon）、
+// 右键创建菜单为自绘浮层（EUI-20260928-001 先例）、调色板过滤输入为
+// components::input。键盘路径（F/Del/Esc）在 app.cpp 的 DslAppConfig::
+// onKeyEvent，每项均有鼠标等价路径。
 //
 // [DEC-014]: ../../docs/decisions/DEC-014-workbench-information-architecture.md
 // [DEC-015]: ../../docs/decisions/DEC-015-node-editor-implementation-path.md
+// [DEC-021]: ../../docs/decisions/DEC-021-monitor-node-and-inline-editing.md
 
 #include "canvas_model.hpp"
+#include "gpu_frame_view.hpp"
 #include "param_model.hpp"
 #include "perf_model.hpp"
 #include "viewer_theme.hpp"
@@ -41,11 +58,66 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace viewer {
+
+/// 单参数控件状态（M5-04 随右面板引入；M11 起按节点持有，地址经 std::map
+/// 节点稳定——控件回调捕获 map 值引用，节点删除经 afterGraphChange 清扫）。
+struct ParamControlState {
+    /// 标量文本（Integer/Real 当前值显示；Enumeration 当前选项 id）。
+    eui::Signal<std::string> text;
+    /// Boolean 开关状态。
+    eui::Signal<bool> checked;
+    /// Enumeration 下拉开合（M5-04 遗留：内嵌胶囊不使用，保留控件状态位）。
+    eui::Signal<bool> open;
+    /// RealArray 矩阵编辑器：形状 + 行主序值 + 单元文本（与值一一对应）。
+    std::size_t matrixRows = 0;
+    std::size_t matrixCols = 0;
+    std::vector<double> matrixValues;
+    std::vector<eui::Signal<std::string>> matrixCells;
+    /// 就地报错（§5.5 同步拒绝）；空串 = 无错。
+    std::string error;
+};
+
+/// 单节点的内嵌参数控件状态集（paramId → 控件）。
+struct NodeParamControls {
+    std::map<std::string, ParamControlState> controls;
+};
+
+/// 监看器预览视图（M11/DEC-021）：每监看器节点一枚 GL 纹理视图与产物水位；
+/// 上传/释放只能发生在渲染线程（pump/onFrame），节点删除与非 Running 排空
+/// 经 pumpMonitorViews 完成。
+struct MonitorView {
+    std::uint64_t lastSeen = 0;  /// 该节点产物通道的上次已见序号。
+    GpuFrameView view;
+    std::string meta;  /// "宽 x 高 · seq N"（无产物为空）。
+};
+
+using MonitorViews = std::map<rin::NodeId, MonitorView>;
+
+/// 输入驱动节点最新产物尺寸（M11：M6-06 ROI 联动约束的 per-node 尺寸源，
+/// 替代右面板 NodeOutputCache 的选中节点消费）。
+struct DriverOutputSize {
+    std::uint64_t lastSeen = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+/// 相机分辨率入口绑定（M6-06，DEC-017）：分辨率是相机流全局属性——源节点
+/// 内嵌入口与预览页选择器共享同一档位列表、同一选择状态（ViewerContext）与
+/// 同一 `requestResolution` 命令（全局 restream）。labels/index 由 app.cpp
+/// 组装期绑定（仅 compose 调用期有效）；M11 起内嵌入口为点击循环档位
+/// （DEC-021 决策 6），无弹层开合状态。
+struct CameraResolutionBinding {
+    const std::vector<std::string>* labels = nullptr;
+    int selectedIndex = -1;
+    std::function<void(int)> onPick;  /// 浮层选项点击（M11 验收反馈：下拉选择）。
+};
 
 /// 工作流页画布会话状态（ViewerContext 持有，地址稳定供闭包引用；DEC-014
 /// 决策 4：页面 UI 状态不因导航丢失，导航层不触碰本结构）。
@@ -68,23 +140,34 @@ struct WorkflowCanvasState {
     // 画布右键创建菜单（§5.2.2，自绘浮层；即输即筛）。
     bool menuOpen = false;
     CanvasPoint menuPos{0.0f, 0.0f};
+    // 相机分辨率下拉浮层（M11 用户验收反馈：下拉选择替代点击循环；同
+    // 创建菜单的窗口级 overlay 模式——画布 clip 视口内组件弹层会被裁剪）。
+    bool resolutionMenuOpen = false;
+    CanvasPoint resolutionMenuPos{0.0f, 0.0f};  // 窗口逻辑坐标。
     eui::Signal<std::string> menuFilter;
     eui::Signal<std::string> paletteFilter;
     /// 调色板滚动偏移（M7-03，scrollView bind；目录/过滤变化由 contentKey
     /// 重测量，滚动位置随信号保持）。
     eui::Signal<float> paletteScroll{0.0f};
 
-    /// 五区 docking 布局（M7-04，UI 私有会话状态，DEC-014"画布布局为 UI 私有
-    /// 状态"延伸）：分隔条拖拽可调，compose 期夹取范围；会话级，不持久化。
-    float paletteWidth = 200.0f;      /// 调色板宽 [150, 400]
-    float contextWidth = 264.0f;      /// 右上下文面板宽 [220, 460]
-    float bottomHeight = 120.0f;      /// 底部校验/事件区高 [72, 300]
-    float outputBlockHeight = 148.0f; /// Context 输出块高 [96, 340]
-    /// 活动分隔条（-1 无；0 = palette 右缘、1 = context 左缘、2 = 底部上缘、
-    /// 3 = Context 输出块上缘）与拖拽起始（指针坐标 + 布局起始值）。
+    /// 四区 docking 布局（M7-04 引入；M11/DEC-021 移除右栏后余两处分隔条）：
+    /// 调色板宽与底部高可调，会话级，不持久化。
+    float paletteWidth = 200.0f;  /// 调色板宽 [150, 400]
+    float bottomHeight = 120.0f;  /// 底部校验/事件区高 [72, 300]
+    /// 活动拖拽槽位（-1 无；0 = palette 右缘、1 = 底部上缘分隔条；
+    /// 2 = 监看器预览缩放手柄，M11 验收反馈）与拖拽起始。
     int dockDrag = -1;
     float dockDragStartPointer = 0.0f;
     float dockDragStartValue = 0.0f;
+    /// 槽位 2（监看器手柄）专用：起始宽度基准（totalX 增量换算用）。
+    float dockDragStartWidth = 0.0f;
+
+    /// 节点内嵌参数控件状态（M11：按节点持有；afterGraphChange 清扫已删节点）。
+    std::map<rin::NodeId, NodeParamControls> controls;
+    /// 监看器预览视图（M11；渲染线程 pump 独占写入）。
+    MonitorViews monitors;
+    /// 输入驱动节点产物尺寸缓存（M11：ROI 联动约束尺寸源；非 Running 清空）。
+    std::map<rin::NodeId, DriverOutputSize> driverSizes;
 
     /// 最近一次操作反馈（§5.4 拒绝原因显式反馈，不静默失败）。
     std::string feedback;
@@ -94,7 +177,7 @@ struct WorkflowCanvasState {
     /// Started/Stopped 事件清空；事件消费在 app.cpp pump）。
     NodeFailureMarks failures;
     /// 性能面板统计管道（M5-05 §5.7：sequence 推进消费 + 停止冻结语义；
-    /// 消费在 app.cpp pump，工具栏状态徽标/节点耗时徽标/右面板总览读取）。
+    /// 消费在 app.cpp pump，工具栏状态徽标/节点耗时徽标/底部总览读取）。
     WorkflowPerfState perf;
     /// 待生效标注（M5-06 §4）：Running 下图结构变更已入队引擎、尚未经
     /// GraphApplied 帧边界应用。afterGraphChange 置位（校验通过才入队），
@@ -109,7 +192,9 @@ struct WorkflowCanvasState {
     /// applyGraph 的同步校验结果为准（引擎拒绝时保持当前生效图不变，契约），
     /// 无引擎（纯逻辑测试）时本地 revalidate。Running 下同步校验通过即入队
     /// 帧边界应用 → 置 graphPending（§4"待生效"，GraphApplied 后清除）；
-    /// Idle/Failed 下同步生效，无待生效语义。
+    /// Idle/Failed 下同步生效，无待生效语义。同时清扫已删节点的内联控件/
+    /// 监看器条目/驱动尺寸缓存（监看器纹理释放归 pumpMonitorViews——GL 释放
+    /// 只在渲染线程，此处仅置位让 pump 清理）。
     void afterGraphChange(rin::IWorkflowEngine* engine) {
         if (engine != nullptr) {
             model.validation = engine->applyGraph(model.toGraph());
@@ -119,7 +204,22 @@ struct WorkflowCanvasState {
             model.revalidate();
             graphPending = false;
         }
+        sweepStaleNodeState();
         ++revision;
+    }
+
+    /// 清扫已不在画布图内的节点状态条目（controls/driverSizes；监看器条目
+    /// 含 GL 纹理，清扫归 pumpMonitorViews——release 只能在渲染线程）。
+    void sweepStaleNodeState() {
+        const auto known = [this](rin::NodeId id) {
+            return model.findNode(id) != nullptr;
+        };
+        for (auto it = controls.begin(); it != controls.end();) {
+            it = known(it->first) ? std::next(it) : controls.erase(it);
+        }
+        for (auto it = driverSizes.begin(); it != driverSizes.end();) {
+            it = known(it->first) ? std::next(it) : driverSizes.erase(it);
+        }
     }
 
     /// 画布局部（视口）坐标 → 画布坐标。
@@ -214,6 +314,100 @@ using viewer::theme::kSpace3;
 [[nodiscard]] inline float scaledFont(const float base, const float scale,
                                       const float minimum = 8.0f) {
     return std::max(minimum, base * scale);
+}
+
+/// 内嵌控件输入样式（M5-03 调色板过滤框同源：样式字段逐一取 viewer 令牌）。
+inline components::InputStyle inlineInputStyle(const theme::ThemeTokens& tokens) {
+    components::InputStyle style;
+    style.background = tokens.input;
+    style.focused = tokens.input;
+    style.border = tokens.inputBorder;
+    style.focusBorder = tokens.brand;
+    style.text = tokens.fg;
+    style.placeholder = tokens.fgSubtlest;
+    style.cursor = tokens.brand;
+    style.shadow = core::Shadow{};
+    style.radius = kRadiusSm;
+    return style;
+}
+
+/// 参数编辑提交（§5.5 语义不变，M11 起由内嵌控件调用）：纯逻辑校验 → 引擎
+/// requestParamUpdate（同步拒绝 → 就地报错；引擎优先于模型，保证模型与引擎
+/// 目标图一致）→ 画布模型记账（下次图结构变更随 applyGraph 携带）。不经
+/// afterGraphChange：参数热更新有独立通道，Running 下重复 applyGraph 会触发
+/// 图重建事件刷屏。返回是否提交成功。
+[[nodiscard]] inline bool submitParamAssignment(WorkflowCanvasState& canvas,
+                                                rin::IWorkflowEngine* engine,
+                                                const rin::NodeId node,
+                                                const rin::ParamDescriptor& descriptor,
+                                                rin::ParamValue value,
+                                                ParamControlState& control) {
+    const ParamEditResult result = makeParamAssignment(descriptor, std::move(value));
+    if (!result.ok) {
+        control.error = result.error;
+        canvas.feedback = "'" + descriptor.label + "': " + result.error;
+        return false;
+    }
+    if (engine != nullptr) {
+        std::string error;
+        if (!engine->requestParamUpdate(node, descriptor.id, result.assignment.value, &error)) {
+            control.error = error.empty() ? "parameter update rejected" : std::move(error);
+            canvas.feedback = "'" + descriptor.label + "': " + control.error;
+            return false;
+        }
+    }
+    const CanvasOpResult applied = canvas.model.setParam(node, result.assignment);
+    if (!applied.ok) {
+        control.error = applied.error;
+        canvas.feedback = "'" + descriptor.label + "': " + applied.error;
+        return false;
+    }
+    control.error.clear();
+    return true;
+}
+
+/// 节点内嵌控件绑定（M11：M5-04 ensurePanelBindings 的 per-node 化）：首次
+/// compose 时按节点描述符以生效值初始化控件初值（幂等；map 值地址稳定供
+/// 回调引用）。
+inline void ensureNodeControls(WorkflowCanvasState& canvas, const CanvasNode& node,
+                               const rin::NodeDescriptor& descriptor) {
+    if (canvas.controls.find(node.id) != canvas.controls.end()) {
+        return;
+    }
+    NodeParamControls& entry = canvas.controls[node.id];
+    for (const rin::ParamDescriptor& pd : descriptor.params) {
+        ParamControlState& control = entry.controls[pd.id];
+        const rin::ParamValue* effective =
+            effectiveParamValue(descriptor, node.params, pd.id);
+        if (effective == nullptr) {
+            continue;  // 声明内参数必有默认值；防御性跳过。
+        }
+        switch (pd.kind) {
+            case rin::ParamKind::Boolean:
+                control.checked.set(std::get<bool>(*effective));
+                break;
+            case rin::ParamKind::Integer:
+            case rin::ParamKind::Real:
+                control.text.set(paramValueText(*effective));
+                break;
+            case rin::ParamKind::Enumeration:
+                control.text.set(std::get<std::string>(*effective));
+                control.open.set(false);
+                break;
+            case rin::ParamKind::RealArray: {
+                const RealArrayGrid grid =
+                    RealArrayGrid::fromFlat(std::get<std::vector<double>>(*effective));
+                control.matrixRows = grid.rows;
+                control.matrixCols = grid.cols;
+                control.matrixValues = grid.values;
+                control.matrixCells.resize(grid.values.size());
+                for (std::size_t i = 0; i < grid.values.size(); ++i) {
+                    control.matrixCells[i].set(formatRealText(grid.values[i]));
+                }
+                break;
+            }
+        }
+    }
 }
 
 // --- 工具栏（§5.8 运行控制，M5-06：启动/停止 + 待生效标注；本区：标题/校验状态/
@@ -563,10 +757,430 @@ inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
         .build();
 }
 
-// --- 节点框（§5.3 端口纵向排布 / §4 选中与问题描边） ---
-inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
-                              const CanvasNode& node,
-                              const std::optional<rin::PortType>& draftType) {
+// --- 节点内嵌参数区（M11/DEC-021 决策 3：ComfyUI/蓝图范式，右栏语义就地化） ---
+//
+// 行布局与 canvas_model.hpp 的 paramRowHeight/paramSectionHeight 同源（绘制与
+// 命中共用度量）；控件尺寸/字号随画布缩放（scaledFont）。枚举=点击循环胶囊
+// （决策 6）、ROI 联动约束沿用（有效域映射，M6-06 的"越界从控件不可达"由
+// 滑条域内取值保持）。同步拒绝不改变行布局（几何纯函数不含动态错误行）：
+// 参数行右上以 destructive "!" 标注、完整原因经画布反馈行（工具栏）显式
+// 呈现，不静默（§5.4/§5.5）。控件回调按值捕获节点 id（画布图变更会重排节点
+// 数组，不持节点指针）。
+inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
+                                const CanvasNode& node, const rin::NodeDescriptor& descriptor,
+                                rin::IWorkflowEngine* engine,
+                                const CameraResolutionBinding* cameraResolution,
+                                const float s) {
+    const theme::ThemeTokens& tokens = theme::dark();
+    ensureNodeControls(state, node, descriptor);
+    NodeParamControls& entry = state.controls[node.id];
+    const rin::NodeId nodeId = node.id;  // 回调按值捕获，不持画布节点指针。
+
+    // ROI 联动约束（M6-06，DEC-017）：输入尺寸取驱动节点最新产物尺寸缓存
+    // （pumpDriverSizes 刷新；未知尺寸回退声明范围，apply 期拒绝兜底）。
+    rin::NodeId roiDriver = rin::kInvalidNode;
+    for (const rin::Connection& connection : state.model.connections) {
+        if (connection.to.node == node.id &&
+            connection.to.direction == rin::PortDirection::Input &&
+            connection.to.index == 0) {
+            roiDriver = connection.from.node;
+            break;
+        }
+    }
+    RoiConstraint roi = RoiConstraint::unconstrained();
+    if (roiDriver != rin::kInvalidNode) {
+        if (const auto it = state.driverSizes.find(roiDriver); it != state.driverSizes.end()) {
+            roi = RoiConstraint::forInput(it->second.width, it->second.height);
+        }
+    }
+
+    const float innerX = kParamPadX;
+    const float innerW = kNodeWidth - kParamPadX * 2.0f;
+    const components::InputStyle inputStyle = inlineInputStyle(tokens);
+    // 同步拒绝标注（不占行布局）：参数行标签区右侧 destructive "!"。
+    const auto errorMark = [&ui, &tokens, s](const std::string& base, const float x,
+                                             const float y, const bool hasError) {
+        if (!hasError) {
+            return;
+        }
+        const float mark = 8.0f * s;
+        ui.text(base + ".errMark")
+            .position(x * s, y * s)
+            .size(mark, kParamLabelHeight * s)
+            .text("!")
+            .fontSize(scaledFont(kFontXs, s, 5.0f))
+            .color(tokens.destructive)
+            .horizontalAlign(eui::HorizontalAlign::Center)
+            .verticalAlign(eui::VerticalAlign::Center)
+            .build();
+    };
+    float rowY = kNodeHeaderHeight + kParamSectionGap;
+
+    // 相机分辨率入口（M6-06 引入；M11 迁入源节点内嵌，DEC-017 决策 4）：
+    // 分辨率是相机流全局属性（单 pipeline），与预览页共享档位/状态/命令，
+    // 点击循环档位（DEC-021 决策 6）。行高与 paramSectionHeight 同源
+    // （isCameraSourceNode）。
+    if (isCameraSourceNode(node.typeId) && cameraResolution != nullptr &&
+        cameraResolution->labels != nullptr && !cameraResolution->labels->empty()) {
+        const std::string base = "workflow.node." + std::to_string(node.id) + ".cameraRes";
+        const int count = static_cast<int>(cameraResolution->labels->size());
+        const int selectedIndex =
+            std::clamp(cameraResolution->selectedIndex, 0, std::max(0, count - 1));
+        ui.text(base + ".label")
+            .position(innerX * s, rowY * s)
+            .size(innerW * 0.55f * s, kParamPillHeight * s)
+            .text("Camera resolution")
+            .fontSize(scaledFont(kFontXs, s, 6.0f))
+            .color(tokens.fgSubtle)
+            .verticalAlign(eui::VerticalAlign::Center)
+            .maxWidth(innerW * 0.55f * s)
+            .build();
+        // 下拉触发器（M11 验收反馈：下拉选择；点击打开窗口级选项浮层，
+        // composeWorkflowResolutionMenu，由 app.cpp overlay 层合成）。触发用
+        // rect.onClick；浮层窗口坐标 compose 期精确计算（画布区矩形 + 节点
+        // 屏幕原点 + 触发器屏幕偏移）。勘误（resolve 升级分析）：首版
+        // "mouseArea 在此嵌套下不响应"的结论不成立——EUI 输入路径经无头
+        // 探针实证正常，真实断点是浮层 composer 从未接线。
+        const float pillW = innerW * 0.45f - kSpace1;
+        const float pillX = (innerX + innerW - pillW) * s;
+        const float pillY = (rowY + 2.0f) * s;
+        const float pillH = (kParamPillHeight - 4.0f) * s;
+        const CanvasPoint nodeScreen = state.view.toScreen(node.position);
+        const float menuX = state.areaRect.x + nodeScreen.x + pillX;
+        const float menuY = state.areaRect.y + nodeScreen.y + pillY + pillH;
+        ui.rect(base + ".pill")
+            .position(pillX, pillY)
+            .size(pillW * s, pillH)
+            .radius(kRadiusSm * s)
+            .color(tokens.input)
+            .border(kBorderHairline, tokens.inputBorder)
+            .states(tokens.input, tokens.inputBorderHover, tokens.inputBorderHover)
+            .onClick([&state, menuX, menuY] {
+                state.menuOpen = false;  // 与创建菜单互斥（双 scrim 不可叠加）。
+                state.resolutionMenuOpen = true;
+                state.resolutionMenuPos = {menuX, menuY};
+            })
+            .build();
+        ui.text(base + ".value")
+            .position(pillX + kSpace1 * s, pillY)
+            .size((pillW - 14.0f) * s, pillH)
+            .text((*cameraResolution->labels)[static_cast<std::size_t>(selectedIndex)])
+            .fontSize(scaledFont(kFontXs, s, 6.0f))
+            .color(tokens.fg)
+            .verticalAlign(eui::VerticalAlign::Center)
+            .maxWidth((pillW - 14.0f) * s)
+            .build();
+        ui.text(base + ".chevron")
+            .position(pillX + (pillW - 12.0f) * s, pillY)
+            .size(12.0f * s, pillH)
+            .text("\u25BE")
+            .fontSize(scaledFont(kFontXs, s, 6.0f))
+            .color(tokens.brand)
+            .horizontalAlign(eui::HorizontalAlign::Center)
+            .verticalAlign(eui::VerticalAlign::Center)
+            .build();
+        rowY += kParamPillHeight + kParamRowGap;
+    }
+
+    for (const rin::ParamDescriptor& pd : descriptor.params) {
+        ParamControlState& control = entry.controls[pd.id];
+        const std::string base =
+            "workflow.node." + std::to_string(node.id) + ".param." + pd.id;
+
+        switch (pd.kind) {
+            case rin::ParamKind::Boolean: {
+                ui.text(base + ".label")
+                    .position(innerX * s, rowY * s)
+                    .size(innerW * 0.5f * s, kParamPillHeight * s)
+                    .text(pd.label)
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fgSubtle)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(innerW * 0.5f * s)
+                    .build();
+                errorMark(base, innerX + innerW * 0.5f + kSpace1, rowY,
+                          !control.error.empty());
+                components::SwitchStyle switchStyle;
+                switchStyle.off = tokens.input;
+                switchStyle.on = tokens.brand;
+                switchStyle.knob = tokens.fg;
+                switchStyle.text = tokens.fg;
+                switchStyle.rowHover = tokens.menuHover;
+                switchStyle.rowPressed = tokens.menuHover;
+                ui.stack(base + ".switchWrap")
+                    .position((innerX + innerW * 0.5f) * s, (rowY + 2.0f) * s)
+                    .size(innerW * 0.5f * s, (kParamPillHeight - 4.0f) * s)
+                    .content([&] {
+                        components::toggleSwitch(ui, base + ".switch")
+                            .size(innerW * 0.5f * s, (kParamPillHeight - 4.0f) * s)
+                            .trackSize(std::max(20.0f, 34.0f * s),
+                                       std::max(10.0f, 16.0f * s))
+                            .fontSize(scaledFont(kFontXs, s, 6.0f))
+                            .style(switchStyle)
+                            .checked(control.checked.get())
+                            .onChange([&state, engine, nodeId, &pd,
+                                       &control](const bool value) {
+                                if (submitParamAssignment(state, engine, nodeId, pd, value,
+                                                          control)) {
+                                    control.checked.set(value);
+                                }
+                            })
+                            .build();
+                    })
+                    .build();
+                rowY += kParamPillHeight;
+                break;
+            }
+            case rin::ParamKind::Integer:
+            case rin::ParamKind::Real: {
+                const rin::ParamValue* current =
+                    effectiveParamValue(descriptor, node.params, pd.id);
+                // 标签行：label 左，当前生效值右（编辑即生效，值即回显）。
+                ui.text(base + ".label")
+                    .position(innerX * s, rowY * s)
+                    .size(innerW * 0.55f * s, kParamLabelHeight * s)
+                    .text(pd.label)
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fgSubtle)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(innerW * 0.55f * s)
+                    .build();
+                errorMark(base, innerX + innerW * 0.55f + kSpace1, rowY,
+                          !control.error.empty());
+                ui.text(base + ".value")
+                    .position(innerX * s, rowY * s)
+                    .size(innerW * s, kParamLabelHeight * s)
+                    .text(current != nullptr ? paramValueText(*current) : "")
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fg)
+                    .horizontalAlign(eui::HorizontalAlign::Right)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(innerW * s)
+                    .build();
+                rowY += kParamLabelHeight;
+                // 滑条（目录现存标量参数全部 hasRange）：ROI 参数映射到联动
+                // 有效域（M6-06），否则声明域；Integer 就近取整。
+                const std::optional<std::pair<double, double>> roiRange =
+                    roi.effectiveRange(descriptor, node.params, pd);
+                const double currentValue =
+                    current != nullptr
+                        ? paramScalarAsDouble(*current)
+                        : (roiRange ? roiRange->first
+                                    : paramScalarAsDouble(pd.defaultValue));
+                float normalized = 0.0f;
+                if (roiRange) {
+                    normalized = static_cast<float>(
+                        valueToSliderInRange(roiRange->first, roiRange->second, currentValue));
+                } else {
+                    normalized = static_cast<float>(
+                        valueToSlider(pd, current != nullptr ? *current : pd.defaultValue)
+                            .value_or(0.0));
+                }
+                components::SliderStyle sliderStyle;
+                sliderStyle.track = tokens.input;
+                sliderStyle.fill = tokens.brand;
+                sliderStyle.knob = tokens.fg;
+                ui.stack(base + ".sliderWrap")
+                    .position(innerX * s, rowY * s)
+                    .size(innerW * s, kParamSliderHeight * s)
+                    .content([&] {
+                        components::slider(ui, base + ".slider")
+                            .size(innerW * s, kParamSliderHeight * s)
+                            .value(normalized)
+                            .style(sliderStyle)
+                            .onChange([&state, engine, nodeId, &pd, &control,
+                                       roiRange](const float t) {
+                                std::optional<double> value;
+                                if (roiRange) {
+                                    value = sliderToValueInRange(
+                                        roiRange->first, roiRange->second, t,
+                                        pd.kind == rin::ParamKind::Integer);
+                                } else {
+                                    value = sliderToValue(pd, t);
+                                }
+                                if (!value) {
+                                    return;
+                                }
+                                if (pd.kind == rin::ParamKind::Integer) {
+                                    const auto integer =
+                                        static_cast<std::int64_t>(std::llround(*value));
+                                    if (submitParamAssignment(state, engine, nodeId, pd,
+                                                              integer, control)) {
+                                        control.text.set(std::to_string(integer));
+                                    }
+                                } else if (submitParamAssignment(state, engine, nodeId, pd,
+                                                                 *value, control)) {
+                                    control.text.set(formatRealText(*value));
+                                }
+                            })
+                            .build();
+                    })
+                    .build();
+                rowY += kParamSliderHeight;
+                break;
+            }
+            case rin::ParamKind::Enumeration: {
+                // 点击循环胶囊（DEC-021 决策 6）：小选项集即时遍历；提交路径
+                // 同滑条（requestParamUpdate + 模型记账），拒绝就地标注。
+                ui.text(base + ".label")
+                    .position(innerX * s, rowY * s)
+                    .size(innerW * 0.5f * s, kParamPillHeight * s)
+                    .text(pd.label)
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fgSubtle)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(innerW * 0.5f * s)
+                    .build();
+                errorMark(base, innerX + innerW * 0.5f + kSpace1, rowY,
+                          !control.error.empty());
+                const rin::ParamValue* current =
+                    effectiveParamValue(descriptor, node.params, pd.id);
+                const std::string currentOption =
+                    current != nullptr ? std::get<std::string>(*current) : std::string();
+                const float pillW = innerW * 0.5f - kSpace1;
+                ui.rect(base + ".pill")
+                    .position((innerX + innerW - pillW) * s, (rowY + 2.0f) * s)
+                    .size(pillW * s, (kParamPillHeight - 4.0f) * s)
+                    .radius(kParamPillHeight * 0.5f * s)
+                    .color(tokens.input)
+                    .border(kBorderHairline, tokens.inputBorder)
+                    .states(tokens.input, tokens.inputBorderHover, tokens.inputBorderHover)
+                    .onClick([&state, engine, nodeId, &pd, &control,
+                                              currentOption] {
+                        const std::optional<std::string> next =
+                            cycleEnumOption(pd.enumOptions, currentOption);
+                        if (!next) {
+                            return;
+                        }
+                        if (submitParamAssignment(state, engine, nodeId, pd, *next, control)) {
+                            control.text.set(*next);
+                        }
+                    })
+                    .build();
+                ui.text(base + ".value")
+                    .position((innerX + innerW - pillW) * s, (rowY + 2.0f) * s)
+                    .size(pillW * s, (kParamPillHeight - 4.0f) * s)
+                    .text(currentOption + " \u203A")
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fg)
+                    .horizontalAlign(eui::HorizontalAlign::Center)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(pillW * s)
+                    .build();
+                rowY += kParamPillHeight;
+                break;
+            }
+            case rin::ParamKind::RealArray: {
+                // 形状行：label + R x C 左；行列步进右（±R/±C，M5-04 矩阵网格
+                // 同语义：重排保留行主序数据，截断/零扩展）。
+                ui.text(base + ".shape")
+                    .position(innerX * s, rowY * s)
+                    .size(innerW * 0.4f * s, kParamGridShapeHeight * s)
+                    .text(pd.label + " " + std::to_string(control.matrixRows) + "x" +
+                          std::to_string(control.matrixCols))
+                    .fontSize(scaledFont(kFontXs, s, 6.0f))
+                    .color(tokens.fgSubtle)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .maxWidth(innerW * 0.4f * s)
+                    .build();
+                errorMark(base, innerX + innerW * 0.35f + kSpace1, rowY,
+                          !control.error.empty());
+                constexpr const char* kSteppers[] = {"R+", "R-", "C+", "C-"};
+                const float stepperW = (innerW * 0.55f - kSpace1 * 3.0f) * 0.25f;
+                for (int stepper = 0; stepper < 4; ++stepper) {
+                    const float sx = innerX + innerW - (4 - stepper) * (stepperW + kSpace1);
+                    ui.rect(base + ".step" + std::to_string(stepper))
+                        .position(sx * s, rowY * s)
+                        .size(stepperW * s, kParamGridShapeHeight * s)
+                        .radius(kRadiusSm * s)
+                        .color(tokens.input)
+                        .border(kBorderHairline, tokens.inputBorder)
+                        .states(tokens.input, tokens.inputBorderHover, tokens.inputBorderHover)
+                        .onClick([&state, engine, nodeId, &pd, &control, stepper] {
+                            RealArrayGrid grid;
+                            grid.rows = control.matrixRows;
+                            grid.cols = control.matrixCols;
+                            grid.values = control.matrixValues;
+                            grid.reshape(grid.rows + (stepper == 0 ? 1 : stepper == 1 ? -1 : 0),
+                                         grid.cols + (stepper == 2 ? 1 : stepper == 3 ? -1 : 0));
+                            control.matrixRows = grid.rows;
+                            control.matrixCols = grid.cols;
+                            control.matrixValues = grid.values;
+                            control.matrixCells.resize(grid.values.size());
+                            for (std::size_t i = 0; i < grid.values.size(); ++i) {
+                                control.matrixCells[i].set(formatRealText(grid.values[i]));
+                            }
+                            (void)submitParamAssignment(state, engine, nodeId, pd,
+                                                        grid.values, control);
+                        })
+                        .build();
+                    ui.text(base + ".stepText" + std::to_string(stepper))
+                        .position(sx * s, rowY * s)
+                        .size(stepperW * s, kParamGridShapeHeight * s)
+                        .text(kSteppers[stepper])
+                        .fontSize(scaledFont(kFontXs, s, 5.0f))
+                        .color(tokens.fgSubtle)
+                        .horizontalAlign(eui::HorizontalAlign::Center)
+                        .verticalAlign(eui::VerticalAlign::Center)
+                        .build();
+                }
+                rowY += kParamGridShapeHeight;
+                // 单元网格（行列数可配；单元宽度随列数均分，随缩放）。
+                const float cellGap = 2.0f;
+                const float cellW =
+                    (innerW - static_cast<float>(control.matrixCols - 1) * cellGap) /
+                    static_cast<float>(control.matrixCols);
+                for (std::size_t r = 0; r < control.matrixRows; ++r) {
+                    for (std::size_t c = 0; c < control.matrixCols; ++c) {
+                        const std::size_t index = r * control.matrixCols + c;
+                        components::input(ui, base + ".cell" + std::to_string(index))
+                            .position((innerX + static_cast<float>(c) * (cellW + cellGap)) * s,
+                                      rowY * s)
+                            .size(cellW * s, kParamGridCellHeight * s)
+                            .value(control.matrixCells[index].get())
+                            .fontSize(scaledFont(kFontXs, s, 6.0f))
+                            .inset(std::max(2.0f, kSpace1 * s))
+                            .style(inputStyle)
+                            .onChange([&state, engine, nodeId, &pd, &control,
+                                       index](const std::string& text) {
+                                control.matrixCells[index].set(text);
+                                std::vector<double> values;
+                                values.reserve(control.matrixCells.size());
+                                bool parsed = true;
+                                for (std::size_t i = 0; i < control.matrixCells.size(); ++i) {
+                                    const std::optional<double> value =
+                                        parseRealText(control.matrixCells[i].get());
+                                    if (!value) {
+                                        parsed = false;
+                                        break;
+                                    }
+                                    values.push_back(*value);
+                                }
+                                if (!parsed) {
+                                    control.error = "values must be finite numbers";
+                                    state.feedback = "'" + pd.label + "': " + control.error;
+                                    return;
+                                }
+                                (void)submitParamAssignment(state, engine, nodeId, pd,
+                                                            values, control);
+                            })
+                            .build();
+                    }
+                    rowY += kParamGridCellHeight;
+                }
+                break;
+            }
+        }
+        rowY += kParamRowGap;
+    }
+}
+
+// --- 节点框（§5.3 端口纵向排布 / §4 选中与问题描边；M11：内嵌参数区与监看器
+// 预览窗参与节点几何） ---
+inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const CanvasNode& node,
+                              const std::optional<rin::PortType>& draftType,
+                              rin::IWorkflowEngine* engine,
+                              const CameraResolutionBinding* cameraResolution) {
     const theme::ThemeTokens& tokens = theme::dark();
     const rin::NodeDescriptor* descriptor = state.model.descriptorFor(node);
     if (descriptor == nullptr) {
@@ -574,15 +1188,24 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
     }
     const float s = state.view.scale;
     const CanvasPoint origin = state.view.toScreen(node.position);
-    const float w = kNodeWidth * s;
-    const float h = nodeHeight(*descriptor) * s;
+    // 节点宽度：监看器节点级可调（M11 验收反馈：宽高双向缩放），其余恒
+    // kNodeWidth；compose 期夹取（写入即夹取，此处防御归一）。
+    const float nodeW =
+        isMonitorNode(node.typeId)
+            ? std::clamp(node.monitorWidth, kMonitorMinWidth, kMonitorMaxWidth)
+            : kNodeWidth;
+    const float w = nodeW * s;
+    const float h = nodeHeight(*descriptor, node.params, node.monitorPreviewHeight) * s;
+    const float previewH = std::clamp(node.monitorPreviewHeight, kMonitorPreviewMinHeight,
+                                      kMonitorPreviewMaxHeight);
     const bool selected =
         std::find(state.model.selection.begin(), state.model.selection.end(), node.id) !=
         state.model.selection.end();
     const bool invalid = state.model.nodeHasIssue(node.id);
     // 节点错误可视化（M5-04 §4）：执行失败（NodeFailed）与校验问题同样以
-    // destructive 描边标注，失败另加徽标；消息走面板徽标与底部事件列表。
+    // destructive 描边标注，失败另加徽标；消息走底部事件列表。
     const bool failed = state.failures.failureOf(node.id) != nullptr;
+    const bool monitor = isMonitorNode(node.typeId);
     const std::string base = "workflow.canvas.node." + std::to_string(node.id);
 
     ui.stack(base)
@@ -604,6 +1227,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                 .fontSize(scaledFont(kFontSm, s))
                 .color(tokens.fg)
                 .verticalAlign(eui::VerticalAlign::Center)
+                .maxWidth(w - kSpace2 * 2.0f * s)
                 .build();
             if (failed) {
                 const float badge = 12.0f * s;
@@ -623,13 +1247,122 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                     .verticalAlign(eui::VerticalAlign::Center)
                     .build();
             }
+
+            // 监看器预览窗（M11/DEC-021）：输入图像经 pumpMonitorViews 上传，
+            // contain 适配预览区；meta 行悬浮右上（宽高 · 源帧序号）。
+            if (monitor) {
+                const float previewY = (kNodeHeaderHeight + kParamSectionGap * 0.5f) * s;
+                const float previewHpx = (previewH - kParamSectionGap * 0.5f) * s;
+                const float previewW = (nodeW - kParamPadX * 2.0f) * s;
+                const float previewX = kParamPadX * s;
+                ui.rect(base + ".previewArea")
+                    .position(previewX, previewY)
+                    .size(previewW, previewHpx)
+                    .radius(kRadiusSm * s)
+                    .color(tokens.surface)
+                    .border(kBorderHairline, tokens.border)
+                    .build();
+                if (const auto it = state.monitors.find(node.id); it != state.monitors.end() &&
+                                                                 it->second.view.valid()) {
+                    ui.image(base + ".previewImg")
+                        .position(previewX, previewY)
+                        .size(previewW, previewHpx)
+                        .texture(it->second.view.image(), it->second.view.revision())
+                        .contain()
+                        .radius(kRadiusSm * s)
+                        .build();
+                    if (!it->second.meta.empty()) {
+                        ui.text(base + ".previewMeta")
+                            .position(previewX, previewY)
+                            .size(previewW, kParamLabelHeight * s)
+                            .text(it->second.meta)
+                            .fontSize(scaledFont(kFontXs, s, 6.0f))
+                            .color(tokens.fgSubtlest)
+                            .horizontalAlign(eui::HorizontalAlign::Right)
+                            .verticalAlign(eui::VerticalAlign::Center)
+                            .maxWidth(previewW)
+                            .build();
+                    }
+                } else {
+                    ui.text(base + ".previewEmpty")
+                        .position(previewX, previewY)
+                        .size(previewW, previewHpx)
+                        .text("connect & run to preview")
+                        .fontSize(scaledFont(kFontXs, s, 6.0f))
+                        .color(tokens.fgSubtlest)
+                        .horizontalAlign(eui::HorizontalAlign::Center)
+                        .verticalAlign(eui::VerticalAlign::Center)
+                        .build();
+                }
+                    // 缩放手柄（M11 验收反馈：视窗大小可调）——预览窗右下角
+                    // 三道斜杠示意；拖拽改节点级 previewHeight（画布单位，向下
+                    // 增高），compose 期夹取 [min,max]。回调按值捕获节点 id。
+                    const float grip = 14.0f * s;
+                    const float gripX = previewX + previewW - grip;
+                    const float gripY = previewY + previewHpx - grip;
+                    for (int g = 1; g <= 3; ++g) {
+                        const float off = 3.0f * s * static_cast<float>(g);
+                        ui.rect(base + ".grip" + std::to_string(g))
+                            .position(gripX + grip - off - 2.0f * s, gripY + off)
+                            .size(8.0f * s, std::max(1.0f, 1.5f * s))
+                            .radius(std::max(0.5f, 0.75f * s))
+                            .color(tokens.fgSubtlest)
+                            .build();
+                    }
+                    const rin::NodeId gripNode = node.id;
+                    components::mouseArea(ui, base + ".gripHit")
+                        .position(gripX - 4.0f * s, gripY - 4.0f * s)
+                        .size(grip + 8.0f * s, grip + 8.0f * s)
+                        .cursor(eui::CursorShape::Hand)  // EUI 仅 Arrow/Hand（input_types.h），与分隔条同款
+                        .onDragStart([&state, gripNode](const components::MouseEvent&) {
+                            state.dockDrag = 2;  // 复用布局拖拽槽位语义（-1 无、
+                            if (CanvasNode* n = state.model.findNode(gripNode)) {  // 0/1 分隔条、
+                                state.dockDragStartValue = n->monitorPreviewHeight;  // 2 手柄）
+                                state.dockDragStartWidth = n->monitorWidth;
+                            }
+                        })
+                        .onDrag([&state, gripNode](const components::MouseDragEvent& event) {
+                            if (state.dockDrag != 2) {
+                                return;
+                            }
+                            if (CanvasNode* n = state.model.findNode(gripNode)) {
+                                // 双向缩放（totalX/totalY 为按下起累计增量，按
+                                // 画布缩放换算为画布单位），写入即夹取。
+                                n->monitorWidth =
+                                    std::clamp(state.dockDragStartWidth +
+                                                   event.totalX / state.view.scale,
+                                               kMonitorMinWidth, kMonitorMaxWidth);
+                                n->monitorPreviewHeight =
+                                    std::clamp(state.dockDragStartValue +
+                                                   event.totalY / state.view.scale,
+                                               kMonitorPreviewMinHeight,
+                                               kMonitorPreviewMaxHeight);
+                                ++state.revision;  // 节点宽高变化，连线/命中重绘。
+                            }
+                        })
+                        .onDragEnd([&state](const components::MouseEvent&) {
+                            if (state.dockDrag == 2) {
+                                state.dockDrag = -1;
+                            }
+                        })
+                        .build();
+
+            } else {
+                // 内嵌参数区（M11/DEC-021 决策 3）。
+                composeInlineParams(ui, state, node, *descriptor, engine, cameraResolution, s);
+            }
+
             // 端口（视觉尺寸 kPortVisualRadius；输入左缘、输出右缘，§5.3）。
+            // 监看器输出端口不绘制（M11/DEC-021：透传 sink 的输出在交互面
+            // 不存在；portAt 同步跳过，不可拖线）。
             const float r = kPortVisualRadius * s;
             const auto portColor = [&](const rin::PortType type,
                                        const rin::PortDirection direction) {
                 if (draftType && direction == rin::PortDirection::Input) {
-                    // 拖线中即时类型过滤（§5.3）：兼容高亮 brand，不兼容降次级。
-                    return *draftType == type ? tokens.brand : tokens.fgSubtlest;
+                    // 拖线中即时类型过滤（§5.3）：兼容高亮 brand，不兼容降次级；
+                    // Any 输入（监看器）恒兼容（M11/DEC-021）。
+                    return (*draftType == type || type == rin::PortType::Any) ? tokens.brand
+                                                                              : tokens.fgSubtlest;
                 }
                 return theme::portTypeColor(type);
             };
@@ -637,7 +1370,9 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                 const rin::PortRef port{node.id, rin::PortDirection::Input,
                                         static_cast<std::uint32_t>(i)};
                 const CanvasPoint local =
-                    portPosition(node.position, port) - node.position;
+                    portPosition(node.position, *descriptor, node.params, port,
+                                 node.monitorPreviewHeight, node.monitorWidth) -
+                    node.position;
                 ui.rect(base + ".in." + std::to_string(i))
                     .position(local.x * s - r, local.y * s - r)
                     .size(r * 2.0f, r * 2.0f)
@@ -645,18 +1380,23 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                     .color(portColor(descriptor->inputs[i], rin::PortDirection::Input))
                     .build();
             }
-            for (std::size_t i = 0; i < descriptor->outputs.size(); ++i) {
-                const rin::PortRef port{node.id, rin::PortDirection::Output,
-                                        static_cast<std::uint32_t>(i)};
-                const CanvasPoint local = portPosition(node.position, port) - node.position;
-                ui.rect(base + ".out." + std::to_string(i))
-                    .position(local.x * s - r, local.y * s - r)
-                    .size(r * 2.0f, r * 2.0f)
-                    .radius(r)
-                    .color(portColor(descriptor->outputs[i], rin::PortDirection::Output))
-                    .build();
+            if (!monitor) {
+                for (std::size_t i = 0; i < descriptor->outputs.size(); ++i) {
+                    const rin::PortRef port{node.id, rin::PortDirection::Output,
+                                            static_cast<std::uint32_t>(i)};
+                    const CanvasPoint local =
+                        portPosition(node.position, *descriptor, node.params, port,
+                                     node.monitorPreviewHeight, node.monitorWidth) -
+                        node.position;
+                    ui.rect(base + ".out." + std::to_string(i))
+                        .position(local.x * s - r, local.y * s - r)
+                        .size(r * 2.0f, r * 2.0f)
+                        .radius(r)
+                        .color(portColor(descriptor->outputs[i], rin::PortDirection::Output))
+                        .build();
+                }
             }
-            // 每节点耗时徽标（§5.7）：底部页脚带呈现滚动窗口均值 avgCostMs，
+            // 每节点耗时徽标（§5.7；M11 起 last · avg 双值）：底部页脚带呈现，
             // 统一小数位达成等宽对齐（DEC-005 mono 替代纪律）；无统计（未运行/
             // 不在当前生效图）不绘制。
             if (const rin::NodeStats* stats = state.perf.nodeStats(node.id);
@@ -664,7 +1404,8 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
                 ui.text(base + ".cost")
                     .position(kSpace2 * s, h - kNodeFooterHeight * s)
                     .size(w - kSpace2 * 2.0f * s, kNodeFooterHeight * s)
-                    .text(formatCostMs(stats->avgCostMs))
+                    .text(std::string("last ") + formatCostMs(stats->lastCostMs) + " \u00B7 avg " +
+                          formatCostMs(stats->avgCostMs))
                     .fontSize(scaledFont(kFontXs, s, 6.0f))
                     .color(tokens.fgSubtlest)
                     .verticalAlign(eui::VerticalAlign::Center)
@@ -676,9 +1417,15 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state,
 }
 
 // --- 节点画布（§5.1 视图变换 / §5.3 连线 / §5.4 选择） ---
+//
+// 合成次序（M11/DEC-021 决策 4）：area 背景 → 全视口 mouseArea → 连线 → 节点
+// （含内嵌交互控件）→ 框选/空态。mouseArea 先合成 = 视觉层之下：内嵌控件
+// （interactive）优先命中；节点标题/卡片等非交互视觉与空白穿透至 mouseArea
+// （拖动/框选/连线经纯逻辑命中分发，语义不变）。
 inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
-                                  rin::IWorkflowEngine* engine, const float x, const float y,
-                                  const float width, const float height) {
+                                  rin::IWorkflowEngine* engine,
+                                  const CameraResolutionBinding* cameraResolution, const float x,
+                                  const float y, const float width, const float height) {
     const theme::ThemeTokens& tokens = theme::dark();
     state.viewport = {width, height};
     state.areaRect = {x, y, width, height};
@@ -709,111 +1456,9 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                 .border(kBorderHairline, tokens.border)
                 .build();
 
-            // 连线（先于节点 = 下层；非交互不挡命中；修订号作脏键逐帧直绘）。
-            for (std::size_t i = 0; i < state.model.connections.size(); ++i) {
-                const rin::Connection& connection = state.model.connections[i];
-                const CanvasNode* fromNode = state.model.findNode(connection.from.node);
-                const CanvasNode* toNode = state.model.findNode(connection.to.node);
-                if (fromNode == nullptr || toNode == nullptr) {
-                    continue;
-                }
-                const rin::NodeDescriptor* fd = state.model.descriptorFor(*fromNode);
-                const rin::NodeDescriptor* td = state.model.descriptorFor(*toNode);
-                if (fd == nullptr || td == nullptr ||
-                    connection.from.index >= fd->outputs.size() ||
-                    connection.to.index >= td->inputs.size()) {
-                    continue;
-                }
-                const CanvasPoint a = portPosition(fromNode->position, connection.from);
-                const CanvasPoint b = portPosition(toNode->position, connection.to);
-                // 贝塞尔带状轮廓（粗细一致曲线；polygon 为填充语义，开放点集
-                // 会渲染成弦-曲线封闭区域，见 canvas_model.hpp wireRibbon）。
-                std::vector<eui::Vec2> points;
-                points.reserve(50);
-                for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
-                    const CanvasPoint screen = state.view.toScreen(p);
-                    points.push_back({screen.x, screen.y});
-                }
-                const bool selected = state.model.selectedConnection == connection;
-                ui.polygon("workflow.canvas.wire." + std::to_string(i))
-                    .position(0.0f, 0.0f)
-                    .size(width, height)
-                    .points(std::move(points))
-                    .color(selected ? tokens.brand : theme::portTypeColor(fd->outputs[connection.from.index]))
-                    .dirtyKey(dirty)
-                    .build();
-            }
-
-            // 拖线预览（§5.3）：发起端口 → 当前指针，类型色。
-            if (state.interaction.connecting()) {
-                const rin::PortRef from = state.interaction.connectFromPort();
-                if (const CanvasNode* fromNode = state.model.findNode(from.node);
-                    fromNode != nullptr && draftType) {
-                    const CanvasPoint a = portPosition(fromNode->position, from);
-                    const CanvasPoint b = state.interaction.connectCurrent;
-                    // 零长度守卫：光标停回发起端口时中心线因控制点下限外凸
-                    // 成小环（from==to 仅预览可达，已提交连线拒绝自连）。
-                    if (canvasDistance(a, b) >= 0.5f) {
-                        std::vector<eui::Vec2> points;
-                        points.reserve(50);
-                        for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
-                            const CanvasPoint screen = state.view.toScreen(p);
-                            points.push_back({screen.x, screen.y});
-                        }
-                        ui.polygon("workflow.canvas.wire.draft")
-                            .position(0.0f, 0.0f)
-                            .size(width, height)
-                            .points(std::move(points))
-                            .color(theme::portTypeColor(*draftType))
-                            .dirtyKey(dirty)
-                            .build();
-                    }
-                }
-            }
-
-            // 节点（绘制序 = 模型数组序，后到顶）。
-            for (const CanvasNode& node : state.model.nodes) {
-                composeCanvasNode(ui, state, node, draftType);
-            }
-
-            // 框选矩形（§5.4 拖空白框选）。
-            if (state.interaction.marqueeing() && state.interaction.marqueeArmed) {
-                const CanvasRect rect = canvasRectBetween(state.interaction.marqueeStart,
-                                                          state.interaction.marqueeCurrent);
-                const CanvasPoint p0 = state.view.toScreen({rect.x, rect.y});
-                ui.rect("workflow.canvas.marquee")
-                    .position(p0.x, p0.y)
-                    .size(rect.width * state.view.scale, rect.height * state.view.scale)
-                    .radius(kRadiusSm)
-                    .color(tokens.accentSurface)
-                    .border(kBorderHairline, tokens.brand)
-                    .dirtyKey(dirty)
-                    .build();
-            }
-
-            // 空态引导（§4：画布中央引导卡，不弹模态）。
-            if (state.model.nodes.empty()) {
-                ui.text("workflow.canvas.emptyTitle")
-                    .position(0.0f, height * 0.5f - 26.0f)
-                    .size(width, theme::kFontBase + kSpace2)
-                    .text("No nodes yet")
-                    .fontSize(theme::kFontBase)
-                    .fontWeight(theme::kWeightMedium)
-                    .color(tokens.fgSubtle)
-                    .horizontalAlign(eui::HorizontalAlign::Center)
-                    .build();
-                ui.text("workflow.canvas.emptyHint")
-                    .position(0.0f, height * 0.5f + 2.0f)
-                    .size(width, kFontSm + kSpace2)
-                    .text("drag nodes from the palette to start")
-                    .fontSize(kFontSm)
-                    .color(tokens.fgSubtlest)
-                    .horizontalAlign(eui::HorizontalAlign::Center)
-                    .build();
-            }
-
-            // 指针热区（最后合成 = 画布顶层；节点/连线为非交互视觉，全部指针
-            // 语义经纯逻辑命中分发，DEC-015）。
+            // 指针热区（M11 起先合成 = 视觉层之下；节点/连线为非交互视觉，
+            // 内嵌控件经组件自身 interactive 元素优先命中，其余指针语义经纯
+            // 逻辑命中分发，DEC-015/DEC-021）。
             components::mouseArea(ui, "workflow.canvas.input")
                 .size(width, height)
                 .acceptedButtons(eui::PointerButton::Left | eui::PointerButton::Middle |
@@ -827,6 +1472,10 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                         state.menuFilter.set("");
                         return;
                     }
+                    if (state.resolutionMenuOpen) {  // 分辨率浮层同理（scrim 已
+                        state.resolutionMenuOpen = false;  // 拦截画布外点击）。
+                        return;
+                    }
                     const int button =
                         event.button == eui::PointerButton::Middle ? 1
                         : event.button == eui::PointerButton::Right ? 2
@@ -838,6 +1487,16 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                                                   event.modifiers.alt);
                     if (!result.message.empty()) {
                         state.feedback = result.message;
+                    }
+                    if (result.kind == PressResult::Kind::ContextMenu) {
+                        // 右键空白处打开创建菜单（§5.2.2；menuPos 为窗口坐标，
+                        // composeWorkflowCreateMenu 全窗浮层）。接线修复：自
+                        // M5-03 起 menuOpen 仅被消费从未被置位，真实右键从未
+                        // 打开过（脚本化验证只直改状态），随 M11 验收排查一并
+                        // 修复；与分辨率浮层互斥（双 scrim 不可叠加）。
+                        state.menuOpen = true;
+                        state.menuPos = {event.globalX, event.globalY};
+                        state.resolutionMenuOpen = false;
                     }
                     if (result.graphChanged) {
                         // 右键删除节点等即时变更：与松开路径同一引擎同步出口。
@@ -875,14 +1534,225 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                     ++state.revision;
                 })
                 .build();
+
+            // 连线（非交互不挡命中；修订号作脏键逐帧直绘）。
+            for (std::size_t i = 0; i < state.model.connections.size(); ++i) {
+                const rin::Connection& connection = state.model.connections[i];
+                const CanvasNode* fromNode = state.model.findNode(connection.from.node);
+                const CanvasNode* toNode = state.model.findNode(connection.to.node);
+                if (fromNode == nullptr || toNode == nullptr) {
+                    continue;
+                }
+                const rin::NodeDescriptor* fd = state.model.descriptorFor(*fromNode);
+                const rin::NodeDescriptor* td = state.model.descriptorFor(*toNode);
+                if (fd == nullptr || td == nullptr ||
+                    connection.from.index >= fd->outputs.size() ||
+                    connection.to.index >= td->inputs.size()) {
+                    continue;
+                }
+                const CanvasPoint a =
+                    portPosition(fromNode->position, *fd, fromNode->params, connection.from,
+                                 fromNode->monitorPreviewHeight, fromNode->monitorWidth);
+                const CanvasPoint b =
+                    portPosition(toNode->position, *td, toNode->params, connection.to,
+                                 toNode->monitorPreviewHeight, toNode->monitorWidth);
+                // 贝塞尔带状轮廓（粗细一致曲线；polygon 为填充语义，开放点集
+                // 会渲染成弦线与曲线围成的封闭区域，见 canvas_model.hpp wireRibbon）。
+                std::vector<eui::Vec2> points;
+                points.reserve(50);
+                for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
+                    const CanvasPoint screen = state.view.toScreen(p);
+                    points.push_back({screen.x, screen.y});
+                }
+                const bool selected = state.model.selectedConnection == connection;
+                ui.polygon("workflow.canvas.wire." + std::to_string(i))
+                    .position(0.0f, 0.0f)
+                    .size(width, height)
+                    .points(std::move(points))
+                    .color(selected ? tokens.brand
+                                    : theme::portTypeColor(
+                                          fd->outputs[connection.from.index]))
+                    .dirtyKey(dirty)
+                    .build();
+            }
+
+            // 拖线预览（§5.3）：发起端口 → 当前指针，类型色。
+            if (state.interaction.connecting()) {
+                const rin::PortRef from = state.interaction.connectFromPort();
+                if (const CanvasNode* fromNode = state.model.findNode(from.node);
+                    fromNode != nullptr && draftType) {
+                    const rin::NodeDescriptor* fd = state.model.descriptorFor(*fromNode);
+                    if (fd != nullptr && from.index < fd->outputs.size()) {
+                        const CanvasPoint a =
+                            portPosition(fromNode->position, *fd, fromNode->params, from,
+                                         fromNode->monitorPreviewHeight,
+                                         fromNode->monitorWidth);
+                        const CanvasPoint b = state.interaction.connectCurrent;
+                        // 零长度守卫：光标停回发起端口时中心线因控制点下限外凸
+                        // 成小环（from==to 仅预览可达，已提交连线拒绝自连）。
+                        if (canvasDistance(a, b) >= 0.5f) {
+                            std::vector<eui::Vec2> points;
+                            points.reserve(50);
+                            for (const CanvasPoint& p : wireRibbon(a, b, 24, kWireWidth)) {
+                                const CanvasPoint screen = state.view.toScreen(p);
+                                points.push_back({screen.x, screen.y});
+                            }
+                            ui.polygon("workflow.canvas.wire.draft")
+                                .position(0.0f, 0.0f)
+                                .size(width, height)
+                                .points(std::move(points))
+                                .color(theme::portTypeColor(*draftType))
+                                .dirtyKey(dirty)
+                                .build();
+                        }
+                    }
+                }
+            }
+
+            // 节点（绘制序 = 模型数组序，后到顶；内嵌控件随节点 stack 命中
+            // 优先于画布 mouseArea，M11/DEC-021 决策 4）。
+            for (const CanvasNode& node : state.model.nodes) {
+                composeCanvasNode(ui, state, node, draftType, engine, cameraResolution);
+            }
+
+            // 框选矩形（§5.4 拖空白框选）。
+            if (state.interaction.marqueeing() && state.interaction.marqueeArmed) {
+                const CanvasRect rect = canvasRectBetween(state.interaction.marqueeStart,
+                                                          state.interaction.marqueeCurrent);
+                const CanvasPoint p0 = state.view.toScreen({rect.x, rect.y});
+                ui.rect("workflow.canvas.marquee")
+                    .position(p0.x, p0.y)
+                    .size(rect.width * state.view.scale, rect.height * state.view.scale)
+                    .radius(kRadiusSm)
+                    .color(tokens.accentSurface)
+                    .border(kBorderHairline, tokens.brand)
+                    .dirtyKey(dirty)
+                    .build();
+            }
+
+            // 空态引导（§4：画布中央引导卡，不弹模态）。
+            if (state.model.nodes.empty()) {
+                ui.text("workflow.canvas.emptyTitle")
+                    .position(0.0f, height * 0.5f - 26.0f)
+                    .size(width, theme::kFontBase + kSpace2)
+                    .text("No nodes yet")
+                    .fontSize(theme::kFontBase)
+                    .fontWeight(theme::kWeightMedium)
+                    .color(tokens.fgSubtle)
+                    .horizontalAlign(eui::HorizontalAlign::Center)
+                    .build();
+                ui.text("workflow.canvas.emptyHint")
+                    .position(0.0f, height * 0.5f + 2.0f)
+                    .size(width, kFontSm + kSpace2)
+                    .text("drag nodes from the palette to start")
+                    .fontSize(kFontSm)
+                    .color(tokens.fgSubtlest)
+                    .horizontalAlign(eui::HorizontalAlign::Center)
+                    .build();
+            }
         })
         .build();
 }
 
-// --- 上下文面板与五区组装（M5-04 起迁移至 param_panel.hpp：参数编辑、节点
-// 错误徽标与中间产物缩略图；composeWorkflowPage 同址） ---
+// --- 工作流总览（M5-05 §5.7；M11/DEC-021 自右面板迁至底部区右列）：端到端
+// FPS、累计处理/丢弃帧、在飞任务数；丢弃计数非零时 warning 提示（EXEC-07
+// 显式丢弃的可观察面，禁止静默）；引擎非 Running 时末次值冻结并标注 stopped
+// （§4，stale 数值只在冻结标注下出现）。数值右对齐固定列（DEC-005 mono
+// 替代纪律）。 ---
+inline void composeWorkflowOverview(eui::Ui& ui, const WorkflowPerfState& perf, const float x,
+                                    const float y, const float width, const float height) {
+    const theme::ThemeTokens& tokens = theme::dark();
+    const float rowHeight = 22.0f;
+    const float labelHeight = kFontXs + kSpace1;
 
-// --- 底部：校验问题与事件列表（§4：逐条 kind + node + message，点击定位） ---
+    ui.stack("workflow.overview")
+        .position(x, y)
+        .size(width, height)
+        .content([&] {
+            ui.text("workflow.overview.title")
+                .position(0.0f, 0.0f)
+                .size(width, labelHeight)
+                .text("Overview")
+                .fontSize(kFontXs)
+                .color(tokens.fgSubtlest)
+                .build();
+            const rin::WorkflowStats* stats = perf.stats();
+            if (stats == nullptr) {
+                ui.text("workflow.overview.empty")
+                    .position(0.0f, labelHeight + kSpace1)
+                    .size(width, rowHeight)
+                    .text("run the workflow to see statistics")
+                    .fontSize(kFontXs)
+                    .color(tokens.fgSubtlest)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+                return;
+            }
+            const auto row = [&ui, &tokens, width, rowHeight](
+                                 const char* id, const std::string& label,
+                                 const std::string& value, const eui::Color valueTint) {
+                ui.text(std::string("workflow.overview.") + id + ".label")
+                    .position(0.0f, 0.0f)
+                    .size(width * 0.5f, rowHeight)
+                    .text(label)
+                    .fontSize(kFontSm)
+                    .color(tokens.fgSubtle)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+                ui.text(std::string("workflow.overview.") + id + ".value")
+                    .position(0.0f, 0.0f)
+                    .size(width, rowHeight)
+                    .text(value)
+                    .fontSize(kFontSm)
+                    .color(valueTint)
+                    .horizontalAlign(eui::HorizontalAlign::Right)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+            };
+            float rowY = labelHeight + kSpace1;
+            const auto labeledRow = [&](const char* id, const std::string& label,
+                                        const std::string& value,
+                                        const eui::Color valueTint) {
+                ui.stack(std::string("workflow.overview.") + id)
+                    .position(0.0f, rowY)
+                    .size(width, rowHeight)
+                    .content([&] { row(id, label, value, valueTint); })
+                    .build();
+                rowY += rowHeight;
+            };
+            labeledRow("fps", "end-to-end", formatFps(stats->endToEndFps), tokens.fg);
+            labeledRow("processed", "processed", std::to_string(stats->processedFrames),
+                       tokens.fg);
+            const bool dropping = stats->droppedFrames > 0;
+            labeledRow("dropped", "dropped", std::to_string(stats->droppedFrames),
+                       dropping ? tokens.warning : tokens.fg);
+            labeledRow("inFlight", "in flight", std::to_string(stats->inFlight), tokens.fg);
+            // 过载丢弃警示（EXEC-07：显式丢弃必须可观察，禁止静默排队）。
+            if (dropping) {
+                ui.text("workflow.overview.overload")
+                    .position(0.0f, rowY)
+                    .size(width, labelHeight)
+                    .text("overload - frames are being dropped")
+                    .fontSize(kFontXs)
+                    .color(tokens.warning)
+                    .build();
+                rowY += labelHeight;
+            }
+            // 冻结标注（§4 停止/关闭排空）：末次值仅在非活动标注下呈现。
+            if (!perf.live()) {
+                ui.text("workflow.overview.frozen")
+                    .position(0.0f, rowY)
+                    .size(width, labelHeight)
+                    .text("stopped")
+                    .fontSize(kFontXs)
+                    .color(tokens.fgSubtlest)
+                    .build();
+            }
+        })
+        .build();
+}
+
+// --- 底部：校验问题与事件列表（左列）+ 工作流总览（右列，M11 迁入） ---
 inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const float x,
                                   const float y, const float width, const float height) {
     const theme::ThemeTokens& tokens = theme::dark();
@@ -890,6 +1760,9 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
     const float titleHeight = kFontSm + kSpace1;
     const float rowHeight = 22.0f;
     constexpr std::size_t kMaxRows = 3;
+    // 右列总览占约 38% 宽（四行数值列的最小可读宽度）。
+    const float overviewWidth = std::max(180.0f, width * 0.38f);
+    const float issuesWidth = width - pad * 3.0f - overviewWidth;
 
     ui.stack("workflow.issues")
         .position(x, y)
@@ -902,9 +1775,16 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                 .color(tokens.card)
                 .border(kBorderHairline, tokens.cardBorder)
                 .build();
+
+            // 右列：工作流总览（M11/DEC-021 自右面板迁入，§5.7 语义不变）。
+            // stack 子元素为局部坐标。
+            composeWorkflowOverview(ui, state.perf, width - pad - overviewWidth, pad,
+                                    overviewWidth, height - pad * 2.0f);
+
+            // 左列：校验与事件（§4：逐条 kind + node + message，点击定位）。
             ui.text("workflow.issues.title")
                 .position(pad, pad)
-                .size(width - pad * 2.0f, titleHeight)
+                .size(issuesWidth, titleHeight)
                 .text("Validation & Events")
                 .fontSize(kFontSm)
                 .fontWeight(theme::kWeightSemibold)
@@ -912,11 +1792,12 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                 .build();
             ui.text("workflow.issues.event")
                 .position(pad, pad + titleHeight)
-                .size(width - pad * 2.0f, rowHeight)
+                .size(issuesWidth, rowHeight)
                 .text(state.lastEvent.empty() ? "engine events appear here" : state.lastEvent)
                 .fontSize(kFontXs)
                 .color(state.lastEvent.empty() ? tokens.fgSubtlest : tokens.fgSubtle)
                 .verticalAlign(eui::VerticalAlign::Center)
+                .maxWidth(issuesWidth)
                 .build();
 
             const std::size_t rows =
@@ -933,7 +1814,7 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                 const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
                 ui.rect(base)
                     .position(pad, rowY)
-                    .size(width - pad * 2.0f, rowHeight)
+                    .size(issuesWidth, rowHeight)
                     .radius(kRadiusSm)
                     .color(transparent)
                     .states(transparent, locatable ? tokens.menuHover : transparent,
@@ -947,8 +1828,10 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                             // 点击定位（§4）：视图定心到问题节点。
                             const rin::NodeDescriptor* descriptor =
                                 state.model.descriptorFor(*node);
-                            const float h =
-                                descriptor != nullptr ? nodeHeight(*descriptor) : 40.0f;
+                            const float h = descriptor != nullptr
+                                                ? nodeHeight(*descriptor, node->params,
+                                                             node->monitorPreviewHeight)
+                                                : 40.0f;
                             centerViewOn(state.view,
                                          {node->position.x + kNodeWidth * 0.5f,
                                           node->position.y + h * 0.5f},
@@ -960,19 +1843,19 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                     .build();
                 ui.text(base + ".label")
                     .position(pad + kSpace2, rowY)
-                    .size(width - pad * 2.0f - kSpace2, rowHeight)
+                    .size(issuesWidth - kSpace2, rowHeight)
                     .text(label)
                     .fontSize(kFontXs)
                     .color(tokens.warning)
                     .verticalAlign(eui::VerticalAlign::Center)
-                    .maxWidth(width - pad * 2.0f - kSpace2)
+                    .maxWidth(issuesWidth - kSpace2)
                     .build();
                 rowY += rowHeight;
             }
             if (state.model.validation.issues.size() > kMaxRows) {
                 ui.text("workflow.issues.more")
                     .position(pad + kSpace2, rowY)
-                    .size(width - pad * 2.0f - kSpace2, rowHeight)
+                    .size(issuesWidth - kSpace2, rowHeight)
                     .text("+" +
                           std::to_string(state.model.validation.issues.size() - kMaxRows) +
                           " more")
@@ -1137,6 +2020,272 @@ inline void composeWorkflowDragGhost(eui::Ui& ui, WorkflowCanvasState& state) {
                 .build();
         })
         .build();
+}
+
+// --- 相机分辨率下拉浮层（M11 验收反馈：窗口级 overlay，创建菜单同款模式；
+// 画布 clip 视口内的组件弹层会被裁剪，浮层由 app.cpp overlay 层最后合成） ---
+inline void composeWorkflowResolutionMenu(eui::Ui& ui, WorkflowCanvasState& state,
+                                          const CameraResolutionBinding* cameraResolution,
+                                          const float windowWidth, const float windowHeight) {
+    if (!state.resolutionMenuOpen || cameraResolution == nullptr ||
+        cameraResolution->labels == nullptr || cameraResolution->labels->empty()) {
+        return;
+    }
+    const theme::ThemeTokens& tokens = theme::dark();
+    const float pad = kSpace2;
+    const float width = 176.0f;
+    const float titleHeight = kFontXs + kSpace2;
+    const float itemHeight = 26.0f;
+    const int count = static_cast<int>(cameraResolution->labels->size());
+    const float height = pad * 2.0f + titleHeight + static_cast<float>(count) * itemHeight;
+    const float x = std::clamp(state.resolutionMenuPos.x, 8.0f,
+                               std::max(8.0f, windowWidth - width - 8.0f));
+    const float y = std::clamp(state.resolutionMenuPos.y, 8.0f,
+                               std::max(8.0f, windowHeight - height - 8.0f));
+
+    // 全窗口透明阻挡层：菜单外任意点击收起（模态浮层）。
+    ui.rect("workflow.resMenu.scrim")
+        .position(0.0f, 0.0f)
+        .size(windowWidth, windowHeight)
+        .color({0.0f, 0.0f, 0.0f, 0.0f})
+        .onClick([&state] { state.resolutionMenuOpen = false; })
+        .build();
+
+    ui.stack("workflow.resMenu")
+        .position(x, y)
+        .size(width, height)
+        .content([&] {
+            ui.rect("workflow.resMenu.panel")
+                .size(width, height)
+                .radius(kRadiusLg)
+                .color(tokens.menu)
+                .border(kBorderHairline, tokens.border)
+                .shadow(18.0f, 10.0f, 8.0f, {0.0f, 0.0f, 0.0f, 0.35f})
+                .build();
+            ui.text("workflow.resMenu.title")
+                .position(pad, pad)
+                .size(width - pad * 2.0f, titleHeight)
+                .text("Camera resolution")
+                .fontSize(kFontXs)
+                .color(tokens.fgSubtlest)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
+            const int selected = std::clamp(cameraResolution->selectedIndex, 0, count - 1);
+            float rowY = pad + titleHeight;
+            for (int index = 0; index < count; ++index) {
+                const std::string base =
+                    "workflow.resMenu.item." + std::to_string(index);
+                const bool active = index == selected;
+                const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                ui.rect(base)
+                    .position(pad, rowY)
+                    .size(width - pad * 2.0f, itemHeight)
+                    .radius(kRadiusSm)
+                    .color(transparent)
+                    .states(transparent, tokens.menuHover, tokens.menuHover)
+                    .onClick([&state, cameraResolution, index] {
+                        state.resolutionMenuOpen = false;
+                        if (cameraResolution->onPick) {
+                            cameraResolution->onPick(index);
+                        }
+                    })
+                    .build();
+                ui.text(base + ".label")
+                    .position(pad + kSpace2, rowY)
+                    .size(width - pad * 2.0f - kSpace2 - 14.0f, itemHeight)
+                    .text((*cameraResolution->labels)[static_cast<std::size_t>(index)])
+                    .fontSize(kFontCaption)
+                    .color(active ? tokens.brand : tokens.fg)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+                if (active) {
+                    ui.text(base + ".check")
+                        .position(width - pad - 14.0f, rowY)
+                        .size(14.0f, itemHeight)
+                        .text("\u2713")
+                        .fontSize(kFontXs)
+                        .color(tokens.brand)
+                        .horizontalAlign(eui::HorizontalAlign::Center)
+                        .verticalAlign(eui::VerticalAlign::Center)
+                        .build();
+                }
+                rowY += itemHeight;
+            }
+        })
+        .build();
+}
+
+// --- 工作流页四区组装（M11/DEC-021：右栏移除，五区改四区；几何由
+// WorkflowCanvasState 的 docking 布局状态驱动，palette 宽、底部高可经分隔条
+// 拖拽调节；底部区最后合成，总览数值列高于画布） ---
+inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
+                                rin::IWorkflowEngine* engine,
+                                const CameraResolutionBinding* cameraResolution, const float x,
+                                const float y, const float width, const float height) {
+    const float gap = theme::kSpace3;
+    const float toolbarHeight = 44.0f;
+    const float paletteWidth = std::clamp(state.paletteWidth, 150.0f, 400.0f);
+    const float bottomHeight = std::clamp(state.bottomHeight, 72.0f, 300.0f);
+    const float bodyTop = y + toolbarHeight + gap;
+    const float bodyHeight = std::max(
+        120.0f, height - toolbarHeight - bottomHeight - gap * 2.0f);
+    const float canvasWidth = std::max(240.0f, width - paletteWidth - gap * 2.0f);
+
+    composeWorkflowToolbar(ui, state, engine, x, y, width, toolbarHeight);
+    composeWorkflowPalette(ui, state, engine, x, bodyTop, paletteWidth, bodyHeight);
+    composeWorkflowCanvas(ui, state, engine, cameraResolution, x + paletteWidth + gap, bodyTop,
+                          canvasWidth, bodyHeight);
+    composeWorkflowIssues(ui, state, x, y + height - bottomHeight, width, bottomHeight);
+
+    // 分隔条（M7-04 引入，M11 余两处；最后合成 = 浮层；捕获 &state 稳定地址
+    // ——与画布交互同纪律）。命中区略宽于视觉条；拖拽经 onDragStart 记录
+    // 起始、onDrag 按指针增量更新布局值（compose 期夹取生效）。
+    // growWithNegative：底部上缘为反向缘（指针负向增量使布局值增大）。
+    const float handleHit = 10.0f;
+    const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+    const auto dividerTint = [&state, &transparent](int index) {
+        return state.dockDrag == index ? theme::dark().brand : transparent;
+    };
+    const auto divider = [&](const char* id, int index, float dx, float dy, float dw,
+                             float dh, bool vertical, bool growWithNegative,
+                             float* dockValue) {
+        ui.rect(std::string(id) + ".bar")
+            .position(dx, dy)
+            .size(dw, dh)
+            .radius(2.0f)
+            .color(dividerTint(index))
+            .build();
+        components::mouseArea(ui, std::string(id) + ".drag")
+            .position(dx - (vertical ? handleHit * 0.5f : 0.0f),
+                      dy - (vertical ? 0.0f : handleHit * 0.5f))
+            .size(vertical ? handleHit : dw, vertical ? dh : handleHit)
+            .cursor(eui::CursorShape::Hand)
+            .onDragStart([&state, index, dockValue, vertical](
+                             const components::MouseEvent& event) {
+                state.dockDrag = index;
+                state.dockDragStartPointer = vertical ? event.x : event.y;
+                state.dockDragStartValue = *dockValue;
+            })
+            .onDrag([&state, index, dockValue, vertical, growWithNegative](
+                        const components::MouseDragEvent& event) {
+                if (state.dockDrag != index) {
+                    return;
+                }
+                const float pointer = vertical ? event.x : event.y;
+                const float delta = pointer - state.dockDragStartPointer;
+                *dockValue = growWithNegative ? state.dockDragStartValue - delta
+                                              : state.dockDragStartValue + delta;
+            })
+            .onDragEnd([&state, index](const components::MouseEvent&) {
+                if (state.dockDrag == index) {
+                    state.dockDrag = -1;
+                }
+            })
+            .build();
+    };
+    divider("workflow.divider.palette", 0, x + paletteWidth + gap * 0.5f - 2.0f, bodyTop,
+            4.0f, bodyHeight, true, false, &state.paletteWidth);
+    divider("workflow.divider.bottom", 1, x, y + height - bottomHeight - gap * 0.5f - 2.0f,
+            width, 4.0f, false, true, &state.bottomHeight);
+}
+
+// --- pump 边界消费（RULE-05：渲染线程只做有界取快照与提交） ---
+
+/// pump 边界的监看器预览消费（M11/DEC-021）：引擎 Running 时逐监看器节点拉取
+/// 最新产物并上传预览纹理（GL 当前线程）；非 Running 整体排空释放（§4 停止/
+/// 关闭排空，stale 快照不得显示活动状态）。已删除/不再是监看器的节点条目
+/// 同步清理（afterGraphChange 只移除条目、GL 释放在此完成——渲染线程纪律）。
+/// 返回 true 表示有可见变更（调用方需 requestUpdate）。
+inline bool pumpMonitorViews(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engine) {
+    const bool running = engine.state() == rin::WorkflowEngineState::Running;
+
+    // 清理不再有效的条目（节点删除/类型不再是监看器）：GL 释放仅渲染线程。
+    bool changed = false;
+    for (auto it = canvas.monitors.begin(); it != canvas.monitors.end();) {
+        const CanvasNode* node = canvas.model.findNode(it->first);
+        const bool stale = node == nullptr || !isMonitorNode(node->typeId);
+        if (stale) {
+            it->second.view.release();
+            it = canvas.monitors.erase(it);
+            changed = true;
+            continue;
+        }
+        ++it;
+    }
+
+    if (!running) {
+        for (auto& [id, monitor] : canvas.monitors) {
+            if (monitor.view.valid() || !monitor.meta.empty()) {
+                monitor.view.release();
+                monitor.meta.clear();
+                monitor.lastSeen = 0;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    for (const CanvasNode& node : canvas.model.nodes) {
+        if (!isMonitorNode(node.typeId)) {
+            continue;
+        }
+        MonitorView& monitor = canvas.monitors[node.id];
+        rin::NodeOutputSnapshot snapshot;
+        if (!engine.tryLoadNodeOutput(node.id, monitor.lastSeen, snapshot)) {
+            continue;
+        }
+        rin::Frame frame;
+        if (!thumbnailRgbaFromSnapshot(snapshot, kMonitorPreviewMaxDim, frame)) {
+            continue;
+        }
+        monitor.view.update(frame);
+        monitor.meta = std::to_string(snapshot.width) + " x " +
+                       std::to_string(snapshot.height) + " \u00B7 seq " +
+                       std::to_string(snapshot.sourceSequence);
+        changed = true;
+    }
+    return changed;
+}
+
+/// pump 边界的驱动尺寸刷新（M11：ROI 联动约束的输入尺寸源）：Running 时为
+/// 画布图内每个被消费的驱动节点拉取最新产物尺寸（每驱动一条目，水位推进，
+/// 只取元数据不舍弃像素共享）；非 Running 清空（约束回退声明范围）。
+inline bool pumpDriverSizes(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engine) {
+    if (engine.state() != rin::WorkflowEngineState::Running) {
+        const bool changed = !canvas.driverSizes.empty();
+        canvas.driverSizes.clear();
+        return changed;
+    }
+    // 当前驱动集合（输入端口 0 的上游；ROI 参数只读首输入）。
+    std::vector<rin::NodeId> drivers;
+    for (const rin::Connection& connection : canvas.model.connections) {
+        if (connection.to.direction != rin::PortDirection::Input || connection.to.index != 0) {
+            continue;
+        }
+        if (std::find(drivers.begin(), drivers.end(), connection.from.node) == drivers.end()) {
+            drivers.push_back(connection.from.node);
+        }
+    }
+    bool changed = false;
+    for (auto it = canvas.driverSizes.begin(); it != canvas.driverSizes.end();) {
+        if (std::find(drivers.begin(), drivers.end(), it->first) == drivers.end()) {
+            it = canvas.driverSizes.erase(it);
+            changed = true;
+            continue;
+        }
+        ++it;
+    }
+    for (const rin::NodeId driver : drivers) {
+        DriverOutputSize& entry = canvas.driverSizes[driver];
+        rin::NodeOutputSnapshot snapshot;
+        if (!engine.tryLoadNodeOutput(driver, entry.lastSeen, snapshot)) {
+            continue;
+        }
+        entry.width = snapshot.width;
+        entry.height = snapshot.height;
+        changed = true;
+    }
+    return changed;
 }
 
 }  // namespace viewer

@@ -31,10 +31,15 @@ enum class PortDirection {
 /// 米；无效深度 0.0）——ImageU8 字节容器按 host 端序承载 float32 像素，
 /// elementSize = 4、stride 为字节数 ≥ width×4；float 视图只经 Core 助手
 /// （image_types.hpp depthF32*）显式解释。
+/// Any（M11/DEC-021）：仅目录声明位的通配——表达"接受任意具体类型"的输入
+/// 端口（监看器节点）。实际图像格式永不为 Any：elementSize(Any)=0，
+/// ImageU8::make/wrap 元数据校验天然拒绝。连线兼容性 = 两端相等，或输入端口
+/// 声明为 Any；runNodeGraph 防御核对对声明 Any 的输出端口接受任意具体格式。
 enum class PortType {
     Gray8,
     Rgba8,
     Depth32F,
+    Any,
 };
 
 [[nodiscard]] const char* toString(PortType type) noexcept;

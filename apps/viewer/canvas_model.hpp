@@ -18,6 +18,8 @@
 // 视觉组装见 node_canvas.hpp。画布内交互决策（左键拖空白=框选、中键拖拽=平移，
 // 与 §5.1/§5.4 条文的消解）已在设计文档 §5.1 补记，M5-03 验证记录同步。
 
+#include "param_model.hpp"
+
 #include <rin/workflow_types.hpp>
 
 #include <algorithm>
@@ -141,10 +143,37 @@ inline void centerViewOn(CanvasView& view, const CanvasPoint& canvasCenter,
 
 // --- 节点视觉度量（画布坐标；node_canvas.hpp 的绘制消费同一组常量） ---
 
-inline constexpr float kNodeWidth = 148.0f;
+/// 监看器 typeId（M11/DEC-021）：UI 私有呈现知识（与 paletteGroupFor 同类，
+/// 不入契约）。监看器为 Any→Any 透传 sink：画布隐藏其输出端口，节点内嵌
+/// 预览窗显示输入图像。
+inline constexpr const char* kMonitorTypeId = "viewer";
+
+[[nodiscard]] inline bool isMonitorNode(const std::string& typeId) {
+    return typeId == kMonitorTypeId;
+}
+
+/// 相机源节点（M11/DEC-021：分辨率全局入口内嵌于源节点，DEC-017 决策 4）。
+/// typeId 前缀 "source" 判定沿用 M5-04 右面板先例；参数区几何与内嵌绘制
+/// 同源使用本谓词。
+[[nodiscard]] inline bool isCameraSourceNode(const std::string& typeId) {
+    return typeId.rfind("source", 0) == 0;
+}
+
+inline constexpr float kNodeWidth = 200.0f;
 inline constexpr float kNodeHeaderHeight = 26.0f;
 inline constexpr float kNodePortRowHeight = 20.0f;
 inline constexpr float kNodeFooterHeight = 8.0f;
+/// 监看器预览窗高度（画布坐标，宽 = 节点宽 − 2×kParamPadX）：
+/// kMonitorPreviewHeight 为默认值，节点级可经右下角缩放手柄调整
+/// （M11 验收反馈，CanvasNode::monitorPreviewHeight），范围
+/// [kMonitorPreviewMinHeight, kMonitorPreviewMaxHeight]。
+inline constexpr float kMonitorPreviewHeight = 140.0f;
+inline constexpr float kMonitorPreviewMinHeight = 96.0f;
+inline constexpr float kMonitorPreviewMaxHeight = 640.0f;
+/// 监看器节点宽度（默认随全局 kNodeWidth，节点级可调；范围
+/// [kMonitorMinWidth, kMonitorMaxWidth]，M11 验收反馈：视窗宽高双向可调）。
+inline constexpr float kMonitorMinWidth = 160.0f;
+inline constexpr float kMonitorMaxWidth = 800.0f;
 inline constexpr float kPortVisualRadius = 4.0f;
 /// 端口命中区大于视觉尺寸（§5.3）。
 inline constexpr float kPortHitRadius = 12.0f;
@@ -153,27 +182,121 @@ inline constexpr float kWireHitDistance = 7.0f;
 /// 连线视觉宽度（画布坐标；wireRibbon 带状轮廓用，小于命中距离）。
 inline constexpr float kWireWidth = 2.5f;
 
-/// 节点高度 = 标题行 + max(输入数, 输出数, 1) 个端口行 + 底部留白。
-[[nodiscard]] inline float nodeHeight(const rin::NodeDescriptor& descriptor) {
+// --- 内嵌参数区几何（M11/DEC-021 决策 3；绘制与命中共用同一组度量） ---
+
+inline constexpr float kParamPadX = 8.0f;       ///< 参数区左右内边距
+inline constexpr float kParamSectionGap = 6.0f;  ///< 参数区与端口区间距
+inline constexpr float kParamRowGap = 4.0f;      ///< 参数行间距
+inline constexpr float kParamLabelHeight = 14.0f;  ///< 标签+当前值行高
+inline constexpr float kParamSliderHeight = 12.0f;  ///< 滑条行高
+inline constexpr float kParamPillHeight = 18.0f;    ///< 枚举胶囊/开关行高
+inline constexpr float kParamGridCellHeight = 20.0f;  ///< RealArray 单元行高
+inline constexpr float kParamGridShapeHeight = 14.0f;  ///< RealArray 形状行高
+
+/// RealArray 参数的当前网格行数（实例生效值 → RealArrayGrid 形状语义）；
+/// 未赋值取声明默认值，非 RealArray 返回 1。
+[[nodiscard]] inline std::size_t paramGridRows(const rin::NodeDescriptor& descriptor,
+                                               const rin::ParamDescriptor& pd,
+                                               const std::vector<rin::ParamAssignment>& params) {
+    if (pd.kind != rin::ParamKind::RealArray) {
+        return 1;
+    }
+    const rin::ParamValue* effective = effectiveParamValue(descriptor, params, pd.id);
+    if (effective == nullptr) {
+        return 1;
+    }
+    if (const auto* flat = std::get_if<std::vector<double>>(effective); flat != nullptr) {
+        return RealArrayGrid::fromFlat(*flat).rows;
+    }
+    return 1;
+}
+
+/// 单参数行高（画布坐标）：Boolean=开关行、Integer/Real=标签行+滑条、
+/// Enumeration=胶囊行、RealArray=形状行+网格行数（随实例形状）。
+[[nodiscard]] inline float paramRowHeight(const rin::NodeDescriptor& descriptor,
+                                          const rin::ParamDescriptor& pd,
+                                          const std::vector<rin::ParamAssignment>& params) {
+    switch (pd.kind) {
+        case rin::ParamKind::Boolean:
+            return kParamPillHeight;
+        case rin::ParamKind::Integer:
+        case rin::ParamKind::Real:
+            return kParamLabelHeight + kParamSliderHeight;
+        case rin::ParamKind::Enumeration:
+            return kParamPillHeight;
+        case rin::ParamKind::RealArray:
+            return kParamGridShapeHeight +
+                   static_cast<float>(paramGridRows(descriptor, pd, params)) * kParamGridCellHeight;
+    }
+    return kParamPillHeight;
+}
+
+/// 参数区总高（含首行前距与行间距；无参数节点为 0）。相机源节点计入分辨率
+/// 入口行（M11：内嵌于源节点，与绘制同源）；监看器无参数区（预览窗替代，
+/// portsOffsetY 分流）。
+[[nodiscard]] inline float paramSectionHeight(
+    const rin::NodeDescriptor& descriptor, const std::vector<rin::ParamAssignment>& params) {
+    if (isMonitorNode(descriptor.typeId)) {
+        return 0.0f;
+    }
+    const bool cameraRow = isCameraSourceNode(descriptor.typeId);
+    if (!cameraRow && descriptor.params.empty()) {
+        return 0.0f;  // 无参数且非源节点：无参数区（端口区紧跟标题）。
+    }
+    float height = kParamSectionGap;  // 标题行与首参数行的间距。
+    if (cameraRow) {
+        height += kParamPillHeight + kParamRowGap;  // Camera resolution 行。
+    }
+    for (const rin::ParamDescriptor& pd : descriptor.params) {
+        height += paramRowHeight(descriptor, pd, params) + kParamRowGap;
+    }
+    return height;
+}
+
+/// 端口区在节点内的纵向偏移：标题 + 参数区（监看器为预览窗，高度节点级）。
+[[nodiscard]] inline float portsOffsetY(const rin::NodeDescriptor& descriptor,
+                                        const std::vector<rin::ParamAssignment>& params,
+                                        const float monitorPreviewHeight = kMonitorPreviewHeight) {
+    return kNodeHeaderHeight + (isMonitorNode(descriptor.typeId)
+                                    ? monitorPreviewHeight + kParamSectionGap
+                                    : paramSectionHeight(descriptor, params));
+}
+
+/// 节点高度 = 标题行 + 参数区（或预览窗）+ max(输入数, 输出数, 1) 个端口行 +
+/// 底部留白（M11 起参数区/预览区参与，实例 RealArray 形状联动；监看器预览
+/// 高度节点级可调，M11 验收反馈）。
+[[nodiscard]] inline float nodeHeight(
+    const rin::NodeDescriptor& descriptor,
+    const std::vector<rin::ParamAssignment>& params = {},
+    const float monitorPreviewHeight = kMonitorPreviewHeight) {
     const float rows = static_cast<float>(
         std::max<std::size_t>(1, std::max(descriptor.inputs.size(), descriptor.outputs.size())));
-    return kNodeHeaderHeight + rows * kNodePortRowHeight + kNodeFooterHeight;
+    return portsOffsetY(descriptor, params, monitorPreviewHeight) + rows * kNodePortRowHeight +
+           kNodeFooterHeight;
 }
 
-[[nodiscard]] inline CanvasRect nodeBounds(const CanvasPoint& position,
-                                           const rin::NodeDescriptor& descriptor) {
-    return {position.x, position.y, kNodeWidth, nodeHeight(descriptor)};
+[[nodiscard]] inline CanvasRect nodeBounds(
+    const CanvasPoint& position, const rin::NodeDescriptor& descriptor,
+    const std::vector<rin::ParamAssignment>& params = {},
+    const float monitorPreviewHeight = kMonitorPreviewHeight,
+    const float monitorWidth = kNodeWidth) {
+    return {position.x, position.y, monitorWidth,
+            nodeHeight(descriptor, params, monitorPreviewHeight)};
 }
 
-/// 端口锚点（§5.3"端口按签名序号纵向排布"；输入靠左缘、输出靠右缘）。
-[[nodiscard]] inline CanvasPoint portPosition(const CanvasPoint& position,
-                                              const rin::PortRef& port) {
-    const float rowY =
-        position.y + kNodeHeaderHeight + static_cast<float>(port.index) * kNodePortRowHeight +
-        kNodePortRowHeight * 0.5f;
+/// 端口锚点（§5.3"端口按签名序号纵向排布"；输入靠左缘、输出右缘；纵向偏移
+/// 含参数区/预览窗，M11 起签名与几何解耦）。
+[[nodiscard]] inline CanvasPoint portPosition(
+    const CanvasPoint& position, const rin::NodeDescriptor& descriptor,
+    const std::vector<rin::ParamAssignment>& params, const rin::PortRef& port,
+    const float monitorPreviewHeight = kMonitorPreviewHeight,
+    const float monitorWidth = kNodeWidth) {
+    const float rowY = portsOffsetY(descriptor, params, monitorPreviewHeight) +
+                       static_cast<float>(port.index) * kNodePortRowHeight +
+                       kNodePortRowHeight * 0.5f;
     return {port.direction == rin::PortDirection::Input ? position.x
-                                                        : position.x + kNodeWidth,
-            rowY};
+                                                        : position.x + monitorWidth,
+            position.y + rowY};
 }
 
 /// 连线走线（§5.3）：输出右缘中点 → 输入左缘中点，三次贝塞尔按水平距离拟合。
@@ -268,6 +391,12 @@ struct CanvasNode {
     std::string typeId;
     CanvasPoint position;
     std::vector<rin::ParamAssignment> params;
+    /// 监看器预览窗高度（画布坐标；仅 viewer 节点参与几何，UI 私有状态
+    /// 同 position 先例不入契约）。手柄拖拽调整，写入即夹取。
+    float monitorPreviewHeight = kMonitorPreviewHeight;
+    /// 监看器节点宽度（仅 viewer 生效，其余类型恒为 kNodeWidth）；右下角
+    /// 手柄双向拖拽（宽×高）调整，写入即夹取。
+    float monitorWidth = kNodeWidth;
 };
 
 /// 一次画布图操作的结果；ok=false 时 error 携带人可读拒绝原因（§5.4 不静默失败）。
@@ -475,7 +604,9 @@ struct CanvasGraphModel {
         }
         const rin::PortType outType = fromDescriptor->outputs[from.index];
         const rin::PortType inType = toDescriptor->inputs[to.index];
-        if (outType != inType) {
+        // 连线兼容性（M11/DEC-021）：两端相等，或输入端声明 Any（监看器接受
+        // 任意具体类型输出）。
+        if (outType != inType && inType != rin::PortType::Any) {
             return {false, std::string("type mismatch: ") + rin::toString(outType) + " to " +
                                rin::toString(inType)};
         }
@@ -558,7 +689,9 @@ struct CanvasGraphModel {
             if (descriptor == nullptr) {
                 continue;
             }
-            if (rect.intersects(nodeBounds(node.position, *descriptor))) {
+            if (rect.intersects(nodeBounds(node.position, *descriptor, node.params,
+                                            node.monitorPreviewHeight,
+                                            node.monitorWidth))) {
                 hits.push_back(node.id);
             }
         }
@@ -568,6 +701,7 @@ struct CanvasGraphModel {
     // --- 命中检测（§7）：端口 > 节点 > 连线 > 空白（自顶层向下） ---
 
     /// 端口命中（命中区大于视觉尺寸，§5.3）：自顶层节点向下，先入后出。
+    /// 监看器输出端口不参与命中（M11/DEC-021：UI 隐藏的端口不可拖线）。
     [[nodiscard]] std::optional<rin::PortRef> portAt(const CanvasPoint& point) const {
         for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
             const rin::NodeDescriptor* descriptor = descriptorFor(*it);
@@ -576,13 +710,22 @@ struct CanvasGraphModel {
             }
             for (std::uint32_t index = 0; index < descriptor->inputs.size(); ++index) {
                 const rin::PortRef port{it->id, rin::PortDirection::Input, index};
-                if (canvasDistance(point, portPosition(it->position, port)) <= kPortHitRadius) {
+                if (canvasDistance(point,
+                                   portPosition(it->position, *descriptor, it->params, port,
+                                                it->monitorPreviewHeight,
+                                                it->monitorWidth)) <= kPortHitRadius) {
                     return port;
                 }
             }
+            if (isMonitorNode(it->typeId)) {
+                continue;  // 输出端口隐藏（透传 sink）。
+            }
             for (std::uint32_t index = 0; index < descriptor->outputs.size(); ++index) {
                 const rin::PortRef port{it->id, rin::PortDirection::Output, index};
-                if (canvasDistance(point, portPosition(it->position, port)) <= kPortHitRadius) {
+                if (canvasDistance(point,
+                                   portPosition(it->position, *descriptor, it->params, port,
+                                                it->monitorPreviewHeight,
+                                                it->monitorWidth)) <= kPortHitRadius) {
                     return port;
                 }
             }
@@ -597,7 +740,9 @@ struct CanvasGraphModel {
             if (descriptor == nullptr) {
                 continue;
             }
-            if (nodeBounds(it->position, *descriptor).contains(point)) {
+            if (nodeBounds(it->position, *descriptor, it->params,
+                           it->monitorPreviewHeight, it->monitorWidth)
+                    .contains(point)) {
                 return &*it;
             }
         }
@@ -619,8 +764,14 @@ struct CanvasGraphModel {
             if (fromDescriptor == nullptr || toDescriptor == nullptr) {
                 continue;
             }
-            const CanvasPoint from = portPosition(fromNode->position, connection.from);
-            const CanvasPoint to = portPosition(toNode->position, connection.to);
+            const CanvasPoint from =
+                portPosition(fromNode->position, *fromDescriptor, fromNode->params,
+                             connection.from, fromNode->monitorPreviewHeight,
+                             fromNode->monitorWidth);
+            const CanvasPoint to = portPosition(toNode->position, *toDescriptor,
+                                                toNode->params, connection.to,
+                                                toNode->monitorPreviewHeight,
+                                                toNode->monitorWidth);
             const std::vector<CanvasPoint> samples = sampleWire(from, to, 24);
             for (std::size_t i = 1; i < samples.size(); ++i) {
                 const float d = pointSegmentDistance(point, samples[i - 1], samples[i]);
@@ -642,7 +793,9 @@ struct CanvasGraphModel {
             if (descriptor == nullptr) {
                 continue;
             }
-            const CanvasRect b = nodeBounds(node.position, *descriptor);
+            const CanvasRect b = nodeBounds(node.position, *descriptor, node.params,
+                                            node.monitorPreviewHeight,
+                                            node.monitorWidth);
             if (first) {
                 bounds = b;
                 first = false;
@@ -939,6 +1092,9 @@ struct PaletteGroup {
     }
     if (typeId == "hist_eq") {
         return "Histogram";
+    }
+    if (isMonitorNode(typeId)) {
+        return "View";  // 监看器（M11/DEC-021）：末端预览 sink。
     }
     return "Other";
 }
