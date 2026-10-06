@@ -14,7 +14,8 @@
 // - 节点执行失败标注：NodeFailed 事件的会话级标注（§4 destructive 徽标）。
 //
 // 本头文件不包含 EUI-NEO 类型（纯逻辑单测对象，tests/test_param_panel.cpp）；
-// EUI 组装见 param_panel.hpp，画布会话状态见 node_canvas.hpp。
+// EUI 组装与画布会话状态见 node_canvas.hpp（M11/DEC-021：内嵌参数控件）。
+// 监看器预览消费（pumpMonitorViews）亦在 node_canvas.hpp。
 
 #include <rin/camera_types.hpp>
 #include <rin/image_types.hpp>
@@ -355,6 +356,19 @@ private:
     return value;
 }
 
+/// 枚举值点击循环（M11/DEC-021 决策 6：画布内嵌枚举胶囊的取值语义）：
+/// 返回 current 在 options 中的下一选项（末项环绕回首项）；options 为空或
+/// current 不在选项内返回 nullopt（调用方保持现值不变）。
+[[nodiscard]] inline std::optional<std::string> cycleEnumOption(
+    const std::vector<std::string>& options, const std::string& current) {
+    const auto it = std::find(options.begin(), options.end(), current);
+    if (options.empty() || it == options.end()) {
+        return std::nullopt;
+    }
+    const std::size_t next = static_cast<std::size_t>(std::distance(options.begin(), it) + 1);
+    return options[next % options.size()];
+}
+
 /// 生效值 → 控件初值文本（面板重建绑定时用）：Boolean "on"/"off"，Enumeration
 /// 原文，Integer/Real 统一 %.6g，RealArray 不适用（矩阵单元单独取值）。
 [[nodiscard]] inline std::string paramValueText(const rin::ParamValue& value) {
@@ -498,6 +512,10 @@ private:
 
 /// 缩略图最长边上限（有界：上传幅面 ≤ 256x256）。
 inline constexpr std::uint32_t kThumbnailMaxDim = 256;
+
+/// 监看器预览窗最长边上限（M11/DEC-021：有界；200 画布单位宽的节点预览在
+/// 2.5x 缩放下约 500 逻辑像素，512 保证放大档清晰，每监看器一枚 GL 纹理）。
+inline constexpr std::uint32_t kMonitorPreviewMaxDim = 512;
 
 /// 快照 → RGBA 缩略图（§5.6"缩略图按格式渲染（Gray8/Rgba8）"）：最近邻降采样、
 /// 保持宽高比、只缩不放、最长边 ≤ maxDim。成功时 out 为 stride=width*4 的

@@ -19,7 +19,6 @@
 #include "imu_panel.hpp"
 #include "navigation.hpp"
 #include "node_canvas.hpp"
-#include "param_panel.hpp"
 #include "pose_view.hpp"
 #include "viewer_theme.hpp"
 
@@ -123,11 +122,9 @@ struct ViewerContext {
     /// 即整体换新（原子共享，帧泵 tick 只读）；pump 以画布修订号为脏标记刷新。
     viewer::WorkflowSourceRouter sourceRouter;
     std::uint64_t sourceRouterRevision = 0;
-    /// 工作流页画布会话状态（node_canvas.hpp；DEC-014 决策 4：切页保持）。
+    /// 工作流页画布会话状态（node_canvas.hpp；DEC-014 决策 4：切页保持；
+    /// M11/DEC-021 起含内嵌参数控件、监看器预览与驱动尺寸缓存）。
     WorkflowCanvasState workflowCanvas;
-    /// 工作流页参数面板会话状态（param_panel.hpp，M5-04：控件绑定/缩略图缓存；
-    /// 切页保持）。
-    WorkflowPanelState workflowPanel;
 
     /// 工作台导航状态（M5-02）：四页模型与当前页；页面 UI 状态由本上下文各字段
     /// 持有，导航不触碰（页面切换状态保持，navigation.hpp）。
@@ -188,7 +185,6 @@ void ensureStarted() {
         // 成员、onPick 捕获静态单例 &ctx、open 指向面板成员），一次性接线；
         // selectedIndex 由 compose 每帧从 resolutionIndex 刷新。
         ctx.cameraResolutionBinding.labels = &ctx.resolutionLabels;
-        ctx.cameraResolutionBinding.open = &ctx.workflowPanel.cameraResolutionOpen;
         ctx.cameraResolutionBinding.onPick = [&ctx](int index) {
             ctx.resolutionIndex.set(index);
             ctx.applyResolutionChoice(index);
@@ -435,9 +431,11 @@ void ViewerContext::pump() {
             workflowCanvas.graphPending = false;
             app::requestUpdate();
         }
-        // 中间结果消费（M5-04 §5.6）：Running 拉取单选节点最新产物上传缩略图；
-        // 非 Running 排空（§4 停止/关闭排空）。返回 true 需重绘。
-        if (pumpNodeOutput(workflowCanvas, workflowPanel, *workflow)) {
+        // 监看器预览消费（M11/DEC-021 §5.6 替代）：Running 逐监看器拉取最新
+        // 产物上传节点内嵌预览；非 Running 整体排空释放（§4 停止/关闭排空）。
+        // 驱动尺寸刷新（ROI 联动约束的输入尺寸源）同址有界消费。
+        if (pumpMonitorViews(workflowCanvas, *workflow) |
+            pumpDriverSizes(workflowCanvas, *workflow)) {
             app::requestUpdate();
         }
         // 性能统计消费（M5-05 §5.7）：sequence 推进拉取最新快照 + 活动/冻结
@@ -493,13 +491,17 @@ void ViewerContext::shutdown() {
         workflow.reset();  // （契约 stop 排空语义：stale 数据不得恢复活动状态）。
         workflowCanvas.graphPending = false;
     }
-    // 工作流面板 UI 侧排空（M5-04 §4）：快照缩略图清空、控件绑定复位、失败
-    // 标注清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址
-    // 排空（M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
-    workflowPanel.outputs.clear();
-    workflowPanel.thumbnail.release();
-    workflowPanel.thumbMeta.clear();
-    workflowPanel.resetBindings();
+    // 工作流画布 UI 侧排空（M5-04 §4 语义随 M11/DEC-021 迁移）：监看器预览
+    // GL 引用释放（GPU 设备销毁前）、内嵌控件与驱动尺寸缓存清空、失败标注
+    // 清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址排空
+    // （M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
+    for (auto& [id, monitor] : workflowCanvas.monitors) {
+        (void)id;
+        monitor.view.release();
+    }
+    workflowCanvas.monitors.clear();
+    workflowCanvas.controls.clear();
+    workflowCanvas.driverSizes.clear();
     workflowCanvas.failures.clear();
     workflowCanvas.perf.clear();
     rgbView.release();  // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
@@ -975,9 +977,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     // 为 ViewerContext 成员（retained 回调持有安全），仅
                     // selectedIndex 每帧从共享信号刷新。
                     ctx.cameraResolutionBinding.selectedIndex = ctx.resolutionIndex.get();
-                    composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflowPanel,
-                                        ctx.workflow.get(), &ctx.cameraResolutionBinding, ox,
-                                        pageTop, contentWidth, pageHeight);
+                    composeWorkflowPage(ui, ctx.workflowCanvas, ctx.workflow.get(),
+                                        &ctx.cameraResolutionBinding, ox, pageTop,
+                                        contentWidth, pageHeight);
                     break;
                 }
                 case WorkbenchPage::Settings:
