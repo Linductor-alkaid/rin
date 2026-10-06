@@ -85,4 +85,36 @@ interactive 拦截、兄弟 zIndex 稳定排序）——画布全视口 mouseAre
 
 **真机冒烟**（无相机环境，合成帧源 + 脚本化时序注入既有交互接缝 + glReadPixels 截图，临时补丁已还原）：四张截图存档 `screenshots/m11/`——`m11_graph`（四区布局、source→downscale→viewer 连线、内嵌参数呈现、"graph valid"）；`m11_running_monitor`（监看器实时预览 424x240 · seq 推进、Overview 30.5 fps/processed 推进、内嵌滑条与枚举胶囊）；`m11_param_updated`（scale→0.25 后预览 212x120 即时联动，下一帧生效实证）；`m11_stopped_drained`（停止排空：预览回占位符、总览冻结标注 stopped、Idle + [stopped] 事件）。无右栏、监看器无输出端口（不可拖线）核实。
 
+2026-10-07：**真机复验（D435if）完成**——两轮，第一轮暴露宿主环境缺口并
+登记台账，第二轮（视频-only 请求）通过。
+
+**第一轮（默认 enableMotion=true，暴露环境缺口）**：引擎 Running 但零帧
+（截图复核实证：Overview fps 0.0/processed 0，监看器占位符）。根因经
+Independent-Verification-Agent 受控实验链定位：本机内核 7.0.0-34-generic 的
+hid-sensor-hub/IIO 通路不出 IMU 数据（`in_accel_x_raw` 恒 0 + 内核
+`No report with id 0xffffffff found` 日志），librealsense 2.58.3 启用运动流后
+合成帧同步器等不到运动帧、`wait_for_frames` 永久超时，整条 pipeline 连带
+视频被饿死（探针：关运动流后 8 s 得 223/223 帧 ≈27.9 fps，视频链健康）。
+**首轮截图曾一度被主循环误读为"实拍 30.4 fps"，经独立验证交叉质疑与放大
+裁剪复核更正**（fps 0.0/processed 0），存档证据以裁剪复核为准。登记
+[LRS-20261007-001](../dependency_feedback/librealsense/ledger.md)。
+
+**真相机在位条件下的全量测试矩阵**（Independent-Verification-Agent）：五预设
+（debug/asan/ubsan/tsan-setarch/release）构建成功，除 `realsense_hardware`
+外 31/31 全绿、零消毒器诊断；`realsense_hardware` 五预设一致 FAIL（117 检查
+27 失败，全部为同一饿死根因的数据面级联；控制面见证正常：设备枚举/内参/
+IMU 目录/停止闭合），分级判定为环境前置缺失（非测试缺陷、非产品回归），
+详见 LRS-20261007-001。
+
+**第二轮（视频-only 请求绕行，enableMotion=false）通过**：主循环冒烟
+（脚本化时序注入既有交互接缝 + glReadPixels 截图，临时补丁已还原）重跑，
+三张截图存档 `screenshots/m11/m11_realcam_*.png`——`running`：双监看器并行
+实拍（RGB 链 source→downscale→监看器 424x240 · seq 推进的房间实拍 +
+source_depth_jet→监看器 848x480 jet 深度色图直连，"任意输出线均可接入"
+真机实证；Overview 端到端 29.1 fps/processed 156/0 丢弃）；`param`：内嵌
+滑条路径 scale→0.25 后监看器预览即时 212x120 · seq 351（下一帧生效真机
+实证）；`stopped`：停止排空（预览回占位符、总览冻结标注 stopped、
+end-to-end 0.0 fps 冻结呈现）。运动流真机验收（M3-08 项）在本机被
+LRS-20261007-001 阻断，补跑条件见台账。
+
 **遗留观察**（非 M11 回归）：M10 深度域 typeId（`source_depth_metric`/`depth_*`）不在 `paletteGroupFor` 分组表，调色板落 "Other"（HEAD 同此，M10 遗留呈现缺口，建议择期登记修复）；conv_kernel 的 size 枚举切换不自动重排 kernel 形状（M5-04 既有语义保持，切换后需手动 R+/C+ 步进，否则构造期拒绝经 NodeFailed 呈现）。

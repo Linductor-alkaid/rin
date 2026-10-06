@@ -66,6 +66,52 @@
 - 状态：Accepted（绕行已实施并在干净构建目录验证）
 - 跟进：2026-09-23 登记。
 
+### LRS-20261007-001：宿主内核 hid-sensor-hub/IIO 无 IMU 数据，启用运动流后合成帧同步器饿死整条 pipeline
+
+- 级别：P2（宿主环境缺口：真机运动流与默认启动请求在本机不可用，视频面可绕行）
+- 现象/证据（D435if，固件 5.15.1.55，内核 7.0.0-34-generic，pinned librealsense
+  2.58.3，独立验证代理受控实验 + 主循环复跑）：
+  1. 独立探针（原始 librealsense、逐字复刻 adapter `buildConfig`）：启用
+     ACCEL/GYRO 时 `wait_for_frames` 持续超时（10 s 内 color=0 depth=0
+     accel=0 gyro=0），但 RS2 DEBUG 日志显示传感器层 Depth/Color 帧 ~30fps
+     正常到达（`FrameAccepted`）；关闭运动流（仅 RGB8+Z16）8 s 得 223/223 帧
+     （≈27.9 fps）——即视频链健康，运动流使能时合成帧同步器因等不到运动帧
+     永不产出 frameset，整条 pipeline（含视频）被饿死。
+  2. 环境层直接证据：`/sys/bus/iio/devices/iio:device1/in_accel_x_raw` 恒 0
+     （静置应有重力分量）；每次打开设备内核日志出现
+     `hid-sensor-hub ... No report with id 0xffffffff found`；librealsense 日志
+     `backend-hid.cpp:641 iio_hid_sensor: Frames didn't arrived within the
+     predefined interval`。
+  3. 权限/枚举无问题：`/dev/iio:device1/2`、`/dev/hidraw4` 均 0666（librealsense
+     udev 规则已装且覆盖 8086:0b3a），USB SuperSpeed——`test_realsense_hardware`
+     的两个 SKIP 判据（无设备、scan_element 权限）都不命中，测试按设计 FAIL
+     （五预设一致，117 检查 27 失败，全部为数据面级联：首帧 5 s 超时起）。
+  4. 历史对照：该测试本机此前从未真机执行过（M3 记录为 udev 前置 SKIP），
+     本次为首次暴露，非 M11 回归（M11 前后行为一致）。
+- 影响范围：本宿主机上默认 `enableMotion=true` 的启动请求（viewer 默认与
+  硬件测试）得不到任何视频/深度帧；M11 真机冒烟第一轮因此"引擎 Running
+  而零帧"（截图复核实证 fps 0.0/processed 0），以 `enableMotion=false`
+  视频-only 请求复跑后 RGB+深度 29.1 fps 正常（截图 `screenshots/m11/
+  m11_realcam_*.png`）。运动流真机验收（M3-08 IMU 频率/位姿/restream 恢复）
+  在本机被阻断。
+- 期望语义：运动流传感器打开成功但持续零样本时，`wait_for_frames` 不应
+  连带饿死视频流（合成帧不应硬性等待运动帧）。
+- 建议的最小能力/绕行：
+  - 环境侧（首选）：更换 6.x 内核或修复 hid-sensor-hub/IIO 后复跑
+    （`test_realsense_hardware` 五预设 + viewer 默认请求冒烟）；物理断电重插
+    相机亦可尝试。
+  - 应用侧（如判定本环境为长期形态，需 owner 裁定）：将"运动流打开成功但
+    长期零样本"纳入适配器降级策略（现 M3-04 降级仅覆盖打开失败）或测试
+    SKIP 判据——属验收契约变更，未实施。
+- 延期影响：M3-08 运动流真机验收项在本机保持"未验证"；M11 真机冒烟以
+  视频-only 请求完成（覆盖 M11 全部数据面语义，运动流与 M11 无关）。
+- 可验收结果：视频-only 请求下双流 30 fps 端到端（29.1 fps 实测）、监看器
+  实时预览随 seq 推进、参数下一帧生效（424x240→212x120）、停止排空；运动
+  流修复后 `test_realsense_hardware` 全绿 + 默认请求复跑。
+- 状态：Open（等待环境修复复跑或 owner 对降级策略的裁定）
+- 跟进：2026-10-07 登记（Independent-Verification-Agent 受控实验证据链 +
+  主循环复跑实证）。
+
 ## 跟进记录表
 
 | 编号 | 状态 | 优先级 | 跟进 |
