@@ -1,0 +1,88 @@
+# M11：监看器节点与画布内嵌参数编辑
+
+> 状态：Complete
+> 负责人：Linductor-alkaid（授权 Agent 按工程规范自治执行）
+> 所属计划：[Rin 实施总计划](rin-implementation-plan.md)
+> 前置：M10
+> 立项依据：用户需求（2026-10-06，画布块内 context 就地化 + 监看器 + 去右栏）
+> 决策：[DEC-021](../decisions/DEC-021-monitor-node-and-inline-editing.md)
+> 更新日期：2026-10-06
+
+## 目标
+
+参照 ComfyUI / Unreal 蓝图范式改造工作流页交互（DEC-021）：
+
+1. 画布节点块内直接显示并编辑自己的参数（内嵌控件，去掉右侧参数面板）；
+2. 调色板新增"监看器"节点：任意类型输出线可接入，输入图像实时显示在节点内
+   预览窗口，UI 无输出端口；
+3. 移除右栏，工作流页五区改四区；总览统计迁底部区，分辨率入口迁源节点，
+   中间结果查看由监看器承担。
+
+## 方案冻结（详见 DEC-021）
+
+- `PortType::Any` 通配（仅目录声明位；连线兼容 = 相等或输入端 Any；
+  `elementSize(Any)=0` 天然拒绝实际图像格式为 Any）。
+- 监看器 = 目录 `viewer`（Any→Any 恒等透传，引擎零改动，产物走既有邮箱）；
+  UI 隐藏输出端口（`portAt` 跳过）；预览 = per-monitor `GpuFrameView` +
+  `tryLoadNodeOutput` pump + `thumbnailRgbaFromSnapshot`（maxDim 512）。
+- 画布指针分发反转：全视口 mouseArea 先合成（视觉层下），内嵌控件后合成
+  优先命中（EUI hit test：子先于父、同 zIndex 后合成优先、仅 interactive
+  拦截；pinned 4691fc0 源码取证）。
+- 节点纵向结构：标题 → 参数区 → 端口区 → 页脚；几何纯函数
+  `nodeHeight(descriptor, params)` 族（RealArray 行数随实例形状）。
+- 控件映射：Boolean→开关；带范围标量→滑条+值文本；枚举→点击循环胶囊；
+  RealArray→紧凑网格；ROI 联动沿用（尺寸源 per-node 驱动缓存）。
+
+## 工作项
+
+- [x] `M11-01` 契约层：`PortType::Any`（枚举/toString/elementSize/端口色）+
+      `validateWorkflowGraph` 判据 + `runNodeGraph` Any 防御核对 + 目录
+      `viewer` 项 + 恒等节点工厂（`makeDefaultImageNode`）。
+- [x] `M11-02` canvas_model 纯逻辑：参数区/预览区几何（nodeHeight/nodeBounds/
+      portPosition 签名扩展）、connect Any 判据、portAt 跳过监看器输出端口、
+      调色板 View 分组、枚举循环取值助手。
+- [x] `M11-03` UI 组装：节点内嵌参数控件（param_panel 重构为内联控件 +
+      per-node 控件状态）、监看器节点绘制（预览/meta/隐藏输出端口）、
+      四区布局（右栏与 context 分隔条删除、总览迁底部右列、分辨率入口迁
+      源节点、页脚 last·avg）、画布 mouseArea 合成次序反转。
+- [x] `M11-04` pump 与生命周期：监看器预览拉取上传/排空释放、驱动尺寸缓存
+      刷新、节点删除清理、shutdown 排空（GL 引用释放顺序不变）。
+- [x] `M11-05` 测试（Independent-Verification-Agent）：契约（Any 判据全矩阵、
+      viewer 透传 golden、目录签名）、画布纯逻辑（几何/连线/命中/分组）、
+      参数纯逻辑回归、全量 ctest debug/asan/ubsan/tsan。
+- [x] `M11-06` 真机冒烟（脚本化交互时序 + 截图存档 `screenshots/m11/`）、
+      文档收口（ui_workspace_design/image_workflow_design 补记、CHANGELOG、
+      总计划状态）、MR。
+
+## 测试与退出条件
+
+- [x] 契约：Any 输入接受三型、Any 输出连具体输入拒绝、实际格式 Any 拒绝
+      （make/wrap）、viewer 恒等零拷贝 golden、防御核对（声明 Any 接受任意
+      具体格式产出）。
+- [x] 画布：带参节点高度/端口偏移、RealArray 形状变化联动、viewer 几何、
+      Any 连线接受/类型过滤、监看器输出端口不可命中、View 分组。
+- [x] 参数：既有 param_model 纯逻辑回归全绿（未破坏）；内联新增纯逻辑
+      （几何/循环）覆盖。
+- [x] 全量 ctest 四预设全绿。
+- [x] 真机：拖入监看器 → 任意输出接入 → 启动 → 节点内实时预览随 seq 推进；
+      画布内滑条/枚举循环/矩阵网格编辑即时生效（下一帧）；停止排空（预览
+      清空、总览冻结标注）；四区布局无右栏。
+- [x] 文档同步齐备。
+
+## 验证记录
+
+2026-10-06：立项。可行性调研完成（主循环）：EUI-NEO pinned 4691fc0 命中
+测试源码取证（`core/runtime/runtime_input.h`：自顶向下、子先于父、仅
+interactive 拦截、兄弟 zIndex 稳定排序）——画布全视口 mouseArea 先合成即可
+让内嵌控件优先命中，交互范式迁移可行；引擎产物通道（M7-02 跨代邮箱）对
+恒等透传节点零改动可用。方案冻结于 DEC-021。
+
+2026-10-06：`M11-01`..`M11-06` 完成关闭。
+
+**实现**（主循环）：契约层 `PortType::Any`（toString/elementSize=0/校验判据"相等或输入端 Any"/runNodeGraph Any 防御）+ 目录 `viewer`（Any→Any，追加于末项后）+ 恒等节点（`makeDefaultImageNode`，共享像素零拷贝；`singleInput` 格式核对不适配 Any，独立实现输入防御）；`canvas_model` 几何族扩展（`nodeHeight/nodeBounds/portPosition(descriptor, params)`、参数区/预览窗/相机源分辨率行、RealArray 实例形状联动）+ connect Any 判据 + `portAt` 跳过监看器输出端口 + View 分组；UI 重组：`node_canvas.hpp` 吸收 `param_panel.hpp`（右栏删除，四区组装、总览迁底部右列、画布 mouseArea 先合成=内嵌控件优先命中、内嵌参数控件按 ParamKind 映射、枚举点击循环、监看器预览窗、页脚 last·avg）；pump：`pumpMonitorViews`（逐监看器拉取上传/排空释放/条目清理，GL 仅渲染线程）+ `pumpDriverSizes`（ROI 联动尺寸源）+ shutdown 排空序更新。
+
+**测试**（Independent-Verification-Agent，一轮全绿）：三份受影响测试映射新 API（node_canvas 474 / run_control 273 / param_panel 376 项检查，含新增 cycleEnumOption 与监看器常量）；新建 `test_monitor_any` 171 项（Any 校验全矩阵、elementSize/make/wrap 拒绝、目录签名与顺序冻结、恒等透传零拷贝 golden 三格式、runNodeGraph 集成、canvas_model M11 几何/连线/命中/分组、afterGraphChange 清扫）。四预设 ctest 32/32 全绿（tsan 按仓库惯例 `setarch -R`；realsense_hardware 无相机按既有方式跳过）。未发现 M11 产品缺陷。
+
+**真机冒烟**（无相机环境，合成帧源 + 脚本化时序注入既有交互接缝 + glReadPixels 截图，临时补丁已还原）：四张截图存档 `screenshots/m11/`——`m11_graph`（四区布局、source→downscale→viewer 连线、内嵌参数呈现、"graph valid"）；`m11_running_monitor`（监看器实时预览 424x240 · seq 推进、Overview 30.5 fps/processed 推进、内嵌滑条与枚举胶囊）；`m11_param_updated`（scale→0.25 后预览 212x120 即时联动，下一帧生效实证）；`m11_stopped_drained`（停止排空：预览回占位符、总览冻结标注 stopped、Idle + [stopped] 事件）。无右栏、监看器无输出端口（不可拖线）核实。
+
+**遗留观察**（非 M11 回归）：M10 深度域 typeId（`source_depth_metric`/`depth_*`）不在 `paletteGroupFor` 分组表，调色板落 "Other"（HEAD 同此，M10 遗留呈现缺口，建议择期登记修复）；conv_kernel 的 size 枚举切换不自动重排 kernel 形状（M5-04 既有语义保持，切换后需手动 R+/C+ 步进，否则构造期拒绝经 NodeFailed 呈现）。

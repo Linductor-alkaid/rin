@@ -1,7 +1,8 @@
 # 图像工作流设计：Core 算子契约与执行语义（M4）
 
 > 状态：Active
-> 日期：2026-09-28（随 `M4-02` 产出）；2026-09-29 随 `M4-03` 冻结几何算子数值语义；
+> 日期：2026-09-28（随 `M4-02` 产出）；2026-10-06 随 `M11`/DEC-021 扩展
+> `PortType::Any` 与监看器节点（§3.2/§6）；2026-09-29 随 `M4-03` 冻结几何算子数值语义；
 > 2026-09-29 随 `M4-04` 冻结卷积/高斯数值语义（`conv_kernel` 目录 schema 增加
 > `border` 参数，假引擎目录同步扩展）；2026-09-29 随 `M4-05` 冻结直方图均衡与
 > 灰度化数值语义（目录 schema 不变）；2026-09-29 随 `M4-06` 冻结 FFT 滤波族数值
@@ -59,11 +60,15 @@ Executor 承载细节（`M4-07` 实现，执行模型经 DEC-013 冻结）。
 
 ### 3.2 端口类型系统
 
-连线兼容性 = 两端 `PortType` 相等（`validateWorkflowGraph` 的 `TypeMismatch` 判
-据），图像运行时格式与端口声明的一致性由 `runNodeGraph` 的防御性核对兜底。节点
-签名（`NodeDescriptor::inputs/outputs`）是端口面唯一来源；目录在构建期确定、
-运行期不变，编译后 `NodeGraph::Node::descriptor` 指向目录内声明（图不得比目录
-长寿）。
+连线兼容性 = 两端 `PortType` 相等，**或输入端口声明为 `Any`**（M11/DEC-021：
+`validateWorkflowGraph` 的 `TypeMismatch` 判据；`Any` 输出只能连入 `Any` 输入，
+判据自然给出）。`Any` 仅存在于目录声明位（通配输入，监看器节点消费），实际
+图像格式永不为 `Any`：`elementSize(Any)=0`，`ImageU8::make/wrap` 元数据校验
+天然拒绝；`runNodeGraph` 防御性核对对声明 `Any` 的输出端口接受任意具体格式
+（监看器恒等透传的输出格式随输入动态）。图像运行时格式与端口声明的一致性由
+`runNodeGraph` 的防御性核对兜底。节点签名（`NodeDescriptor::inputs/outputs`）
+是端口面唯一来源；目录在构建期确定、运行期不变，编译后
+`NodeGraph::Node::descriptor` 指向目录内声明（图不得比目录长寿）。
 
 ## 4. 节点契约与类型化参数模型
 
@@ -182,6 +187,7 @@ M4-03..M4-06 逐算子提供工厂实现并注册进引擎目录；Core 侧默�
 | `fft_lowpass` | FFT 低通 | Gray8 | Gray8 | cutoff: Real 0.2 [0,1] |
 | `fft_highpass` | FFT 高通 | Gray8 | Gray8 | cutoff: Real 0.2 [0,1] |
 | `fft_bandpass` | FFT 带通 | Gray8 | Gray8 | lowCut: Real 0.2 [0,1]；highCut: Real 0.6 [0,1] |
+| `viewer` | 监看器 | Any | Any | —（M11/DEC-021：恒等透传 sink，任意输出线可接入；UI 隐藏输出端口，节点内嵌预览显示输入） |
 
 `grayify` 是 RGBA 相机帧进入 Gray8 算子族的桥接节点（不在 M4 总计划算子清单
 正文内，随 `M5-08` 假目录入库并按 DEC-016 作为 M4 真实现的一部分交付）。
