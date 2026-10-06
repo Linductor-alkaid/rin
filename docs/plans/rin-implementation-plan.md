@@ -1,7 +1,7 @@
 # Rin 实施总计划
 
 > 状态：In Progress
-> 最后更新：2026-10-06
+> 最后更新：2026-10-07
 > 负责人：Linductor-alkaid
 
 ## 当前整体状态
@@ -250,7 +250,7 @@ v0.5.1（2026-09-30）。2026-10-06 用户需求立项 [M11](m11-canvas-monitor-
 | M8 深度策略预处理算子（Core） | [m8-depth-policy-preproc.md](m8-depth-policy-preproc.md) | 无（M4 纪律前置） | v0.5.1 |
 | M9 米制深度通道与策略深度预览 | [m9-metric-depth-channel.md](m9-metric-depth-channel.md) | M8 | v0.5.1 |
 | M10 工作流深度域（米制算子进画布） | [m10-workflow-depth-domain.md](m10-workflow-depth-domain.md) | M8、M9 | v0.5.1 |
-| M11 监看器节点与画布内嵌参数编辑 | [m11-canvas-monitor-inline.md](m11-canvas-monitor-inline.md) | M10 | 未排期（建议 v0.6.0） |
+| M11 监看器节点与画布内嵌参数编辑 | [m11-canvas-monitor-inline.md](m11-canvas-monitor-inline.md) | M10 | v0.5.2 |
 
 ## 暂定决策（未冻结）
 

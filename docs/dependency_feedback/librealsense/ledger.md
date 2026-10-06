@@ -122,6 +122,27 @@
   根因即本条目饿死机理），现已将环境变量升级为会话级标志（启动请求与档位
   粘性同源，`ViewerContext::motionDisabledByEnv`）。
 
+### LRS-20261007-002：相机被占用时的打开失败拆除路径存在第三方数据竞争（tsan）
+
+- 级别：P3（依赖缺陷候选：仅失败路径、仅相机被并发占用时触发，成功路径与
+  空闲相机路径无报告）
+- 现象/证据（Independent-Verification-Agent，真相机在位、tsan 预设）：
+  相机被另一进程持有时 `CaptureLoop::startPipeline` 打开失败（errno=16
+  VIDIOC busy）进入 config→pipeline→locked_transfer 拆除，librealsense2
+  2.58（pinned 7c3ee3fb）内部 `librealsense::small_heap<int,256>::
+  ~small_heap()`（pthread_cond_destroy，拆除线程）与 dispatcher 线程
+  `small_heap::deallocate`（pthread_cond_signal，持 M0 锁）对同一堆块
+  竞态，tsan 报告数据竞争。调用链位于
+  src/adapters/realsense/realsense_camera_service.cpp:966（ Rin 侧仅为
+  调用者）。
+- 影响范围：失败拆除路径的潜在 UB（依赖内部），无 Rin 侧可观察行为异常；
+  相机空闲时全部预设（含 tsan 真机）干净通过。
+- 期望语义：打开失败拆除时 dispatcher 线程与堆析构有序（上游修复）。
+- 建议的最小能力/绕行：无 Rin 侧绕行（不修改 pinned 源）；避免并发占用
+  相机为操作纪律（本仓库验证流程已按占用重试规则处理）。
+- 状态：Accepted（依赖缺陷候选登记；随上游升级复验）
+- 跟进：2026-10-07 登记（独立验证 tsan 证据）。
+
 ## 跟进记录表
 
 | 编号 | 状态 | 优先级 | 跟进 |

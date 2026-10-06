@@ -1051,25 +1051,36 @@ void testCycleEnumOptionAndMonitorPreviewCap() {
         RIN_CHECK_MSG(current == "1", "cycle: full traversal returns to the start");
     }
 
-    // 监看器预览最长边上限（M11/DEC-021：有界；> 缩略图 256，放大档清晰）。
-    RIN_CHECK_EQ(viewer::kMonitorPreviewMaxDim, std::uint32_t{512});
+    // 监看器预览最长边上限（M11/DEC-021：有界；> 缩略图 256，放大档清晰。
+    // 2026-10-07 视窗宽高双向可调（28685c3）后窗口可达 800x640 画布单位，
+    // 上限 512→1024 保证宽窗常见放大档清晰）。
+    RIN_CHECK_EQ(viewer::kMonitorPreviewMaxDim, std::uint32_t{1024});
     RIN_CHECK_MSG(viewer::kMonitorPreviewMaxDim > viewer::kThumbnailMaxDim,
                   "monitor: preview cap exceeds the thumbnail cap");
-    // maxDim=512 下降采样边界：600x300 快照 → 512x256（保持宽高比、只缩不放）。
+    // maxDim=1024 下降采样边界：1200x600 快照 → 1024x512（保持宽高比、只缩
+    // 不放）；maxDim=512 旧边界行为回归（600x300 → 512x256）。
     {
         rin::NodeOutputSnapshot snapshot;
         snapshot.node = 1;
         snapshot.format = rin::PortType::Gray8;
-        snapshot.width = 600;
-        snapshot.height = 300;
-        snapshot.stride = 600;
+        snapshot.width = 1200;
+        snapshot.height = 600;
+        snapshot.stride = 1200;
         snapshot.sourceSequence = 11;
         snapshot.pixels = std::make_shared<const std::vector<std::uint8_t>>(
-            static_cast<std::size_t>(600) * 300, 0x55);
+            static_cast<std::size_t>(1200) * 600, 0x55);
         rin::Frame out;
         RIN_CHECK(viewer::thumbnailRgbaFromSnapshot(snapshot, viewer::kMonitorPreviewMaxDim, out));
-        RIN_CHECK_EQ(out.width, 512u);
-        RIN_CHECK_EQ(out.height, 256u);
+        RIN_CHECK_EQ(out.width, 1024u);
+        RIN_CHECK_EQ(out.height, 512u);
+        // 显式 maxDim=512 旧边界行为回归：600x300 → 512x256（函数语义与常量
+        // 上限解耦，上限抬升不改变下降采样数学）。
+        rin::NodeOutputSnapshot legacy = snapshot;
+        legacy.sourceSequence = 12;
+        rin::Frame legacyOut;
+        RIN_CHECK(viewer::thumbnailRgbaFromSnapshot(legacy, 512u, legacyOut));
+        RIN_CHECK_EQ(legacyOut.width, 512u);
+        RIN_CHECK_EQ(legacyOut.height, 256u);
     }
 }
 

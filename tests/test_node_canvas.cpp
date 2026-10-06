@@ -16,7 +16,13 @@
 //   5. 调色板模型 paletteGroups（分组归类、即输即筛、未知类型归 Other）；
 //   6. 连线带状轮廓 wireRibbon（M5-04 连线渲染修复：粗细一致曲线的 ±width/2
 //      带状封闭轮廓，EUI polygon 填充语义下开放点集误渲染为"弦-曲线封闭
-//      区域"的真机缺陷回归守卫）。
+//      区域"的真机缺陷回归守卫）；
+//   7. 监看器预览窗节点级高度与宽度（M11 验收追加 2026-10-07，独立验证）：
+//      几何族尾参 monitorPreviewHeight/monitorWidth 的默认/最小/最大/越界
+//      冻结值与线性关系、宽高双向独立、非 viewer 节点同值异型不受影响、
+//      nodeAt/nodesInRect/portAt/wireAt/graphBounds/交互在预览增高/加宽下的
+//      命中语义、两 viewer 独立尺寸，以及画/命中锚点一致性回归守卫
+//      （cb8bd4c 修复与 28685c3 宽度扩展的同源性守卫）。
 //
 // 目录构造为本文件私有的小型 rin::NodeCatalog（只链 rin::core）。测试壳为 tests/test_util.hpp 的 RIN_CHECK*（无第三方框架），
 // main 返回 rin_test::exitStatus()。单线程纯逻辑，无 sleep。
@@ -56,8 +62,10 @@ constexpr float kFitTol = 0.05f;
 // --- 本地小型目录（满足 NodeDescriptor::valid()/NodeCatalog::valid() 约束） ---
 
 // a：Gray8 单输入单输出；b：Gray8 双输入单输出；c：Rgba8 单输入单输出 +
-// 一个带范围声明的 Real 参数；monitor：零输入单输出；blank：零输入零输出
-// （覆盖 nodeHeight 的 max(inputs, outputs, 1) 下限分支）。
+// 一个带范围声明的 Real 参数；monitor：零输入单输出（注意：typeId 非真实监看器
+// "viewer"，isMonitorNode 判定为 false——历史夹具，覆盖 nodeHeight 的
+// max(inputs, outputs, 1) 下限分支）；viewer：真实监看器（Any→Any 单输入单输出，
+// M11/DEC-021 签名，预览窗高度节点级可调的几何被测对象）；blank：零输入零输出。
 [[nodiscard]] rin::NodeCatalog makeCanvasCatalog() {
     rin::NodeCatalog catalog;
     catalog.nodes.push_back({"a", "Alpha", {rin::PortType::Gray8}, {rin::PortType::Gray8}, {}});
@@ -74,6 +82,7 @@ constexpr float kFitTol = 0.05f;
     catalog.nodes.push_back(
         {"c", "Charlie", {rin::PortType::Rgba8}, {rin::PortType::Rgba8}, {sigma}});
     catalog.nodes.push_back({"monitor", "Monitor", {}, {rin::PortType::Gray8}, {}});
+    catalog.nodes.push_back({"viewer", "Viewer", {rin::PortType::Any}, {rin::PortType::Any}, {}});
     catalog.nodes.push_back({"blank", "Blank", {}, {}, {}});
     return catalog;
 }
@@ -1870,6 +1879,787 @@ void testWireRibbon() {
     }
 }
 
+// --- 16. 监看器预览窗节点级高度几何（M11 验收追加 2026-10-07，独立验证） ---
+//
+// 被测契约（canvas_model.hpp + docs/design/ui_workspace_design.md §5.6 补记）：
+//   - 常量：kMonitorPreviewHeight=140（默认）、kMonitorPreviewMinHeight=96、
+//     kMonitorPreviewMaxHeight=640；
+//   - CanvasNode::monitorPreviewHeight 节点级 UI 私有状态，默认 140；
+//   - 几何族尾参 monitorPreviewHeight（默认参数保持旧调用兼容）：
+//     viewer 节点高 = 26 + h + 6 + max(输入,输出,1)*20 + 8 = h + 60（1 进 1 出），
+//     输入锚点 y = 26 + h + 6 + 10 = h + 42；
+//   - 夹取属于写入（拖拽）与 compose 层：纯几何函数对越界值线性外推不夹取
+//     （分层契约——本区按此断言，若未来在几何层内加夹取属行为变更应显式评审）；
+//   - 非 viewer 节点几何与 monitorPreviewHeight 无关（同值异型对比）。
+//
+// 期望值全部由上述设计公式手推，不参考实现内部。
+
+void testMonitorPreviewGeometry() {
+    GraphFixture fx;
+    const rin::NodeDescriptor* viewerD = rin::findNodeDescriptor(fx.catalog, "viewer");
+    const rin::NodeDescriptor* a = rin::findNodeDescriptor(fx.catalog, "a");
+    const rin::NodeDescriptor* c = rin::findNodeDescriptor(fx.catalog, "c");
+    RIN_CHECK((viewerD != nullptr && a != nullptr && c != nullptr));
+    RIN_CHECK(fx.catalog.valid());
+    if (viewerD == nullptr || a == nullptr || c == nullptr) {
+        return;
+    }
+
+    // 常量冻结（设计契约：默认 140、范围 [96,640]，默认落于开区间内）。
+    RIN_CHECK_MSG(viewer::kMonitorPreviewHeight == 140.0f, "default preview height is 140");
+    RIN_CHECK_MSG(viewer::kMonitorPreviewMinHeight == 96.0f, "min preview height is 96");
+    RIN_CHECK_MSG(viewer::kMonitorPreviewMaxHeight == 640.0f, "max preview height is 640");
+    RIN_CHECK(viewer::kMonitorPreviewMinHeight < viewer::kMonitorPreviewHeight);
+    RIN_CHECK(viewer::kMonitorPreviewHeight < viewer::kMonitorPreviewMaxHeight);
+
+    // CanvasNode 默认成员：createNode 路径初始化为 kMonitorPreviewHeight
+    // （节点级状态默认值契约，viewer 与非 viewer 节点同默认）。
+    {
+        const rin::NodeId iv = make(fx.model, "viewer", 0.0f, 0.0f);
+        const rin::NodeId ia = make(fx.model, "a", 0.0f, 0.0f);
+        const viewer::CanvasNode* nv = fx.model.findNode(iv);
+        const viewer::CanvasNode* na = fx.model.findNode(ia);
+        RIN_CHECK((nv != nullptr && na != nullptr));
+        if (nv != nullptr) {
+            RIN_CHECK_MSG(nv->monitorPreviewHeight == viewer::kMonitorPreviewHeight,
+                          "new viewer node starts at the default preview height");
+        }
+        if (na != nullptr) {
+            RIN_CHECK_MSG(na->monitorPreviewHeight == viewer::kMonitorPreviewHeight,
+                          "non-monitor nodes carry the default preview height field too");
+        }
+    }
+
+    // portsOffsetY：viewer = 26 + h + 6；非 viewer 与 h 无关。
+    RIN_CHECK_MSG(nearF(viewer::portsOffsetY(*viewerD, {}), 172.0f),
+                  "portsOffsetY(viewer) default = 26+140+6");
+    RIN_CHECK_MSG(nearF(viewer::portsOffsetY(*viewerD, {}, 96.0f), 128.0f),
+                  "portsOffsetY(viewer, 96) = 128");
+    RIN_CHECK_MSG(nearF(viewer::portsOffsetY(*viewerD, {}, 640.0f), 672.0f),
+                  "portsOffsetY(viewer, 640) = 672");
+    RIN_CHECK_MSG(nearF(viewer::portsOffsetY(*a, {}, 96.0f), 26.0f) &&
+                      nearF(viewer::portsOffsetY(*a, {}, 640.0f), 26.0f),
+                  "paramless non-monitor portsOffsetY ignores preview height");
+    RIN_CHECK_MSG(nearF(viewer::portsOffsetY(*c, {}, 96.0f), 62.0f) &&
+                      nearF(viewer::portsOffsetY(*c, {}, 640.0f), 62.0f),
+                  "param node portsOffsetY ignores preview height");
+
+    // nodeHeight(viewer) = h + 60：默认/最小/最大冻结值 + 默认参数路径等价。
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD), 200.0f),
+                  "viewer height default = 26+140+6+20+8");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}), 200.0f),
+                  "viewer height default (params defaulted)");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, 96.0f), 156.0f),
+                  "viewer height at min = 156");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, 640.0f), 700.0f),
+                  "viewer height at max = 700");
+    RIN_CHECK(viewer::nodeHeight(*viewerD) == viewer::nodeHeight(*viewerD, {}));
+    RIN_CHECK(viewer::nodeHeight(*viewerD, {}) ==
+              viewer::nodeHeight(*viewerD, {}, viewer::kMonitorPreviewHeight));
+
+    // 线性关系：高度差 == 预览高度差（斜率 1、截距 60 的设计公式）。
+    {
+        const float heights[] = {96.0f, 140.0f, 250.5f, 400.0f, 640.0f};
+        for (const float h : heights) {
+            RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, h), h + 60.0f),
+                          "viewer nodeHeight is h+60 across the range");
+        }
+        RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, 640.0f) -
+                                viewer::nodeHeight(*viewerD, {}, 96.0f),
+                            544.0f),
+                      "height difference equals preview height difference");
+    }
+
+    // 纯几何不夹取（夹取属写入/compose 层）：越界值线性外推。
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, 50.0f), 110.0f),
+                  "below-min preview height is not clamped in pure geometry");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, 2000.0f), 2060.0f),
+                  "above-max preview height is not clamped in pure geometry");
+
+    // 非 viewer 不受影响（同值异型对比：同 h=640 下 a=54、c=90、viewer=700）。
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*a, {}, 96.0f), 54.0f) &&
+                      nearF(viewer::nodeHeight(*a, {}, 640.0f), 54.0f) &&
+                      viewer::nodeHeight(*a, {}, 640.0f) == viewer::nodeHeight(*a),
+                  "non-monitor height invariant across preview heights");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*c, {}, 640.0f), 90.0f),
+                  "param node height invariant across preview heights");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, 640.0f) -
+                            viewer::nodeHeight(*a, {}, 640.0f),
+                        646.0f),
+                  "same preview value, different type: viewer 700 vs a 54");
+
+    // nodeBounds：宽恒 200，高随 h；默认参数路径等价。
+    {
+        const viewer::CanvasRect b = viewer::nodeBounds({100.0f, 50.0f}, *viewerD, {}, 400.0f);
+        RIN_CHECK_MSG((b.x == 100.0f && b.y == 50.0f && nearF(b.width, 200.0f) &&
+                       nearF(b.height, 460.0f)),
+                      "viewer bounds at h=400: 200x460 at the position");
+        const viewer::CanvasRect bDefault = viewer::nodeBounds({100.0f, 50.0f}, *viewerD);
+        RIN_CHECK_MSG((nearF(bDefault.height, 200.0f) && nearF(bDefault.width, 200.0f)),
+                      "viewer default bounds 200x200");
+        const viewer::CanvasRect bMin = viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {},
+                                                           viewer::kMonitorPreviewMinHeight);
+        RIN_CHECK_MSG(nearF(bMin.height, 156.0f), "viewer bounds at min: height 156");
+        const viewer::CanvasRect bMax = viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {},
+                                                           viewer::kMonitorPreviewMaxHeight);
+        RIN_CHECK_MSG(nearF(bMax.height, 700.0f), "viewer bounds at max: height 700");
+    }
+
+    // portPosition：viewer 输入/输出锚点 y = pos.y + h + 42（x 左缘/右缘）；
+    // 默认参数路径与显式 140 等价；非 viewer 锚点不随 h 移动。
+    {
+        const float heights[] = {140.0f, 96.0f, 640.0f, 50.0f, 2000.0f};
+        for (const float h : heights) {
+            const viewer::CanvasPoint in0 = viewer::portPosition(
+                {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Input, 0}, h);
+            RIN_CHECK_MSG(nearPoint(in0, {10.0f, 20.0f + h + 42.0f}),
+                          "viewer input anchor tracks the preview height");
+            const viewer::CanvasPoint out0 = viewer::portPosition(
+                {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Output, 0}, h);
+            RIN_CHECK_MSG(nearPoint(out0, {210.0f, 20.0f + h + 42.0f}),
+                          "viewer output anchor tracks the preview height");
+        }
+        const viewer::CanvasPoint inDefault = viewer::portPosition(
+            {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Input, 0});
+        RIN_CHECK_MSG(nearPoint(inDefault, {10.0f, 20.0f + 182.0f}),
+                      "viewer default input anchor at +182");
+        const viewer::CanvasPoint inExplicit = viewer::portPosition(
+            {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Input, 0},
+            viewer::kMonitorPreviewHeight);
+        RIN_CHECK(inDefault == inExplicit);
+
+        // 非 viewer：不同 h 下锚点逐位一致（同值异型对比）。
+        const viewer::CanvasPoint aIn96 = viewer::portPosition(
+            {10.0f, 20.0f}, *a, {}, {5, rin::PortDirection::Input, 0}, 96.0f);
+        const viewer::CanvasPoint aIn640 = viewer::portPosition(
+            {10.0f, 20.0f}, *a, {}, {5, rin::PortDirection::Input, 0}, 640.0f);
+        RIN_CHECK_MSG(aIn96 == aIn640 && nearPoint(aIn96, {10.0f, 56.0f}),
+                      "non-monitor input anchor fixed across preview heights");
+        const viewer::CanvasPoint cIn640 = viewer::portPosition(
+            {10.0f, 20.0f}, *c, {}, {5, rin::PortDirection::Input, 0}, 640.0f);
+        RIN_CHECK_MSG(nearPoint(cIn640, {10.0f, 92.0f}),
+                      "param node input anchor fixed across preview heights");
+    }
+}
+
+// --- 17. 监看器预览高度的模型命中语义（nodeAt/nodesInRect/portAt/wireAt/
+//         graphBounds/交互；M11 验收追加 2026-10-07，独立验证） ---
+//
+// 判据：CanvasGraphModel 全链命中调用携带 node.monitorPreviewHeight——
+// 预览增高后节点包围盒覆盖更大区域、端口/连线锚点下移且旧位置不再命中；
+// 两 viewer 节点各自独立高度互不影响。期望位置由设计公式手推。
+
+void testMonitorPreviewHitSemantics() {
+    // nodeAt：预览增高后包围盒覆盖更大区域（含底缘闭边界）；高度回落后
+    // 增高区域不再命中。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv = make(fx.model, "viewer", 100.0f, 50.0f);
+        viewer::CanvasNode* node = fx.model.findNode(iv);
+        RIN_CHECK(node != nullptr);
+        if (node == nullptr) {
+            return;
+        }
+        node->monitorPreviewHeight = 400.0f;  // 高 460，底缘 y = 510。
+        RIN_CHECK_MSG(fx.model.nodeAt({200.0f, 400.0f}) == node,
+                      "nodeAt hits inside the enlarged preview area");
+        RIN_CHECK_MSG(fx.model.nodeAt({200.0f, 510.0f}) == node,
+                      "nodeAt includes the enlarged bottom edge");
+        RIN_CHECK_MSG(fx.model.nodeAt({200.0f, 511.0f}) == nullptr,
+                      "nodeAt misses just past the enlarged bottom edge");
+        RIN_CHECK_MSG(fx.model.nodeAt({99.0f, 300.0f}) == nullptr,
+                      "nodeAt misses left of the node");
+        node->monitorPreviewHeight = viewer::kMonitorPreviewHeight;  // 高 200，底缘 250。
+        RIN_CHECK_MSG(fx.model.nodeAt({200.0f, 400.0f}) == nullptr,
+                      "enlarged area no longer hits after reset to default");
+        RIN_CHECK_MSG(fx.model.nodeAt({200.0f, 250.0f}) == node,
+                      "default bottom edge still inclusive");
+        RIN_CHECK_MSG(fx.model.nodeAt({200.0f, 251.0f}) == nullptr,
+                      "just past the default bottom edge misses");
+    }
+
+    // nodesInRect：框选命中随节点级高度（预览区内的矩形选中增高节点，
+    // 同矩形在默认高度下落空）。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv = make(fx.model, "viewer", 0.0f, 0.0f);
+        viewer::CanvasNode* node = fx.model.findNode(iv);
+        RIN_CHECK(node != nullptr);
+        if (node == nullptr) {
+            return;
+        }
+        node->monitorPreviewHeight = 640.0f;  // bounds (0,0,200,700)。
+        std::vector<rin::NodeId> hits = fx.model.nodesInRect({0.0f, 300.0f, 10.0f, 10.0f});
+        RIN_CHECK_MSG(hits.size() == 1 && hits.front() == iv,
+                      "marquee inside the enlarged preview region selects the node");
+        node->monitorPreviewHeight = viewer::kMonitorPreviewHeight;  // bounds (0,0,200,200)。
+        hits = fx.model.nodesInRect({0.0f, 300.0f, 10.0f, 10.0f});
+        RIN_CHECK_MSG(hits.empty(),
+                      "same marquee rect misses after shrinking to default height");
+    }
+
+    // portAt：viewer 输入锚点随预览高度下移（含命中半径边界），旧锚点不再命中；
+    // 高度回落后锚点复原。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv = make(fx.model, "viewer", 0.0f, 0.0f);
+        viewer::CanvasNode* node = fx.model.findNode(iv);
+        RIN_CHECK(node != nullptr);
+        if (node == nullptr) {
+            return;
+        }
+        node->monitorPreviewHeight = 400.0f;  // 输入锚点 (0, 442)。
+        const std::optional<rin::PortRef> atNew = fx.model.portAt({0.0f, 442.0f});
+        RIN_CHECK_MSG((atNew.has_value() &&
+                       *atNew == rin::PortRef{iv, rin::PortDirection::Input, 0}),
+                      "input anchor hit-testable at the enlarged position");
+        RIN_CHECK_MSG(fx.model.portAt({12.0f, 442.0f}).has_value(),
+                      "hit radius boundary (12) at the enlarged anchor included");
+        RIN_CHECK_MSG(!fx.model.portAt({13.0f, 442.0f}).has_value(),
+                      "just outside (13) the enlarged anchor misses");
+        RIN_CHECK_MSG(!fx.model.portAt({0.0f, 182.0f}).has_value(),
+                      "the old default anchor position no longer hits");
+        node->monitorPreviewHeight = viewer::kMonitorPreviewHeight;  // 锚点回到 (0,182)。
+        const std::optional<rin::PortRef> atDefault = fx.model.portAt({0.0f, 182.0f});
+        RIN_CHECK_MSG((atDefault.has_value() &&
+                       *atDefault == rin::PortRef{iv, rin::PortDirection::Input, 0}),
+                      "default anchor restored after resetting the height");
+        RIN_CHECK_MSG(!fx.model.portAt({0.0f, 442.0f}).has_value(),
+                      "enlarged anchor no longer hits after reset");
+    }
+
+    // wireAt：连线锚点随目标 viewer 的预览高度移动（水平直连线：源输出锚点与
+    // viewer 输入锚点 y 对齐——源节点 y = h+6 时输出在 y=h+42）；旧锚点连线
+    // 位置不再命中；高度改动即时反映（无缓存几何）。
+    {
+        GraphFixture fx;
+        const rin::NodeId ia = make(fx.model, "a", 0.0f, 406.0f);  // out (200, 442)。
+        const rin::NodeId iv = make(fx.model, "viewer", 400.0f, 0.0f);
+        viewer::CanvasNode* monitor = fx.model.findNode(iv);
+        RIN_CHECK((ia != rin::kInvalidNode && monitor != nullptr));
+        if (monitor == nullptr) {
+            return;
+        }
+        monitor->monitorPreviewHeight = 400.0f;  // in (400, 442)：水平直连线 y=442。
+        RIN_CHECK((fx.model.connect({ia, rin::PortDirection::Output, 0},
+                                    {iv, rin::PortDirection::Input, 0})
+                       .ok));
+        const std::optional<rin::Connection> onMoved =
+            fx.model.wireAt({300.0f, 442.0f});
+        RIN_CHECK_MSG((onMoved.has_value() && onMoved->from.node == ia &&
+                       onMoved->to.node == iv),
+                      "wire hit follows the lowered input anchor");
+        RIN_CHECK_MSG(fx.model.wireAt({400.0f, 442.0f}).has_value(),
+                      "wire endpoint at the enlarged anchor hit-testable");
+        RIN_CHECK_MSG(!fx.model.wireAt({300.0f, 450.0f}).has_value(),
+                      "8px below the moved wire misses");
+        RIN_CHECK_MSG(fx.model.wireAt({300.0f, 448.5f}).has_value(),
+                      "6.5px below the moved wire still within kWireHitDistance");
+        RIN_CHECK_MSG(!fx.model.wireAt({300.0f, 449.5f}).has_value(),
+                      "7.5px below the moved wire misses");
+        RIN_CHECK_MSG(!fx.model.wireAt({300.0f, 182.0f}).has_value(),
+                      "the old default-anchor wire line no longer hits");
+        // 高度回落：锚点上移为弯线（a.out (200,442) → viewer.in (400,182)），
+        // 直连线原位置不再命中，新输入锚点端点命中。
+        monitor->monitorPreviewHeight = viewer::kMonitorPreviewHeight;
+        RIN_CHECK_MSG(!fx.model.wireAt({300.0f, 442.0f}).has_value(),
+                      "old straight-line position no longer on the wire");
+        RIN_CHECK_MSG(fx.model.wireAt({400.0f, 182.0f}).has_value(),
+                      "wire endpoint at the reset anchor hit-testable");
+    }
+
+    // graphBounds + 两 viewer 独立高度：联合包围盒由各节点自身高度决定，
+    // 一节点的高度不影响另一节点的包围盒与命中。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv1 = make(fx.model, "viewer", 0.0f, 0.0f);
+        const rin::NodeId iv2 = make(fx.model, "viewer", 500.0f, 0.0f);
+        viewer::CanvasNode* n1 = fx.model.findNode(iv1);
+        viewer::CanvasNode* n2 = fx.model.findNode(iv2);
+        RIN_CHECK((n1 != nullptr && n2 != nullptr));
+        if (n1 == nullptr || n2 == nullptr) {
+            return;
+        }
+        n1->monitorPreviewHeight = 96.0f;   // 高 156。
+        n2->monitorPreviewHeight = 640.0f;  // 高 700。
+        const viewer::CanvasRect bounds = fx.model.graphBounds();
+        RIN_CHECK_MSG((bounds.x == 0.0f && bounds.y == 0.0f && nearF(bounds.width, 700.0f) &&
+                       nearF(bounds.height, 700.0f)),
+                      "graphBounds union driven by per-node preview heights");
+        RIN_CHECK_MSG(fx.model.nodeAt({100.0f, 150.0f}) == n1,
+                      "small node hit within its own 156-high bounds");
+        RIN_CHECK_MSG(fx.model.nodeAt({100.0f, 160.0f}) == nullptr,
+                      "below the small node (outside the tall node's column) misses");
+        RIN_CHECK_MSG(fx.model.nodeAt({600.0f, 600.0f}) == n2,
+                      "tall node hit inside its own enlarged bounds");
+        RIN_CHECK_MSG(fx.model.nodeAt({600.0f, 710.0f}) == nullptr,
+                      "past the tall node's bottom edge misses");
+        // 收缩大节点：联合包围盒随之收缩，小节点不受影响。
+        n2->monitorPreviewHeight = 96.0f;
+        const viewer::CanvasRect shrunk = fx.model.graphBounds();
+        RIN_CHECK_MSG((nearF(shrunk.height, 156.0f) && nearF(shrunk.width, 700.0f)),
+                      "graphBounds shrinks with the node preview height");
+        RIN_CHECK_MSG(fx.model.nodeAt({600.0f, 600.0f}) == nullptr,
+                      "tall node's old area no longer hits after shrink");
+        RIN_CHECK_MSG(fx.model.nodeAt({100.0f, 150.0f}) == n1,
+                      "small node unaffected by the other node's shrink");
+    }
+
+    // 交互状态机集成：增高后的预览区按下 = NodePressed；节点拖动只改位置，
+    // 不重置预览高度。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv = make(fx.model, "viewer", 0.0f, 0.0f);
+        viewer::CanvasNode* node = fx.model.findNode(iv);
+        RIN_CHECK(node != nullptr);
+        if (node == nullptr) {
+            return;
+        }
+        node->monitorPreviewHeight = 400.0f;
+        viewer::CanvasView view;
+        viewer::CanvasInteraction it;
+        const viewer::PressResult pr = it.onPress(fx.model, {100.0f, 300.0f}, 0, false, false);
+        RIN_CHECK_MSG(pr.kind == viewer::PressResult::Kind::NodePressed,
+                      "press inside the enlarged preview area presses the node");
+        RIN_CHECK_MSG((it.mode == viewer::InteractionMode::NodeDrag && it.draggedNode == iv),
+                      "drag anchors the enlarged monitor node");
+        it.onDrag(fx.model, view, {120.0f, 320.0f}, {120.0f, 320.0f});
+        RIN_CHECK_MSG(nearPoint(node->position, {20.0f, 20.0f}),
+                      "node drag moves by the canvas delta");
+        RIN_CHECK_MSG(node->monitorPreviewHeight == 400.0f,
+                      "node drag preserves the node preview height");
+        releaseIgnore(it, fx.model, {120.0f, 320.0f});
+        RIN_CHECK_MSG(it.mode == viewer::InteractionMode::None, "release ends the drag");
+    }
+}
+
+// --- 18. 画/命中锚点一致性（draw-hit consistency，cb8bd4c 修复回归守卫） ---
+//
+// 背景：bcc7229 落地时绘制层 5 处 portPosition/nodeHeight 调用漏传节点级
+// monitorPreviewHeight（端口圆点、连线两端、拖线预览、问题面板定位取默认
+// 140），与携带节点值的命中层（portAt/nodeAt/wireAt）几何分裂——独立验证
+// 发现，cb8bd4c 修复。EUI compose 无法无头执行，本区以"绘制层逐字表达式"
+// （node_canvas.hpp 同一调用形状：portPosition(node.position, *descriptor,
+// node.params, port, node.monitorPreviewHeight)）计算锚点/高度，断言模型
+// 命中层恰在该点命中。两层中任何一侧改用不同高度来源（默认值、compose 夹
+// 取值）或漏传节点值，本区即失败。
+//
+// 覆盖高度含越界原始值（50/2000）：绘制层传 raw node.monitorPreviewHeight、
+// 命中层同传 raw——一致性对越界写入同样成立（夹取属拖拽写入与 compose 呈现，
+// 两层同源不经夹取）。
+
+void testDrawHitAnchorConsistency() {
+    const float heights[] = {96.0f, 140.0f, 400.0f, 640.0f, 50.0f, 2000.0f};
+    for (const float h : heights) {
+        GraphFixture fx;
+        const rin::NodeDescriptor* viewerD = rin::findNodeDescriptor(fx.catalog, "viewer");
+        const rin::NodeDescriptor* aD = rin::findNodeDescriptor(fx.catalog, "a");
+        RIN_CHECK((viewerD != nullptr && aD != nullptr));
+        if (viewerD == nullptr || aD == nullptr) {
+            return;
+        }
+        const rin::NodeId ia = make(fx.model, "a", 0.0f, 0.0f);
+        const rin::NodeId iv = make(fx.model, "viewer", 400.0f, 0.0f);
+        viewer::CanvasNode* aNode = fx.model.findNode(ia);
+        viewer::CanvasNode* vNode = fx.model.findNode(iv);
+        RIN_CHECK((aNode != nullptr && vNode != nullptr));
+        if (aNode == nullptr || vNode == nullptr) {
+            return;
+        }
+        vNode->monitorPreviewHeight = h;
+        RIN_CHECK((fx.model.connect({ia, rin::PortDirection::Output, 0},
+                                    {iv, rin::PortDirection::Input, 0})
+                       .ok));
+
+        // 绘制层逐字表达式（composeCanvasNode 输入/输出端口圆点、
+        // composeWorkflowCanvas 连线两端与拖线预览）。
+        const viewer::CanvasPoint drawViewerIn =
+            viewer::portPosition(vNode->position, *viewerD, vNode->params,
+                                 {iv, rin::PortDirection::Input, 0},
+                                 vNode->monitorPreviewHeight);
+        const viewer::CanvasPoint drawViewerOut =
+            viewer::portPosition(vNode->position, *viewerD, vNode->params,
+                                 {iv, rin::PortDirection::Output, 0},
+                                 vNode->monitorPreviewHeight);
+        const viewer::CanvasPoint drawAOut =
+            viewer::portPosition(aNode->position, *aD, aNode->params,
+                                 {ia, rin::PortDirection::Output, 0},
+                                 aNode->monitorPreviewHeight);
+
+        // 命中层恰在绘制锚点命中：监看器输入（可连线目标）。
+        const std::optional<rin::PortRef> hitIn = fx.model.portAt(drawViewerIn);
+        RIN_CHECK_MSG((hitIn.has_value() && *hitIn == rin::PortRef{iv, rin::PortDirection::Input, 0}),
+                      "model portAt hits exactly at the draw-layer viewer input anchor");
+        // 非监看器输出（拖线发起端）。
+        const std::optional<rin::PortRef> hitOut = fx.model.portAt(drawAOut);
+        RIN_CHECK_MSG((hitOut.has_value() &&
+                       *hitOut == rin::PortRef{ia, rin::PortDirection::Output, 0}),
+                      "model portAt hits exactly at the draw-layer non-monitor output anchor");
+        // 监看器隐藏输出端口：绘制层不绘制、命中层不命中（两层同跳过）。
+        RIN_CHECK_MSG(!fx.model.portAt(drawViewerOut).has_value(),
+                      "monitor output anchor stays non-hit-testable (hidden on both layers)");
+
+        // 连线：绘制端点（from/to 两端逐字表达式）处 wireAt 命中同一条边。
+        const std::optional<rin::Connection> wireAtTo = fx.model.wireAt(drawViewerIn);
+        RIN_CHECK_MSG((wireAtTo.has_value() && wireAtTo->to.node == iv),
+                      "wireAt hits the drawn wire at its to-end anchor");
+        const std::optional<rin::Connection> wireAtFrom = fx.model.wireAt(drawAOut);
+        RIN_CHECK_MSG((wireAtFrom.has_value() && wireAtFrom->from.node == ia),
+                      "wireAt hits the drawn wire at its from-end anchor");
+
+        // 节点底缘：绘制高度表达式（composeCanvasNode :1190 同形）与 nodeAt
+        // 包围盒边界一致（内侧 0.5 命中、外侧 0.5 落空）。
+        const float drawVHeight =
+            viewer::nodeHeight(*viewerD, vNode->params, vNode->monitorPreviewHeight);
+        RIN_CHECK_MSG(fx.model.nodeAt({vNode->position.x + viewer::kNodeWidth * 0.5f,
+                                       vNode->position.y + drawVHeight - 0.5f}) == vNode,
+                      "nodeAt hits just inside the drawn node bottom edge");
+        RIN_CHECK_MSG(fx.model.nodeAt({vNode->position.x + viewer::kNodeWidth * 0.5f,
+                                       vNode->position.y + drawVHeight + 0.5f}) == nullptr,
+                      "nodeAt misses just past the drawn node bottom edge");
+
+        // 端到端：以绘制锚点驱动交互状态机（拖线 from 绘制锚点 → 释放于
+        // 监看器输入绘制锚点 → 建边）。
+        if (h == 140.0f || h == 400.0f) {  // 代表性两态即可，避免重复建边断言。
+            GraphFixture fx2;
+            const rin::NodeId ia2 = make(fx2.model, "a", 0.0f, 0.0f);
+            const rin::NodeId iv2 = make(fx2.model, "viewer", 400.0f, 0.0f);
+            viewer::CanvasNode* a2 = fx2.model.findNode(ia2);
+            viewer::CanvasNode* v2 = fx2.model.findNode(iv2);
+            RIN_CHECK((a2 != nullptr && v2 != nullptr));
+            if (a2 == nullptr || v2 == nullptr) {
+                return;
+            }
+            v2->monitorPreviewHeight = h;
+            const rin::NodeDescriptor* v2D = rin::findNodeDescriptor(fx2.catalog, "viewer");
+            const rin::NodeDescriptor* a2D = rin::findNodeDescriptor(fx2.catalog, "a");
+            RIN_CHECK((v2D != nullptr && a2D != nullptr));
+            if (v2D == nullptr || a2D == nullptr) {
+                return;
+            }
+            const viewer::CanvasPoint fromAnchor =
+                viewer::portPosition(a2->position, *a2D, a2->params,
+                                     {ia2, rin::PortDirection::Output, 0},
+                                     a2->monitorPreviewHeight);
+            const viewer::CanvasPoint toAnchor =
+                viewer::portPosition(v2->position, *v2D, v2->params,
+                                     {iv2, rin::PortDirection::Input, 0},
+                                     v2->monitorPreviewHeight);
+            viewer::CanvasView view;
+            viewer::CanvasInteraction it;
+            const viewer::PressResult pr = it.onPress(fx2.model, fromAnchor, 0, false, false);
+            RIN_CHECK_MSG((pr.kind == viewer::PressResult::Kind::PortPressed && it.connecting()),
+                          "press at the drawn output anchor starts a wire drag");
+            const viewer::ReleaseResult rr = it.onRelease(fx2.model, toAnchor, false);
+            RIN_CHECK_MSG((rr.graphChanged && fx2.model.connections.size() == 1 &&
+                           fx2.model.connections.front().to.node == iv2),
+                          "release at the drawn monitor input anchor connects");
+        }
+    }
+}
+
+// --- 19. 监看器节点级宽度几何与双向独立缩放（28685c3，独立验证） ---
+//
+// 被测契约（canvas_model.hpp + 设计文档 §5.6 / 计划 2026-10-07 晚第二段）：
+//   - 常量：kMonitorMinWidth=160、kMonitorMaxWidth=800；CanvasNode::
+//     monitorWidth 默认 kNodeWidth（200，落于区间内），"仅 viewer 生效"由
+//     compose 层强制（非监看器恒画 kNodeWidth）；
+//   - nodeBounds/portPosition 增宽度尾参（默认 kNodeWidth 兼容旧调用）：
+//     viewer bounds = {pos, w, h+60}；输出锚点 x = pos.x + w，输入锚点 x =
+//     pos.x（左缘与宽无关）；纵向几何（portsOffsetY/nodeHeight）无宽度参数；
+//   - 宽高双向独立：改宽不动高、改高不动宽；
+//   - 纯几何不夹取（夹取属拖拽写入/compose 呈现层，同高度分层契约）；
+//   - 画/命中同源：端口/连线/命中层同传 raw node.monitorWidth（区别于节点
+//     本体宽度的 compose 夹取——越界写入时本体卡片宽被夹到 800 而端口/
+//     命中仍用 raw，此不对称已在验证报告登记，本区对端口/命中一致性按
+//     raw 断言、对本体一致性仅限夹取==raw 的区间内值）。
+//
+// 期望值全部由上述设计公式手推。
+
+void testMonitorWidthGeometry() {
+    GraphFixture fx;
+    const rin::NodeDescriptor* viewerD = rin::findNodeDescriptor(fx.catalog, "viewer");
+    const rin::NodeDescriptor* a = rin::findNodeDescriptor(fx.catalog, "a");
+    RIN_CHECK((viewerD != nullptr && a != nullptr));
+    if (viewerD == nullptr || a == nullptr) {
+        return;
+    }
+
+    // 常量冻结：[160,800]，默认 kNodeWidth=200 落于区间内。
+    RIN_CHECK_MSG(viewer::kMonitorMinWidth == 160.0f, "min monitor width is 160");
+    RIN_CHECK_MSG(viewer::kMonitorMaxWidth == 800.0f, "max monitor width is 800");
+    RIN_CHECK(viewer::kMonitorMinWidth < viewer::kNodeWidth &&
+              viewer::kNodeWidth < viewer::kMonitorMaxWidth);
+
+    // CanvasNode 默认成员：createNode 路径 monitorWidth = kNodeWidth
+    // （viewer 与非 viewer 同默认，宽高两字段独立默认）。
+    {
+        const rin::NodeId iv = make(fx.model, "viewer", 0.0f, 0.0f);
+        const rin::NodeId ia = make(fx.model, "a", 0.0f, 0.0f);
+        const viewer::CanvasNode* nv = fx.model.findNode(iv);
+        const viewer::CanvasNode* na = fx.model.findNode(ia);
+        RIN_CHECK((nv != nullptr && na != nullptr));
+        if (nv != nullptr) {
+            RIN_CHECK_MSG(nv->monitorWidth == viewer::kNodeWidth,
+                          "new viewer node starts at the default node width");
+        }
+        if (na != nullptr) {
+            RIN_CHECK_MSG(na->monitorWidth == viewer::kNodeWidth,
+                          "non-monitor nodes carry the default width field too");
+        }
+    }
+
+    // nodeBounds：宽随 w、高随 h，互不耦合；默认参数路径等价（旧 4 参调用）。
+    {
+        const float ws[] = {160.0f, 200.0f, 400.0f, 800.0f};
+        for (const float w : ws) {
+            const viewer::CanvasRect b = viewer::nodeBounds({10.0f, 20.0f}, *viewerD, {}, 140.0f, w);
+            RIN_CHECK_MSG((b.x == 10.0f && b.y == 20.0f && nearF(b.width, w) &&
+                           nearF(b.height, 200.0f)),
+                          "viewer bounds follow the node width with height unchanged");
+        }
+        const viewer::CanvasRect wh = viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {}, 96.0f, 800.0f);
+        RIN_CHECK_MSG((nearF(wh.width, 800.0f) && nearF(wh.height, 156.0f)),
+                      "width and height combine independently (800x156)");
+        const viewer::CanvasRect bDefault = viewer::nodeBounds({0.0f, 0.0f}, *viewerD);
+        const viewer::CanvasRect bExplicit =
+            viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {}, viewer::kMonitorPreviewHeight,
+                               viewer::kNodeWidth);
+        RIN_CHECK((bDefault.width == bExplicit.width && bDefault.height == bExplicit.height));
+        // 高度不随宽变化：nodeHeight 无宽度维度，bounds.height 对任意 w 恒 h+60。
+        for (const float w : ws) {
+            RIN_CHECK_MSG(nearF(viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {}, 400.0f, w).height,
+                                460.0f),
+                          "bounds height invariant across widths");
+        }
+        // 纯几何不夹取（写入/compose 层职责）：越界宽度线性取值。
+        RIN_CHECK_MSG(nearF(viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {}, 140.0f, 1000.0f).width,
+                            1000.0f),
+                      "above-max width not clamped in pure geometry");
+        RIN_CHECK_MSG(nearF(viewer::nodeBounds({0.0f, 0.0f}, *viewerD, {}, 140.0f, 100.0f).width,
+                            100.0f),
+                      "below-min width not clamped in pure geometry");
+    }
+
+    // portPosition：输入锚点 x = pos.x（与宽无关）；输出锚点 x = pos.x + w；
+    // 锚点 y 与宽无关（纵向几何无宽度维度）；默认参数路径等价。
+    {
+        const float ws[] = {160.0f, 200.0f, 400.0f, 800.0f, 1000.0f};
+        for (const float w : ws) {
+            const viewer::CanvasPoint in0 = viewer::portPosition(
+                {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Input, 0}, 140.0f, w);
+            RIN_CHECK_MSG(nearPoint(in0, {10.0f, 202.0f}),
+                          "input anchor pinned to the left edge regardless of width");
+            const viewer::CanvasPoint out0 = viewer::portPosition(
+                {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Output, 0}, 140.0f, w);
+            RIN_CHECK_MSG(nearPoint(out0, {10.0f + w, 202.0f}),
+                          "output anchor x follows the node width");
+        }
+        const viewer::CanvasPoint outDefault = viewer::portPosition(
+            {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Output, 0});
+        const viewer::CanvasPoint outExplicit = viewer::portPosition(
+            {10.0f, 20.0f}, *viewerD, {}, {5, rin::PortDirection::Output, 0},
+            viewer::kMonitorPreviewHeight, viewer::kNodeWidth);
+        RIN_CHECK(outDefault == outExplicit);
+        RIN_CHECK_MSG(nearPoint(outDefault, {210.0f, 202.0f}),
+                      "default output anchor at kNodeWidth right edge");
+    }
+
+    // 见证（HEAD 现状，非契约）：纯几何 nodeBounds/portPosition 对宽度不做
+    // isMonitorNode 门控——非监看器描述符传入宽也生效（"仅 viewer 生效"只在
+    // compose 层强制）。默认 kNodeWidth 下两无差异；此不对称已在验证报告
+    // 登记，若任一层改变本断言失败以强制同步。
+    {
+        const viewer::CanvasRect wideA = viewer::nodeBounds({0.0f, 0.0f}, *a, {}, 140.0f, 800.0f);
+        RIN_CHECK_MSG(nearF(wideA.width, 800.0f),
+                      "witness: pure geometry applies width to non-monitor descriptors too");
+        const viewer::CanvasPoint outA = viewer::portPosition(
+            {0.0f, 0.0f}, *a, {}, {5, rin::PortDirection::Output, 0}, 140.0f, 800.0f);
+        RIN_CHECK_MSG(nearPoint(outA, {800.0f, 36.0f}),
+                      "witness: non-monitor output anchor moves with explicit width arg");
+    }
+}
+
+// --- 20. 监看器宽度的模型命中语义与画/命中一致性（28685c3，独立验证） ---
+
+void testMonitorWidthHitSemantics() {
+    // nodeAt/nodesInRect：加宽后包围盒横向覆盖更大区域；回落默认后落空。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv = make(fx.model, "viewer", 100.0f, 50.0f);
+        viewer::CanvasNode* node = fx.model.findNode(iv);
+        RIN_CHECK(node != nullptr);
+        if (node == nullptr) {
+            return;
+        }
+        node->monitorWidth = 800.0f;  // bounds (100,50,800,200)，右缘 x=900。
+        RIN_CHECK_MSG(fx.model.nodeAt({700.0f, 100.0f}) == node,
+                      "nodeAt hits inside the widened area");
+        RIN_CHECK_MSG(fx.model.nodeAt({900.0f, 100.0f}) == node,
+                      "nodeAt includes the widened right edge");
+        RIN_CHECK_MSG(fx.model.nodeAt({901.0f, 100.0f}) == nullptr,
+                      "nodeAt misses just past the widened right edge");
+        std::vector<rin::NodeId> hits = fx.model.nodesInRect({300.0f, 60.0f, 10.0f, 10.0f});
+        RIN_CHECK_MSG(hits.size() == 1 && hits.front() == iv,
+                      "marquee inside the widened region selects the node");
+        node->monitorWidth = viewer::kNodeWidth;  // bounds (100,50,200,200)。
+        RIN_CHECK_MSG(fx.model.nodeAt({700.0f, 100.0f}) == nullptr,
+                      "widened area no longer hits after reset");
+        RIN_CHECK_MSG(fx.model.nodesInRect({300.0f, 60.0f, 10.0f, 10.0f}).empty(),
+                      "same rect misses after shrinking to default width");
+    }
+
+    // graphBounds + 两 viewer 宽高各自独立：联合包围盒由各节点自身宽高决定。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv1 = make(fx.model, "viewer", 0.0f, 0.0f);
+        const rin::NodeId iv2 = make(fx.model, "viewer", 1000.0f, 0.0f);
+        viewer::CanvasNode* n1 = fx.model.findNode(iv1);
+        viewer::CanvasNode* n2 = fx.model.findNode(iv2);
+        RIN_CHECK((n1 != nullptr && n2 != nullptr));
+        if (n1 == nullptr || n2 == nullptr) {
+            return;
+        }
+        n1->monitorWidth = 800.0f;   // bounds (0,0,800,200)。
+        n2->monitorWidth = 160.0f;   // bounds (1000,0,160,200)。
+        n2->monitorPreviewHeight = 640.0f;  // bounds (1000,0,160,700)。
+        const viewer::CanvasRect bounds = fx.model.graphBounds();
+        RIN_CHECK_MSG((nearF(bounds.x, 0.0f) && nearF(bounds.y, 0.0f) &&
+                       nearF(bounds.width, 1160.0f) && nearF(bounds.height, 700.0f)),
+                      "graphBounds union driven by per-node width and height");
+        RIN_CHECK_MSG(fx.model.nodeAt({700.0f, 100.0f}) == n1,
+                      "wide node hit inside its own widened bounds");
+        RIN_CHECK_MSG(fx.model.nodeAt({1100.0f, 600.0f}) == n2,
+                      "tall node hit inside its own height");
+        RIN_CHECK_MSG(fx.model.nodeAt({700.0f, 300.0f}) == nullptr,
+                      "wide-but-short node misses below its height");
+        // 改宽不改高、改高不改宽（双向独立，模型层可观察）。
+        n1->monitorWidth = 160.0f;
+        RIN_CHECK_MSG(fx.model.nodeAt({700.0f, 100.0f}) == nullptr,
+                      "width reset does not change height hit region");
+        RIN_CHECK_MSG(fx.model.nodeAt({100.0f, 150.0f}) == n1,
+                      "n1 still hit within its default-height bounds");
+    }
+
+    // 画/命中一致性（宽度维度，28685c3 同源性回归守卫）：以绘制层逐字表达式
+    // （node_canvas.hpp :1373/:1388/:1554/:1557/:1587 同形：portPosition(...,
+    // node.monitorPreviewHeight, node.monitorWidth)）计算锚点/包围盒，断言
+    // 命中层恰在该点命中。区间内值（夹取==raw）另断言节点底缘/右缘与
+    // nodeAt 边界一致；越界 raw 值只断言端口/连线层一致性（本体卡片宽在
+    // compose 期夹取，与 raw 命中几何存在已登记的不对称）。
+    {
+        struct Size {
+            float w;
+            float h;
+            bool inRange;
+        };
+        const Size sizes[] = {{160.0f, 96.0f, true},  {200.0f, 140.0f, true},
+                              {800.0f, 640.0f, true}, {400.0f, 400.0f, true},
+                              {1000.0f, 400.0f, false}, {100.0f, 50.0f, false}};
+        for (const Size& sz : sizes) {
+            GraphFixture fx;
+            const rin::NodeDescriptor* viewerD = rin::findNodeDescriptor(fx.catalog, "viewer");
+            const rin::NodeDescriptor* aD = rin::findNodeDescriptor(fx.catalog, "a");
+            RIN_CHECK((viewerD != nullptr && aD != nullptr));
+            if (viewerD == nullptr || aD == nullptr) {
+                return;
+            }
+            const rin::NodeId ia = make(fx.model, "a", 0.0f, 0.0f);
+            const rin::NodeId iv = make(fx.model, "viewer", 400.0f, 0.0f);
+            viewer::CanvasNode* aNode = fx.model.findNode(ia);
+            viewer::CanvasNode* vNode = fx.model.findNode(iv);
+            RIN_CHECK((aNode != nullptr && vNode != nullptr));
+            if (aNode == nullptr || vNode == nullptr) {
+                return;
+            }
+            vNode->monitorWidth = sz.w;
+            vNode->monitorPreviewHeight = sz.h;
+            RIN_CHECK((fx.model.connect({ia, rin::PortDirection::Output, 0},
+                                        {iv, rin::PortDirection::Input, 0})
+                           .ok));
+
+            const viewer::CanvasPoint drawViewerIn = viewer::portPosition(
+                vNode->position, *viewerD, vNode->params, {iv, rin::PortDirection::Input, 0},
+                vNode->monitorPreviewHeight, vNode->monitorWidth);
+            const viewer::CanvasPoint drawAOut =
+                viewer::portPosition(aNode->position, *aD, aNode->params,
+                                     {ia, rin::PortDirection::Output, 0},
+                                     aNode->monitorPreviewHeight, aNode->monitorWidth);
+
+            // 命中层恰在绘制锚点命中（输入 x=左缘与宽无关；输出为非监看器
+            // 默认宽）。监看器隐藏输出端口表达式锚点仍不可命中。
+            const std::optional<rin::PortRef> hitIn = fx.model.portAt(drawViewerIn);
+            RIN_CHECK_MSG((hitIn.has_value() &&
+                           *hitIn == rin::PortRef{iv, rin::PortDirection::Input, 0}),
+                          "portAt hits at the draw-layer input anchor for every size");
+            const std::optional<rin::PortRef> hitAOut = fx.model.portAt(drawAOut);
+            RIN_CHECK_MSG((hitAOut.has_value() &&
+                           *hitAOut == rin::PortRef{ia, rin::PortDirection::Output, 0}),
+                          "portAt hits at the draw-layer non-monitor output anchor");
+            const viewer::CanvasPoint drawViewerOut = viewer::portPosition(
+                vNode->position, *viewerD, vNode->params, {iv, rin::PortDirection::Output, 0},
+                vNode->monitorPreviewHeight, vNode->monitorWidth);
+            RIN_CHECK_MSG(!fx.model.portAt(drawViewerOut).has_value(),
+                          "monitor output anchor stays non-hit-testable for every size");
+
+            // 连线两端（绘制逐字表达式）处 wireAt 命中同一条边。
+            const std::optional<rin::Connection> wireAtTo = fx.model.wireAt(drawViewerIn);
+            RIN_CHECK_MSG((wireAtTo.has_value() && wireAtTo->to.node == iv),
+                          "wireAt hits the drawn wire at its to-end anchor");
+            const std::optional<rin::Connection> wireAtFrom = fx.model.wireAt(drawAOut);
+            RIN_CHECK_MSG((wireAtFrom.has_value() && wireAtFrom->from.node == ia),
+                          "wireAt hits the drawn wire at its from-end anchor");
+
+            // 区间内值：本体包围盒边界（绘制表达式 nodeBounds 同形，夹取==raw）
+            // 与 nodeAt 一致（内侧 0.5 命中、外侧 0.5 落空，右缘/底缘）。
+            if (sz.inRange) {
+                const viewer::CanvasRect drawBounds = viewer::nodeBounds(
+                    vNode->position, *viewerD, vNode->params, vNode->monitorPreviewHeight,
+                    vNode->monitorWidth);
+                RIN_CHECK_MSG(fx.model.nodeAt({drawBounds.x + drawBounds.width - 0.5f,
+                                               drawBounds.y + drawBounds.height * 0.5f}) == vNode,
+                              "nodeAt hits just inside the drawn right edge");
+                RIN_CHECK_MSG(fx.model.nodeAt({drawBounds.x + drawBounds.width + 0.5f,
+                                               drawBounds.y + drawBounds.height * 0.5f}) == nullptr,
+                              "nodeAt misses just past the drawn right edge");
+                RIN_CHECK_MSG(fx.model.nodeAt({drawBounds.x + drawBounds.width * 0.5f,
+                                               drawBounds.y + drawBounds.height - 0.5f}) == vNode,
+                              "nodeAt hits just inside the drawn bottom edge");
+                RIN_CHECK_MSG(fx.model.nodeAt({drawBounds.x + drawBounds.width * 0.5f,
+                                               drawBounds.y + drawBounds.height + 0.5f}) == nullptr,
+                              "nodeAt misses just past the drawn bottom edge");
+            }
+        }
+    }
+
+    // 交互集成：加宽预览区按下 = NodePressed；拖动只改 position，宽高两字段
+    // 均保持（双向状态互不扰动）。
+    {
+        GraphFixture fx;
+        const rin::NodeId iv = make(fx.model, "viewer", 0.0f, 0.0f);
+        viewer::CanvasNode* node = fx.model.findNode(iv);
+        RIN_CHECK(node != nullptr);
+        if (node == nullptr) {
+            return;
+        }
+        node->monitorWidth = 800.0f;
+        node->monitorPreviewHeight = 400.0f;
+        viewer::CanvasView view;
+        viewer::CanvasInteraction it;
+        const viewer::PressResult pr = it.onPress(fx.model, {700.0f, 300.0f}, 0, false, false);
+        RIN_CHECK_MSG(pr.kind == viewer::PressResult::Kind::NodePressed,
+                      "press inside the widened preview area presses the node");
+        it.onDrag(fx.model, view, {710.0f, 310.0f}, {710.0f, 310.0f});
+        RIN_CHECK_MSG(nearPoint(node->position, {10.0f, 10.0f}),
+                      "drag moves the node by the canvas delta");
+        RIN_CHECK_MSG((node->monitorWidth == 800.0f &&
+                       node->monitorPreviewHeight == 400.0f),
+                      "node drag preserves both width and height fields");
+        releaseIgnore(it, fx.model, {710.0f, 310.0f});
+        RIN_CHECK_MSG(it.mode == viewer::InteractionMode::None, "release ends the drag");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1895,5 +2685,10 @@ int main() {
     runSection("palette_groups", testPalette);
     runSection("iva_defect_probes", testDefectProbes);
     runSection("wire_ribbon", testWireRibbon);
+    runSection("monitor_preview_geometry", testMonitorPreviewGeometry);
+    runSection("monitor_preview_hit_semantics", testMonitorPreviewHitSemantics);
+    runSection("draw_hit_anchor_consistency", testDrawHitAnchorConsistency);
+    runSection("monitor_width_geometry", testMonitorWidthGeometry);
+    runSection("monitor_width_hit_semantics", testMonitorWidthHitSemantics);
     return rin_test::exitStatus();
 }

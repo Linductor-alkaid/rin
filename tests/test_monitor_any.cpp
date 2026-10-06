@@ -557,6 +557,22 @@ void testCanvasMonitorModel() {
     RIN_CHECK_MSG(nearF(viewerBounds.width, 200.0f) && nearF(viewerBounds.height, 200.0f),
                   "viewer node bounds 200x200");
 
+    // M11 验收追加（2026-10-07）：监看器视窗大小可调——节点级预览高度变体
+    // （几何族尾参显式传递；范围常量冻结 [96,640]；默认参数路径等价）。
+    RIN_CHECK_MSG(viewer::kMonitorPreviewMinHeight == 96.0f &&
+                      viewer::kMonitorPreviewMaxHeight == 640.0f,
+                  "preview height range constants frozen at [96,640]");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, viewer::kMonitorPreviewMinHeight),
+                        156.0f),
+                  "viewer height at min preview = 156");
+    RIN_CHECK_MSG(nearF(viewer::nodeHeight(*viewerD, {}, viewer::kMonitorPreviewMaxHeight),
+                        700.0f),
+                  "viewer height at max preview = 700");
+    RIN_CHECK_MSG(viewer::nodeHeight(*viewerD) == viewer::nodeHeight(*viewerD, {}) &&
+                      viewer::nodeHeight(*viewerD, {}) ==
+                          viewer::nodeHeight(*viewerD, {}, viewer::kMonitorPreviewHeight),
+                  "default-argument geometry path equals the explicit default");
+
     // portPosition：监看器输入锚点纵向偏移含预览窗（y = 26+140+6 + 10）。
     {
         const viewer::CanvasPoint in0 = viewer::portPosition(
@@ -567,6 +583,17 @@ void testCanvasMonitorModel() {
                                            viewer::kParamSectionGap +
                                            viewer::kNodePortRowHeight * 0.5f),
                       "viewer input anchor sits below the preview window");
+        // 节点级高度变体：锚点 y = 26 + h + 6 + 10（min 96 → 138、max 640 → 682）。
+        const viewer::CanvasPoint inMin = viewer::portPosition(
+            {0.0f, 0.0f}, *viewerD, {}, {7, rin::PortDirection::Input, 0},
+            viewer::kMonitorPreviewMinHeight);
+        RIN_CHECK_MSG(nearF(inMin.x, 0.0f) && nearF(inMin.y, 138.0f),
+                      "viewer input anchor at min preview height");
+        const viewer::CanvasPoint inMax = viewer::portPosition(
+            {0.0f, 0.0f}, *viewerD, {}, {7, rin::PortDirection::Input, 0},
+            viewer::kMonitorPreviewMaxHeight);
+        RIN_CHECK_MSG(nearF(inMax.x, 0.0f) && nearF(inMax.y, 682.0f),
+                      "viewer input anchor at max preview height");
         // 带参节点（downscale）：输入锚点纵向偏移含参数区（y = 26+58+10）。
         const viewer::CanvasPoint dIn0 = viewer::portPosition(
             {0.0f, 0.0f}, *downscale, {}, {7, rin::PortDirection::Input, 0});
