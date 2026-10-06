@@ -210,7 +210,10 @@ std::vector<std::vector<ImageU8>> runNodeGraph(const NodeGraph& graph,
                                          "') produced an invalid image on output port " +
                                          std::to_string(port));
             }
-            if (result[port].format() != node.descriptor->outputs[port]) {
+            // 声明 Any 的输出端口接受任意具体格式（M11/DEC-021：监看器透传
+            // 节点的输出格式随输入类型动态，恒等返回即覆盖全部既有可能性）。
+            if (result[port].format() != node.descriptor->outputs[port] &&
+                node.descriptor->outputs[port] != PortType::Any) {
                 throw std::runtime_error(
                     "node " + std::to_string(node.id) + " ('" + node.descriptor->typeId +
                     "') produced " + toString(result[port].format()) + " on output port " +

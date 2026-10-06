@@ -16,7 +16,8 @@ namespace rin::workflow_catalog {
 /// hist_eq / fft_lowpass / fft_highpass / fft_bandpass / source_depth_metric +
 /// depth_fill_invalid / depth_resize / depth_crop / depth_gaussian_blur /
 /// depth_normalize / depth_history（M10 深度域，DEC-020：PortType::Depth32F，
-/// 默认参数链 ≡ M8 冻结管线；depth_history 为有状态节点）。签名与参数 schema 按
+/// 默认参数链 ≡ M8 冻结管线；depth_history 为有状态节点）/ viewer（M11
+/// 监看器，DEC-021：Any→Any 透传 sink）。签名与参数 schema 按
 /// M5-08 假目录冻结基线（image_workflow_design.md §6，schema 演进随算子工作项
 /// 双向落盘）；算子数值语义由 M4 真实现提供。新类型一律追加于既有条目之后
 /// （契约套件按"目录首个无输入节点"泛式构图，依赖 source 居首）。
@@ -387,6 +388,16 @@ namespace rin::workflow_catalog {
     histDelay.maxValue = 4096.0;
     depthHistory.params = {histLen, histCount, histSkip, histDelay};
     catalog.nodes.push_back(std::move(depthHistory));
+
+    // 监看器（M11/DEC-021）：Any→Any 透传 sink。Core 实现为恒等节点（输出共享
+    // 输入像素），引擎产物通道照常按节点发布最新快照，UI 拉取后在节点内嵌
+    // 预览窗呈现；UI 画布隐藏其输出端口（交互面为无输出末端）。
+    NodeDescriptor viewer;
+    viewer.typeId = "viewer";
+    viewer.displayName = "监看器";
+    viewer.inputs = {PortType::Any};
+    viewer.outputs = {PortType::Any};
+    catalog.nodes.push_back(std::move(viewer));
 
     return catalog;
 }
