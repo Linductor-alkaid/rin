@@ -513,9 +513,10 @@ private:
 /// 缩略图最长边上限（有界：上传幅面 ≤ 256x256）。
 inline constexpr std::uint32_t kThumbnailMaxDim = 256;
 
-/// 监看器预览窗最长边上限（M11/DEC-021：有界；200 画布单位宽的节点预览在
-/// 2.5x 缩放下约 500 逻辑像素，512 保证放大档清晰，每监看器一枚 GL 纹理）。
-inline constexpr std::uint32_t kMonitorPreviewMaxDim = 512;
+/// 监看器预览窗最长边上限（M11/DEC-021：有界；视窗宽高双向可调后窗口可达
+/// 800x640 画布单位，1024 保证常见放大档清晰；每监看器一枚 GL 纹理
+/// （1024x576x4 ≈ 2.4 MiB，节点数有界））。
+inline constexpr std::uint32_t kMonitorPreviewMaxDim = 1024;
 
 /// 快照 → RGBA 缩略图（§5.6"缩略图按格式渲染（Gray8/Rgba8）"）：最近邻降采样、
 /// 保持宽高比、只缩不放、最长边 ≤ maxDim。成功时 out 为 stride=width*4 的

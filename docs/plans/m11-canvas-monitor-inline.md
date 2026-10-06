@@ -165,4 +165,15 @@ nodeHeight/nodeBounds/portPosition/portsOffsetY 增尾参 monitorPreviewHeight
 程序化置 height=400 后节点底缘 y=1216=(108+40+460)×2 精确匹配公式，
 默认底缘 696=(148+200)×2；拖拽手势归用户验收。
 
+2026-10-07（深夜）：**用户验收追加：视窗宽度亦可调（双向缩放）+ 绘制层
+分裂缺陷修复**。① 手柄改双向拖拽（totalX/totalY 累计增量换算画布单位，
+宽 [160,800]×高 [96,640] 写入即夹取，`CanvasNode::monitorWidth` 默认
+kNodeWidth，仅 viewer 生效）；nodeBounds/portPosition 增宽度尾参（默认
+kNodeWidth 兼容旧调用），模型命中/框选/连线与绘制端口圆点/连线终点/
+拖线预览全链路同源；预览纹理上限 512→1024（宽窗清晰度）。② 独立验证
+（缩放轮）发现绘制层 4 处调用漏传 previewHeight（画/命中分裂：端口圆点
+与连线终点停默认高度）——已修复并像素断言（连线终点 y=1177≈1180）。
+双向缩放像素断言：预览边框横向 run 356→1156px ≈ 理论 368/1168，起点
+x=1310 精确匹配；拖拽手势归用户验收。
+
 **遗留观察**（非 M11 回归）：M10 深度域 typeId（`source_depth_metric`/`depth_*`）不在 `paletteGroupFor` 分组表，调色板落 "Other"（HEAD 同此，M10 遗留呈现缺口，建议择期登记修复）；conv_kernel 的 size 枚举切换不自动重排 kernel 形状（M5-04 既有语义保持，切换后需手动 R+/C+ 步进，否则构造期拒绝经 NodeFailed 呈现）。

@@ -170,6 +170,10 @@ inline constexpr float kNodeFooterHeight = 8.0f;
 inline constexpr float kMonitorPreviewHeight = 140.0f;
 inline constexpr float kMonitorPreviewMinHeight = 96.0f;
 inline constexpr float kMonitorPreviewMaxHeight = 640.0f;
+/// 监看器节点宽度（默认随全局 kNodeWidth，节点级可调；范围
+/// [kMonitorMinWidth, kMonitorMaxWidth]，M11 验收反馈：视窗宽高双向可调）。
+inline constexpr float kMonitorMinWidth = 160.0f;
+inline constexpr float kMonitorMaxWidth = 800.0f;
 inline constexpr float kPortVisualRadius = 4.0f;
 /// 端口命中区大于视觉尺寸（§5.3）。
 inline constexpr float kPortHitRadius = 12.0f;
@@ -274,8 +278,9 @@ inline constexpr float kParamGridShapeHeight = 14.0f;  ///< RealArray 形状行�
 [[nodiscard]] inline CanvasRect nodeBounds(
     const CanvasPoint& position, const rin::NodeDescriptor& descriptor,
     const std::vector<rin::ParamAssignment>& params = {},
-    const float monitorPreviewHeight = kMonitorPreviewHeight) {
-    return {position.x, position.y, kNodeWidth,
+    const float monitorPreviewHeight = kMonitorPreviewHeight,
+    const float monitorWidth = kNodeWidth) {
+    return {position.x, position.y, monitorWidth,
             nodeHeight(descriptor, params, monitorPreviewHeight)};
 }
 
@@ -284,12 +289,13 @@ inline constexpr float kParamGridShapeHeight = 14.0f;  ///< RealArray 形状行�
 [[nodiscard]] inline CanvasPoint portPosition(
     const CanvasPoint& position, const rin::NodeDescriptor& descriptor,
     const std::vector<rin::ParamAssignment>& params, const rin::PortRef& port,
-    const float monitorPreviewHeight = kMonitorPreviewHeight) {
+    const float monitorPreviewHeight = kMonitorPreviewHeight,
+    const float monitorWidth = kNodeWidth) {
     const float rowY = portsOffsetY(descriptor, params, monitorPreviewHeight) +
                        static_cast<float>(port.index) * kNodePortRowHeight +
                        kNodePortRowHeight * 0.5f;
     return {port.direction == rin::PortDirection::Input ? position.x
-                                                        : position.x + kNodeWidth,
+                                                        : position.x + monitorWidth,
             position.y + rowY};
 }
 
@@ -386,8 +392,11 @@ struct CanvasNode {
     CanvasPoint position;
     std::vector<rin::ParamAssignment> params;
     /// 监看器预览窗高度（画布坐标；仅 viewer 节点参与几何，UI 私有状态
-    /// 同 position 先例不入契约）。手柄拖拽调整，compose 期夹取。
+    /// 同 position 先例不入契约）。手柄拖拽调整，写入即夹取。
     float monitorPreviewHeight = kMonitorPreviewHeight;
+    /// 监看器节点宽度（仅 viewer 生效，其余类型恒为 kNodeWidth）；右下角
+    /// 手柄双向拖拽（宽×高）调整，写入即夹取。
+    float monitorWidth = kNodeWidth;
 };
 
 /// 一次画布图操作的结果；ok=false 时 error 携带人可读拒绝原因（§5.4 不静默失败）。
@@ -681,7 +690,8 @@ struct CanvasGraphModel {
                 continue;
             }
             if (rect.intersects(nodeBounds(node.position, *descriptor, node.params,
-                                            node.monitorPreviewHeight))) {
+                                            node.monitorPreviewHeight,
+                                            node.monitorWidth))) {
                 hits.push_back(node.id);
             }
         }
@@ -702,7 +712,8 @@ struct CanvasGraphModel {
                 const rin::PortRef port{it->id, rin::PortDirection::Input, index};
                 if (canvasDistance(point,
                                    portPosition(it->position, *descriptor, it->params, port,
-                                                it->monitorPreviewHeight)) <= kPortHitRadius) {
+                                                it->monitorPreviewHeight,
+                                                it->monitorWidth)) <= kPortHitRadius) {
                     return port;
                 }
             }
@@ -713,7 +724,8 @@ struct CanvasGraphModel {
                 const rin::PortRef port{it->id, rin::PortDirection::Output, index};
                 if (canvasDistance(point,
                                    portPosition(it->position, *descriptor, it->params, port,
-                                                it->monitorPreviewHeight)) <= kPortHitRadius) {
+                                                it->monitorPreviewHeight,
+                                                it->monitorWidth)) <= kPortHitRadius) {
                     return port;
                 }
             }
@@ -728,7 +740,8 @@ struct CanvasGraphModel {
             if (descriptor == nullptr) {
                 continue;
             }
-            if (nodeBounds(it->position, *descriptor, it->params, it->monitorPreviewHeight)
+            if (nodeBounds(it->position, *descriptor, it->params,
+                           it->monitorPreviewHeight, it->monitorWidth)
                     .contains(point)) {
                 return &*it;
             }
@@ -751,12 +764,14 @@ struct CanvasGraphModel {
             if (fromDescriptor == nullptr || toDescriptor == nullptr) {
                 continue;
             }
-            const CanvasPoint from = portPosition(fromNode->position, *fromDescriptor,
-                                                  fromNode->params, connection.from,
-                                                  fromNode->monitorPreviewHeight);
+            const CanvasPoint from =
+                portPosition(fromNode->position, *fromDescriptor, fromNode->params,
+                             connection.from, fromNode->monitorPreviewHeight,
+                             fromNode->monitorWidth);
             const CanvasPoint to = portPosition(toNode->position, *toDescriptor,
                                                 toNode->params, connection.to,
-                                                toNode->monitorPreviewHeight);
+                                                toNode->monitorPreviewHeight,
+                                                toNode->monitorWidth);
             const std::vector<CanvasPoint> samples = sampleWire(from, to, 24);
             for (std::size_t i = 1; i < samples.size(); ++i) {
                 const float d = pointSegmentDistance(point, samples[i - 1], samples[i]);
@@ -779,7 +794,8 @@ struct CanvasGraphModel {
                 continue;
             }
             const CanvasRect b = nodeBounds(node.position, *descriptor, node.params,
-                                            node.monitorPreviewHeight);
+                                            node.monitorPreviewHeight,
+                                            node.monitorWidth);
             if (first) {
                 bounds = b;
                 first = false;

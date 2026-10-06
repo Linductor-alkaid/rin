@@ -159,6 +159,8 @@ struct WorkflowCanvasState {
     int dockDrag = -1;
     float dockDragStartPointer = 0.0f;
     float dockDragStartValue = 0.0f;
+    /// 槽位 2（监看器手柄）专用：起始宽度基准（totalX 增量换算用）。
+    float dockDragStartWidth = 0.0f;
 
     /// 节点内嵌参数控件状态（M11：按节点持有；afterGraphChange 清扫已删节点）。
     std::map<rin::NodeId, NodeParamControls> controls;
@@ -1186,9 +1188,14 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
     }
     const float s = state.view.scale;
     const CanvasPoint origin = state.view.toScreen(node.position);
-    const float w = kNodeWidth * s;
+    // 节点宽度：监看器节点级可调（M11 验收反馈：宽高双向缩放），其余恒
+    // kNodeWidth；compose 期夹取（写入即夹取，此处防御归一）。
+    const float nodeW =
+        isMonitorNode(node.typeId)
+            ? std::clamp(node.monitorWidth, kMonitorMinWidth, kMonitorMaxWidth)
+            : kNodeWidth;
+    const float w = nodeW * s;
     const float h = nodeHeight(*descriptor, node.params, node.monitorPreviewHeight) * s;
-    // 预览高度 compose 期夹取（手柄拖拽写入原始值，此处归一呈现与几何）。
     const float previewH = std::clamp(node.monitorPreviewHeight, kMonitorPreviewMinHeight,
                                       kMonitorPreviewMaxHeight);
     const bool selected =
@@ -1246,7 +1253,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
             if (monitor) {
                 const float previewY = (kNodeHeaderHeight + kParamSectionGap * 0.5f) * s;
                 const float previewHpx = (previewH - kParamSectionGap * 0.5f) * s;
-                const float previewW = (kNodeWidth - kParamPadX * 2.0f) * s;
+                const float previewW = (nodeW - kParamPadX * 2.0f) * s;
                 const float previewX = kParamPadX * s;
                 ui.rect(base + ".previewArea")
                     .position(previewX, previewY)
@@ -1307,27 +1314,30 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                         .position(gripX - 4.0f * s, gripY - 4.0f * s)
                         .size(grip + 8.0f * s, grip + 8.0f * s)
                         .cursor(eui::CursorShape::Hand)  // EUI 仅 Arrow/Hand（input_types.h），与分隔条同款
-                        .onDragStart([&state, gripNode, s](const components::MouseEvent& event) {
+                        .onDragStart([&state, gripNode](const components::MouseEvent&) {
                             state.dockDrag = 2;  // 复用布局拖拽槽位语义（-1 无、
-                            state.dockDragStartPointer = event.globalY;  // 0/1 页面分隔条、
-                            if (CanvasNode* n = state.model.findNode(gripNode)) {  // 2 手柄）
-                                state.dockDragStartValue = n->monitorPreviewHeight;
+                            if (CanvasNode* n = state.model.findNode(gripNode)) {  // 0/1 分隔条、
+                                state.dockDragStartValue = n->monitorPreviewHeight;  // 2 手柄）
+                                state.dockDragStartWidth = n->monitorWidth;
                             }
-                            (void)s;
                         })
                         .onDrag([&state, gripNode](const components::MouseDragEvent& event) {
                             if (state.dockDrag != 2) {
                                 return;
                             }
                             if (CanvasNode* n = state.model.findNode(gripNode)) {
+                                // 双向缩放（totalX/totalY 为按下起累计增量，按
+                                // 画布缩放换算为画布单位），写入即夹取。
+                                n->monitorWidth =
+                                    std::clamp(state.dockDragStartWidth +
+                                                   event.totalX / state.view.scale,
+                                               kMonitorMinWidth, kMonitorMaxWidth);
                                 n->monitorPreviewHeight =
                                     std::clamp(state.dockDragStartValue +
-                                                   (event.globalY -
-                                                    state.dockDragStartPointer) /
-                                                       state.view.scale,
+                                                   event.totalY / state.view.scale,
                                                kMonitorPreviewMinHeight,
                                                kMonitorPreviewMaxHeight);
-                                ++state.revision;  // 端口锚点随高度移动，连线重绘。
+                                ++state.revision;  // 节点宽高变化，连线/命中重绘。
                             }
                         })
                         .onDragEnd([&state](const components::MouseEvent&) {
@@ -1361,7 +1371,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                                         static_cast<std::uint32_t>(i)};
                 const CanvasPoint local =
                     portPosition(node.position, *descriptor, node.params, port,
-                                 node.monitorPreviewHeight) -
+                                 node.monitorPreviewHeight, node.monitorWidth) -
                     node.position;
                 ui.rect(base + ".in." + std::to_string(i))
                     .position(local.x * s - r, local.y * s - r)
@@ -1376,7 +1386,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                                             static_cast<std::uint32_t>(i)};
                     const CanvasPoint local =
                         portPosition(node.position, *descriptor, node.params, port,
-                                     node.monitorPreviewHeight) -
+                                     node.monitorPreviewHeight, node.monitorWidth) -
                         node.position;
                     ui.rect(base + ".out." + std::to_string(i))
                         .position(local.x * s - r, local.y * s - r)
@@ -1542,10 +1552,10 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                 }
                 const CanvasPoint a =
                     portPosition(fromNode->position, *fd, fromNode->params, connection.from,
-                                 fromNode->monitorPreviewHeight);
+                                 fromNode->monitorPreviewHeight, fromNode->monitorWidth);
                 const CanvasPoint b =
                     portPosition(toNode->position, *td, toNode->params, connection.to,
-                                 toNode->monitorPreviewHeight);
+                                 toNode->monitorPreviewHeight, toNode->monitorWidth);
                 // 贝塞尔带状轮廓（粗细一致曲线；polygon 为填充语义，开放点集
                 // 会渲染成弦线与曲线围成的封闭区域，见 canvas_model.hpp wireRibbon）。
                 std::vector<eui::Vec2> points;
@@ -1575,7 +1585,8 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                     if (fd != nullptr && from.index < fd->outputs.size()) {
                         const CanvasPoint a =
                             portPosition(fromNode->position, *fd, fromNode->params, from,
-                                         fromNode->monitorPreviewHeight);
+                                         fromNode->monitorPreviewHeight,
+                                         fromNode->monitorWidth);
                         const CanvasPoint b = state.interaction.connectCurrent;
                         // 零长度守卫：光标停回发起端口时中心线因控制点下限外凸
                         // 成小环（from==to 仅预览可达，已提交连线拒绝自连）。
