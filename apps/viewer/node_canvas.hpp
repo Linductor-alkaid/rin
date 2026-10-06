@@ -1360,7 +1360,9 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                 const rin::PortRef port{node.id, rin::PortDirection::Input,
                                         static_cast<std::uint32_t>(i)};
                 const CanvasPoint local =
-                    portPosition(node.position, *descriptor, node.params, port) - node.position;
+                    portPosition(node.position, *descriptor, node.params, port,
+                                 node.monitorPreviewHeight) -
+                    node.position;
                 ui.rect(base + ".in." + std::to_string(i))
                     .position(local.x * s - r, local.y * s - r)
                     .size(r * 2.0f, r * 2.0f)
@@ -1373,7 +1375,8 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                     const rin::PortRef port{node.id, rin::PortDirection::Output,
                                             static_cast<std::uint32_t>(i)};
                     const CanvasPoint local =
-                        portPosition(node.position, *descriptor, node.params, port) -
+                        portPosition(node.position, *descriptor, node.params, port,
+                                     node.monitorPreviewHeight) -
                         node.position;
                     ui.rect(base + ".out." + std::to_string(i))
                         .position(local.x * s - r, local.y * s - r)
@@ -1538,9 +1541,11 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                     continue;
                 }
                 const CanvasPoint a =
-                    portPosition(fromNode->position, *fd, fromNode->params, connection.from);
+                    portPosition(fromNode->position, *fd, fromNode->params, connection.from,
+                                 fromNode->monitorPreviewHeight);
                 const CanvasPoint b =
-                    portPosition(toNode->position, *td, toNode->params, connection.to);
+                    portPosition(toNode->position, *td, toNode->params, connection.to,
+                                 toNode->monitorPreviewHeight);
                 // 贝塞尔带状轮廓（粗细一致曲线；polygon 为填充语义，开放点集
                 // 会渲染成弦线与曲线围成的封闭区域，见 canvas_model.hpp wireRibbon）。
                 std::vector<eui::Vec2> points;
@@ -1569,7 +1574,8 @@ inline void composeWorkflowCanvas(eui::Ui& ui, WorkflowCanvasState& state,
                     const rin::NodeDescriptor* fd = state.model.descriptorFor(*fromNode);
                     if (fd != nullptr && from.index < fd->outputs.size()) {
                         const CanvasPoint a =
-                            portPosition(fromNode->position, *fd, fromNode->params, from);
+                            portPosition(fromNode->position, *fd, fromNode->params, from,
+                                         fromNode->monitorPreviewHeight);
                         const CanvasPoint b = state.interaction.connectCurrent;
                         // 零长度守卫：光标停回发起端口时中心线因控制点下限外凸
                         // 成小环（from==to 仅预览可达，已提交连线拒绝自连）。
@@ -1812,7 +1818,8 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                             const rin::NodeDescriptor* descriptor =
                                 state.model.descriptorFor(*node);
                             const float h = descriptor != nullptr
-                                                ? nodeHeight(*descriptor, node->params)
+                                                ? nodeHeight(*descriptor, node->params,
+                                                             node->monitorPreviewHeight)
                                                 : 40.0f;
                             centerViewOn(state.view,
                                          {node->position.x + kNodeWidth * 0.5f,
