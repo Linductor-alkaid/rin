@@ -847,7 +847,11 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                     haveFrames = true;
                     break;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                // 10ms 轮询（独立验证实证：50ms 在 30fps 下丢 ~25-35% frameset
+                // ——聚合器容量 1、newest-wins，两次轮询间到达 2+ 帧时只留最新，
+                // IMU 交付 27-30Hz→20-23Hz；10ms 间隔内至多到达 1 帧，基本零
+                // 丢失，唤醒开销 ~100/s 可忽略）。
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         } catch (const rs2::error&) {
             haveFrames = false;  // 后端真错误与超时同款失败计数路径。
