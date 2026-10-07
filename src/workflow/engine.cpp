@@ -35,10 +35,6 @@ using workflow_detail::findNodeInstance;
 using workflow_detail::findParamDescriptor;
 using workflow_detail::paramValueMatches;
 
-/// 统计滚动窗口长度（NodeStats.avgCostMs / endToEndFps；与假引擎一致，契约只
-/// 冻结语义）。
-constexpr std::size_t kStatsWindow = 32;
-
 // 单调毫秒时钟唯一实现（M12/CR-24，monotonic_time.hpp）。
 using detail::steadyMs;
 

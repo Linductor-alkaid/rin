@@ -127,20 +127,26 @@ bool PolicyDepthConfig::valid() const noexcept {
     return true;
 }
 
-std::uint32_t PolicyDepthConfig::policyWidth() const noexcept {
-    const std::uint64_t width = u64(gridWidth) - (u64(cropLeft) + u64(cropRight));
-    if (u64(cropLeft) + u64(cropRight) > u64(gridWidth) || width == 0 || width > u64(UINT32_MAX)) {
+/// 裁切后维度唯一推导（M12/CR-14）：grid 减两侧裁切；越界回卷/零/超 uint32
+/// 一律 0（调用方以 0 视为配置非法）。
+std::uint32_t policyExtent(std::uint64_t grid, std::uint64_t cropLeading,
+                           std::uint64_t cropTrailing) noexcept {
+    if (cropLeading + cropTrailing > grid) {
         return 0;
     }
-    return static_cast<std::uint32_t>(width);
+    const std::uint64_t extent = grid - (cropLeading + cropTrailing);
+    if (extent == 0 || extent > u64(UINT32_MAX)) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(extent);
+}
+
+std::uint32_t PolicyDepthConfig::policyWidth() const noexcept {
+    return policyExtent(u64(gridWidth), u64(cropLeft), u64(cropRight));
 }
 
 std::uint32_t PolicyDepthConfig::policyHeight() const noexcept {
-    const std::uint64_t height = u64(gridHeight) - (u64(cropUp) + u64(cropDown));
-    if (u64(cropUp) + u64(cropDown) > u64(gridHeight) || height == 0 || height > u64(UINT32_MAX)) {
-        return 0;
-    }
-    return static_cast<std::uint32_t>(height);
+    return policyExtent(u64(gridHeight), u64(cropUp), u64(cropDown));
 }
 
 DepthFrameF32 fillDepthInvalid(const DepthFrameF32& in, double farValue, double invalidBelow) {
