@@ -19,6 +19,7 @@
 
 #include "camera_state_machine.hpp"
 #include "imu_motion_ingest.hpp"
+#include "monotonic_time.hpp"
 #include "pixel_format.hpp"
 #include "rin/camera_types.hpp"
 
@@ -37,11 +38,8 @@ constexpr auto kWaitingPollInterval = std::chrono::milliseconds(300);
 constexpr float kDepthNearMeters = 0.2f;
 constexpr float kDepthFarMeters = 6.5f;  // DEC-003 暂定视觉区间
 
-double steadyMs() {
-    return std::chrono::duration<double, std::milli>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
+// 单调毫秒时钟唯一实现（M12/CR-24，monotonic_time.hpp）。
+using detail::steadyMs;
 
 struct ControlCommand {
     enum class Kind { Restream, SelectDevice, SetDepthColorScheme } kind = Kind::Restream;
@@ -119,6 +117,21 @@ private:
     /// 退化为纯视频流，运动通道保持空，不视为错误）。
     [[nodiscard]] bool deviceHasImu(const std::string& serial) const;
     [[nodiscard]] bool sleepPoll(kairo::StopToken stopToken);
+    /// 命令消费公共分支（M12/CR-18）：SelectDevice 记录粘性意图并发布事件（返回
+    /// true = 选中设备变化）；SetDepthColorScheme 切换后续帧配色（DEC-007）。
+    /// Restream 仅流送态有意义，由 streamLoop 自行处理。
+    bool consumeCommonCommand(const ControlCommand& command);
+    /// 热插拔信号排空（M12/CR-18）：返回是否见到总线变化。
+    bool drainHotPlug();
+    /// 设备移除处理唯一路径（M12/CR-19）：→Waiting、事件、清活动序列号、刷新目录；
+    /// 调用方以 StreamExit::DeviceLost 返回。
+    StreamExit handleDeviceRemoved(rs2::context& context);
+    /// 流重建唯一路径（M12/CR-16）：stop → 按请求与目标设备能力重配 startPipeline
+    /// （运动流打开失败一次性降级纯视频）→ activeSerial_ 跟随目标 → 运动分支复位
+    /// → 重发内参。返回运动流是否实际启用。首次打开不适用（打开重试循环生命
+    /// 周期不同，见 run()）。
+    bool rebuildStream(rs2::pipeline& pipeline, rs2::pipeline_profile& profile,
+                       const std::string& serial);
 
     RealSenseCamera& owner_;
     StreamRequest request_;
@@ -259,6 +272,32 @@ public:
     }
 
     void publishCatalog(DeviceCatalog catalog) { catalog_.publish(std::move(catalog)); }
+
+    /// 控制命令投递唯一路径（M12/CR-17）：状态白名单校验 + 命令邮箱发布。
+    /// 状态不在白名单（action 用于 "cannot <action> from state X" 消息）或邮箱
+    /// 拒绝时写 *error 并返回 false。
+    bool sendControlCommand(ControlCommand command,
+                            std::initializer_list<CameraServiceState> allowed,
+                            const char* action, std::string* error) {
+        const CameraServiceState current = machine_.state();
+        const bool allowedState = std::any_of(
+            allowed.begin(), allowed.end(),
+            [current](CameraServiceState state) { return state == current; });
+        if (!allowedState) {
+            if (error != nullptr) {
+                *error =
+                    std::string("cannot ") + action + " from state " + toString(current);
+            }
+            return false;
+        }
+        if (!commands_.try_publish(command)) {
+            if (error != nullptr) {
+                *error = "command mailbox rejected request";
+            }
+            return false;
+        }
+        return true;
+    }
 
     void publishEvent(ServiceEventKind kind, const std::string& message) {
         ServiceEvent event;
@@ -465,23 +504,22 @@ StreamIntrinsics readIntrinsics(const rs2::video_stream_profile& profile) {
     return intrinsics;
 }
 
-void publishFrame(LatestMailbox<Frame>& mailbox,
-                  FrameKind kind,
-                  std::uint32_t width,
-                  std::uint32_t height,
-                  std::uint32_t stride,
-                  std::uint64_t sequence,
-                  double timestampMs,
-                  std::vector<std::uint8_t>&& pixels) {
-    Frame frame;
-    frame.kind = kind;
+/// 帧公共字段唯一装配（M12/CR-22）：Frame 与 GrayFrame 的公共元数据同型。
+template <typename FrameT>
+FrameT makeFrame(std::uint32_t width,
+                 std::uint32_t height,
+                 std::uint32_t stride,
+                 std::uint64_t sequence,
+                 double timestampMs,
+                 const std::shared_ptr<const std::vector<std::uint8_t>>& pixels) {
+    FrameT frame;
     frame.width = width;
     frame.height = height;
     frame.stride = stride;
     frame.sequence = sequence;
     frame.deviceTimestampMs = timestampMs;
-    frame.pixels = std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels));
-    mailbox.publish(std::move(frame));
+    frame.pixels = pixels;
+    return frame;
 }
 
 /// 共享缓冲发布（M6-04）：预览 scheme==Jet 时伪彩 rendition 与预览通道共用
@@ -494,15 +532,21 @@ void publishFrame(LatestMailbox<Frame>& mailbox,
                   std::uint64_t sequence,
                   double timestampMs,
                   const std::shared_ptr<const std::vector<std::uint8_t>>& pixels) {
-    Frame frame;
+    Frame frame = makeFrame<Frame>(width, height, stride, sequence, timestampMs, pixels);
     frame.kind = kind;
-    frame.width = width;
-    frame.height = height;
-    frame.stride = stride;
-    frame.sequence = sequence;
-    frame.deviceTimestampMs = timestampMs;
-    frame.pixels = pixels;
     mailbox.publish(std::move(frame));
+}
+
+void publishFrame(LatestMailbox<Frame>& mailbox,
+                  FrameKind kind,
+                  std::uint32_t width,
+                  std::uint32_t height,
+                  std::uint32_t stride,
+                  std::uint64_t sequence,
+                  double timestampMs,
+                  std::vector<std::uint8_t>&& pixels) {
+    publishFrame(mailbox, kind, width, height, stride, sequence, timestampMs,
+                 std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels)));
 }
 
 /// 灰度 rendition 发布（M6-04，DEC-017）：Gray8 紧凑行距（stride = width）。
@@ -512,14 +556,9 @@ void publishGrayFrame(LatestMailbox<GrayFrame>& mailbox,
                       std::uint64_t sequence,
                       double timestampMs,
                       std::vector<std::uint8_t>&& pixels) {
-    GrayFrame frame;
-    frame.width = width;
-    frame.height = height;
-    frame.stride = width;
-    frame.sequence = sequence;
-    frame.deviceTimestampMs = timestampMs;
-    frame.pixels = std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels));
-    mailbox.publish(std::move(frame));
+    mailbox.publish(makeFrame<GrayFrame>(
+        width, height, width, sequence, timestampMs,
+        std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels))));
 }
 
 /// 混合 pipeline 配置（M3-04）：双视频流 + 按需 ACCEL/GYRO 运动流（MOTION_XYZ32F，
@@ -657,27 +696,11 @@ std::string CaptureLoop::resolveTarget(rs2::context& context, kairo::StopToken s
             if (owner_.commandMailbox().try_load_newer_than(lastCommandSequence_, command,
                                                             newSequence)) {
                 lastCommandSequence_ = newSequence;
-                if (command.kind == ControlCommand::Kind::SelectDevice &&
-                    command.serial != requestedSerial_) {
-                    requestedSerial_ = command.serial;
-                    owner_.publishEvent(ServiceEventKind::Info,
-                                        "device selected: " + command.serial);
+                if (consumeCommonCommand(command)) {
                     break;  // 立即重新解析
                 }
-                if (command.kind == ControlCommand::Kind::SetDepthColorScheme &&
-                    command.scheme != depthColorScheme_) {
-                    // 等待态可预设深度配色（DEC-007）：接入后按所选配色出流。
-                    depthColorScheme_ = command.scheme;
-                    owner_.publishEvent(ServiceEventKind::Info,
-                                        std::string("depth palette: ") +
-                                            depthSchemeName(command.scheme));
-                }
             }
-            int hotPlug = 0;
-            std::uint64_t newHotPlug = lastHotPlugSequence_;
-            if (owner_.hotPlugMailbox().try_load_newer_than(lastHotPlugSequence_, hotPlug,
-                                                            newHotPlug)) {
-                lastHotPlugSequence_ = newHotPlug;
+            if (drainHotPlug()) {
                 break;  // 总线变化，重新枚举
             }
             std::this_thread::sleep_for(kWaitingPollInterval);
@@ -686,6 +709,59 @@ std::string CaptureLoop::resolveTarget(rs2::context& context, kairo::StopToken s
             return {};
         }
     }
+}
+
+bool CaptureLoop::consumeCommonCommand(const ControlCommand& command) {
+    if (command.kind == ControlCommand::Kind::SelectDevice &&
+        command.serial != requestedSerial_) {
+        requestedSerial_ = command.serial;
+        owner_.publishEvent(ServiceEventKind::Info, "device selected: " + command.serial);
+        return true;
+    }
+    if (command.kind == ControlCommand::Kind::SetDepthColorScheme &&
+        command.scheme != depthColorScheme_) {
+        // 深度配色粘性（DEC-007）：等待态为接入后预设，流送态切换后续帧。
+        depthColorScheme_ = command.scheme;
+        owner_.publishEvent(ServiceEventKind::Info,
+                            std::string("depth palette: ") + depthSchemeName(command.scheme));
+    }
+    return false;
+}
+
+bool CaptureLoop::drainHotPlug() {
+    int hotPlug = 0;
+    std::uint64_t newHotPlug = lastHotPlugSequence_;
+    if (owner_.hotPlugMailbox().try_load_newer_than(lastHotPlugSequence_, hotPlug,
+                                                    newHotPlug)) {
+        lastHotPlugSequence_ = newHotPlug;
+        return true;
+    }
+    return false;
+}
+
+CaptureLoop::StreamExit CaptureLoop::handleDeviceRemoved(rs2::context& context) {
+    owner_.workerTransition(CameraServiceState::Waiting, "device removed");
+    owner_.publishEvent(ServiceEventKind::Info, "device removed: " + activeSerial_);
+    activeSerial_.clear();
+    refreshCatalog(context);
+    return StreamExit::DeviceLost;
+}
+
+bool CaptureLoop::rebuildStream(rs2::pipeline& pipeline, rs2::pipeline_profile& profile,
+                                const std::string& serial) {
+    pipeline.stop();
+    // 重建含 IMU（M3-04）：按请求与目标设备能力重配运动流；运动流打开失败一次性
+    // 降级为纯视频（事件可见），下次重建重新尝试。
+    motionActive_ = startPipeline(pipeline, profile, serial,
+                                  request_.enableMotion && deviceHasImu(serial));
+    activeSerial_ = serial;
+    // 每次流重建后运动分支复位融合器与频率窗口，姿态重新收敛。
+    if (motionActive_) {
+        motionIngest_.resetStreamState();
+    }
+    owner_.intrinsicsMailbox().publish(
+        snapshotIntrinsics(profile, owner_.nextSnapshotSequence(), motionActive_));
+    return motionActive_;
 }
 
 /// 消费命令（分辨率切换 / 设备选择）；设备选择仅记录意图与事件。
@@ -721,13 +797,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
 
     while (!stopToken.stop_requested()) {
         // 命令与热插拔检查点（wait_for_frames 界内每秒至少到达一次）。
-        int hotPlug = 0;
-        std::uint64_t newHotPlug = lastHotPlugSequence_;
-        const bool hotPlugSeen = owner_.hotPlugMailbox().try_load_newer_than(
-            lastHotPlugSequence_, hotPlug, newHotPlug);
-        if (hotPlugSeen) {
-            lastHotPlugSequence_ = newHotPlug;
-        }
+        const bool hotPlugSeen = drainHotPlug();
 
         ControlCommand command;
         std::uint64_t newSequence = lastCommandSequence_;
@@ -740,19 +810,8 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                 !(command.request == request_)) {
                 pendingResolution_ = command.request;
                 restreamResolution = true;
-            } else if (command.kind == ControlCommand::Kind::SelectDevice &&
-                       command.serial != requestedSerial_) {
-                requestedSerial_ = command.serial;
+            } else if (consumeCommonCommand(command)) {
                 selectChanged = true;
-                owner_.publishEvent(ServiceEventKind::Info,
-                                    "device selected: " + command.serial);
-            } else if (command.kind == ControlCommand::Kind::SetDepthColorScheme &&
-                       command.scheme != depthColorScheme_) {
-                // 仅切换后续帧的转换配色（DEC-007）：不重流，下一帧即生效。
-                depthColorScheme_ = command.scheme;
-                owner_.publishEvent(ServiceEventKind::Info,
-                                    std::string("depth palette: ") +
-                                        depthSchemeName(command.scheme));
             }
         }
         if (stopToken.stop_requested()) {
@@ -764,12 +823,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             try {
             // 活动设备被移除 → Waiting（DeviceLost）；否则刷新目录并按需重配。
             if (!serialOnline(context, activeSerial_)) {
-                owner_.workerTransition(CameraServiceState::Waiting, "device removed");
-                owner_.publishEvent(ServiceEventKind::Info,
-                                    "device removed: " + activeSerial_);
-                activeSerial_.clear();
-                refreshCatalog(context);
-                return StreamExit::DeviceLost;
+                return handleDeviceRemoved(context);
             }
             refreshCatalog(context);
 
@@ -779,18 +833,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                 owner_.workerTransition(CameraServiceState::Restreaming,
                                         "resolution switch");
                 owner_.publishEvent(ServiceEventKind::Info, "switching resolution");
-                pipeline.stop();
-                // restream 重建含 IMU（M3-04）：按新请求与当前设备能力重配运动流；
-                // 运动流打开失败一次性降级为纯视频（事件可见），下次重建重新尝试。
-                motionActive_ = startPipeline(pipeline, profile, activeSerial_,
-                                              request_.enableMotion &&
-                                                  deviceHasImu(activeSerial_));
-                if (motionActive_) {
-                    motionIngest_.resetStreamState();
-                }
-                owner_.intrinsicsMailbox().publish(
-                    snapshotIntrinsics(profile, owner_.nextSnapshotSequence(),
-                                       motionActive_));
+                rebuildStream(pipeline, profile, activeSerial_);
                 owner_.workerTransition(CameraServiceState::Streaming,
                                         "resolution switch finish");
                 owner_.publishEvent(ServiceEventKind::ResolutionChanged,
@@ -803,19 +846,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                 serialOnline(context, requestedSerial_)) {
                 owner_.workerTransition(CameraServiceState::Restreaming, "device switch");
                 owner_.publishEvent(ServiceEventKind::Info, "switching device");
-                pipeline.stop();
-                // 设备切换重建含 IMU（M3-04）：按新设备能力重配运动流（IMU 坐标系
-                // 随设备变化，融合器复位后重新收敛）；运动流打开失败降级同 restream。
-                motionActive_ = startPipeline(pipeline, profile, requestedSerial_,
-                                              request_.enableMotion &&
-                                                  deviceHasImu(requestedSerial_));
-                activeSerial_ = requestedSerial_;
-                if (motionActive_) {
-                    motionIngest_.resetStreamState();
-                }
-                owner_.intrinsicsMailbox().publish(
-                    snapshotIntrinsics(profile, owner_.nextSnapshotSequence(),
-                                       motionActive_));
+                rebuildStream(pipeline, profile, requestedSerial_);
                 refreshCatalog(context);
                 owner_.workerTransition(CameraServiceState::Streaming,
                                         "device switch finish");
@@ -863,12 +894,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             if (++consecutiveFailures >= kMaxConsecutiveFrameFailures) {
                 // 设备已不在总线上 → 按热插拔移除处理（Waiting），否则按真实错误上抛。
                 if (!serialOnline(context, activeSerial_)) {
-                    owner_.workerTransition(CameraServiceState::Waiting, "device removed");
-                    owner_.publishEvent(ServiceEventKind::Info,
-                                        "device removed: " + activeSerial_);
-                    activeSerial_.clear();
-                    refreshCatalog(context);
-                    return StreamExit::DeviceLost;
+                    return handleDeviceRemoved(context);
                 }
                 errorMessage_ = "stream interrupted while device present";
                 return StreamExit::Fatal;
@@ -964,10 +990,9 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                              std::move(jetRgba));
             }
         }
-        if (convertDepth16ToRgba8(reinterpret_cast<const std::uint16_t*>(depth.get_data()),
-                                  depthWidth, depthHeight, depthStrideUnits, depthScale,
-                                  kDepthNearMeters, kDepthFarMeters, depthColorScheme_,
-                                  rgba)) {
+        if (convertDepth16ToRgba8(depthData, depthWidth, depthHeight, depthStrideUnits,
+                                  depthScale, kDepthNearMeters, kDepthFarMeters,
+                                  depthColorScheme_, rgba)) {
             auto pixels =
                 std::make_shared<const std::vector<std::uint8_t>>(std::move(rgba));
             publishFrame(owner_.depthMailbox(), FrameKind::Depth, depthWidth, depthHeight,
@@ -1029,68 +1054,36 @@ bool CaptureLoop::startPipeline(rs2::pipeline& pipeline,
 
 /// 分辨率切换命令（Streaming/Restreaming 有效）。
 bool RealSenseCamera::requestResolution(const StreamRequest& request, std::string* error) {
-    const CameraServiceState current = machine_.state();
-    if (current != CameraServiceState::Streaming && current != CameraServiceState::Restreaming) {
-        if (error != nullptr) {
-            *error = "cannot change resolution from state " + std::string(toString(current));
-        }
-        return false;
-    }
     ControlCommand command;
     command.kind = ControlCommand::Kind::Restream;
     command.request = request;
-    if (!commands_.try_publish(command)) {
-        if (error != nullptr) {
-            *error = "command mailbox rejected request";
-        }
-        return false;
-    }
-    return true;
+    return sendControlCommand(std::move(command),
+                              {CameraServiceState::Streaming, CameraServiceState::Restreaming},
+                              "change resolution", error);
 }
 
 /// 设备选择命令（Waiting/Opening/Streaming/Restreaming 有效；粘性，跨插拔保留）。
 bool RealSenseCamera::requestDevice(const std::string& serial, std::string* error) {
-    const CameraServiceState current = machine_.state();
-    if (current == CameraServiceState::Idle || current == CameraServiceState::Failed ||
-        current == CameraServiceState::Stopping) {
-        if (error != nullptr) {
-            *error = "cannot select device from state " + std::string(toString(current));
-        }
-        return false;
-    }
     ControlCommand command;
     command.kind = ControlCommand::Kind::SelectDevice;
     command.serial = serial;
-    if (!commands_.try_publish(command)) {
-        if (error != nullptr) {
-            *error = "command mailbox rejected request";
-        }
-        return false;
-    }
-    return true;
+    return sendControlCommand(std::move(command),
+                              {CameraServiceState::Opening, CameraServiceState::Waiting,
+                               CameraServiceState::Streaming,
+                               CameraServiceState::Restreaming},
+                              "select device", error);
 }
 
 /// 深度配色切换命令（Waiting/Opening/Streaming/Restreaming 有效；DEC-007，粘性）。
 bool RealSenseCamera::requestDepthColorScheme(DepthColorScheme scheme, std::string* error) {
-    const CameraServiceState current = machine_.state();
-    if (current == CameraServiceState::Idle || current == CameraServiceState::Failed ||
-        current == CameraServiceState::Stopping) {
-        if (error != nullptr) {
-            *error = "cannot change depth color scheme from state " +
-                     std::string(toString(current));
-        }
-        return false;
-    }
     ControlCommand command;
     command.kind = ControlCommand::Kind::SetDepthColorScheme;
     command.scheme = scheme;
-    if (!commands_.try_publish(command)) {
-        if (error != nullptr) {
-            *error = "command mailbox rejected request";
-        }
-        return false;
-    }
-    return true;
+    return sendControlCommand(std::move(command),
+                              {CameraServiceState::Opening, CameraServiceState::Waiting,
+                               CameraServiceState::Streaming,
+                               CameraServiceState::Restreaming},
+                              "change depth color scheme", error);
 }
 
 void RealSenseCamera::stop() {
