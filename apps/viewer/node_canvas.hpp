@@ -48,6 +48,7 @@
 #include "gpu_frame_view.hpp"
 #include "param_model.hpp"
 #include "perf_model.hpp"
+#include "viewer_components.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -316,8 +317,10 @@ using viewer::theme::kSpace3;
     return std::max(minimum, base * scale);
 }
 
-/// 内嵌控件输入样式（M5-03 调色板过滤框同源：样式字段逐一取 viewer 令牌）。
-inline components::InputStyle inlineInputStyle(const theme::ThemeTokens& tokens) {
+/// 内嵌控件输入样式（M5-03 调色板过滤框同源：样式字段逐一取 viewer 令牌；
+/// M12/CR-32 唯一实现，radius 可选——画布内嵌控件 sm、浮层菜单 md）。
+inline components::InputStyle inlineInputStyle(const theme::ThemeTokens& tokens,
+                                                float radius = kRadiusSm) {
     components::InputStyle style;
     style.background = tokens.input;
     style.focused = tokens.input;
@@ -327,7 +330,7 @@ inline components::InputStyle inlineInputStyle(const theme::ThemeTokens& tokens)
     style.placeholder = tokens.fgSubtlest;
     style.cursor = tokens.brand;
     style.shadow = core::Shadow{};
-    style.radius = kRadiusSm;
+    style.radius = radius;
     return style;
 }
 
@@ -603,33 +606,13 @@ inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
         .position(x, y)
         .size(width, height)
         .content([&] {
-            ui.rect("workflow.palette.card")
-                .size(width, height)
-                .radius(kRadiusLg)
-                .color(tokens.card)
-                .border(kBorderHairline, tokens.cardBorder)
-                .build();
-            ui.text("workflow.palette.title")
-                .position(pad, pad)
-                .size(width - pad * 2.0f, kFontSm + kSpace1)
-                .text("Palette")
-                .fontSize(kFontSm)
-                .fontWeight(theme::kWeightSemibold)
-                .color(tokens.fgSubtle)
-                .build();
+            // 卡片底 + 标题：共享脚手架（M12/CR-33；嵌入区用 kRadiusLg 层级）。
+            composeCardShell(ui, tokens, "workflow.palette", "Palette", width, height,
+                             kRadiusLg);
 
             // 即输即筛（§5.2）：过滤框样式字段逐一取 viewer 令牌（DEC-005），
             // 不引入组件主题度量（inset/字号显式给定）。
-            components::InputStyle inputStyle;
-            inputStyle.background = tokens.input;
-            inputStyle.focused = tokens.input;
-            inputStyle.border = tokens.inputBorder;
-            inputStyle.focusBorder = tokens.brand;
-            inputStyle.text = tokens.fg;
-            inputStyle.placeholder = tokens.fgSubtlest;
-            inputStyle.cursor = tokens.brand;
-            inputStyle.shadow = core::Shadow{};
-            inputStyle.radius = kRadiusMd;
+            const components::InputStyle inputStyle = inlineInputStyle(tokens, kRadiusMd);
             components::input(ui, "workflow.palette.filter")
                 .position(pad, pad + kFontSm + kSpace2)
                 .size(width - pad * 2.0f, inputHeight)
@@ -687,7 +670,7 @@ inline void composeWorkflowPalette(eui::Ui& ui, WorkflowCanvasState& state,
                         for (const rin::NodeDescriptor* descriptor : group.items) {
                             const std::string base =
                                 std::string("workflow.palette.item.") + descriptor->typeId;
-                            const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                            const eui::Color& transparent = theme::kTransparent;
                             listUi.stack(base + ".row")
                                 .size(contentWidth, itemHeight)
                                 .content([&] {
@@ -1811,7 +1794,7 @@ inline void composeWorkflowIssues(eui::Ui& ui, WorkflowCanvasState& state, const
                                           issue.message;
                 const bool locatable = issue.node != rin::kInvalidNode &&
                                        state.model.findNode(issue.node) != nullptr;
-                const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                const eui::Color& transparent = theme::kTransparent;
                 ui.rect(base)
                     .position(pad, rowY)
                     .size(issuesWidth, rowHeight)
@@ -1892,42 +1875,17 @@ inline void composeWorkflowCreateMenu(eui::Ui& ui, WorkflowCanvasState& state,
     const float height = pad * 2.0f + inputHeight + kSpace2 +
                          static_cast<float>(groups.size()) * groupTitleHeight +
                          static_cast<float>(itemCount) * itemHeight;
-    const float x = std::clamp(state.menuPos.x, 8.0f, std::max(8.0f, windowWidth - width - 8.0f));
-    const float y =
-        std::clamp(state.menuPos.y, 8.0f, std::max(8.0f, windowHeight - height - 8.0f));
-
-    // 全窗口透明阻挡层：菜单外任意点击收起（§5.2.2 菜单是模态浮层）。
-    ui.rect("workflow.menu.scrim")
-        .position(0.0f, 0.0f)
-        .size(windowWidth, windowHeight)
-        .color({0.0f, 0.0f, 0.0f, 0.0f})
-        .onClick([&state] {
+    // 浮层壳（钳制 + scrim + 面板 + 阴影）：composeFloatingPanel 唯一实现
+    // （M12/CR-36；EUI-20260928-001 自绘先例不变）。
+    composeFloatingPanel(
+        ui, tokens, "workflow.menu", state.menuPos.x, state.menuPos.y, width, height,
+        windowWidth, windowHeight,
+        [&state] {
             state.menuOpen = false;
             state.menuFilter.set("");
-        })
-        .build();
-
-    ui.stack("workflow.menu")
-        .position(x, y)
-        .size(width, height)
-        .content([&] {
-            ui.rect("workflow.menu.panel")
-                .size(width, height)
-                .radius(kRadiusLg)
-                .color(tokens.menu)
-                .border(kBorderHairline, tokens.border)
-                .shadow(18.0f, 10.0f, 8.0f, {0.0f, 0.0f, 0.0f, 0.35f})
-                .build();
-            components::InputStyle inputStyle;
-            inputStyle.background = tokens.input;
-            inputStyle.focused = tokens.input;
-            inputStyle.border = tokens.inputBorder;
-            inputStyle.focusBorder = tokens.brand;
-            inputStyle.text = tokens.fg;
-            inputStyle.placeholder = tokens.fgSubtlest;
-            inputStyle.cursor = tokens.brand;
-            inputStyle.shadow = core::Shadow{};
-            inputStyle.radius = kRadiusMd;
+        },
+        [&] {
+            const components::InputStyle inputStyle = inlineInputStyle(tokens, kRadiusMd);
             components::input(ui, "workflow.menu.filter")
                 .position(pad, pad)
                 .size(width - pad * 2.0f, inputHeight)
@@ -1952,7 +1910,7 @@ inline void composeWorkflowCreateMenu(eui::Ui& ui, WorkflowCanvasState& state,
                 for (const rin::NodeDescriptor* descriptor : group.items) {
                     const std::string base =
                         std::string("workflow.menu.item.") + descriptor->typeId;
-                    const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                    const eui::Color& transparent = theme::kTransparent;
                     ui.rect(base)
                         .position(pad, rowY)
                         .size(width - pad * 2.0f, itemHeight)
@@ -1983,8 +1941,7 @@ inline void composeWorkflowCreateMenu(eui::Ui& ui, WorkflowCanvasState& state,
                     rowY += itemHeight;
                 }
             }
-        })
-        .build();
+        });
 }
 
 // --- 调色板拖拽浮层（§5.2.1：类型名跟随光标） ---
@@ -2038,30 +1995,12 @@ inline void composeWorkflowResolutionMenu(eui::Ui& ui, WorkflowCanvasState& stat
     const float itemHeight = 26.0f;
     const int count = static_cast<int>(cameraResolution->labels->size());
     const float height = pad * 2.0f + titleHeight + static_cast<float>(count) * itemHeight;
-    const float x = std::clamp(state.resolutionMenuPos.x, 8.0f,
-                               std::max(8.0f, windowWidth - width - 8.0f));
-    const float y = std::clamp(state.resolutionMenuPos.y, 8.0f,
-                               std::max(8.0f, windowHeight - height - 8.0f));
-
-    // 全窗口透明阻挡层：菜单外任意点击收起（模态浮层）。
-    ui.rect("workflow.resMenu.scrim")
-        .position(0.0f, 0.0f)
-        .size(windowWidth, windowHeight)
-        .color({0.0f, 0.0f, 0.0f, 0.0f})
-        .onClick([&state] { state.resolutionMenuOpen = false; })
-        .build();
-
-    ui.stack("workflow.resMenu")
-        .position(x, y)
-        .size(width, height)
-        .content([&] {
-            ui.rect("workflow.resMenu.panel")
-                .size(width, height)
-                .radius(kRadiusLg)
-                .color(tokens.menu)
-                .border(kBorderHairline, tokens.border)
-                .shadow(18.0f, 10.0f, 8.0f, {0.0f, 0.0f, 0.0f, 0.35f})
-                .build();
+    // 浮层壳：composeFloatingPanel 唯一实现（M12/CR-36）。
+    composeFloatingPanel(
+        ui, tokens, "workflow.resMenu", state.resolutionMenuPos.x, state.resolutionMenuPos.y,
+        width, height, windowWidth, windowHeight,
+        [&state] { state.resolutionMenuOpen = false; },
+        [&] {
             ui.text("workflow.resMenu.title")
                 .position(pad, pad)
                 .size(width - pad * 2.0f, titleHeight)
@@ -2076,7 +2015,7 @@ inline void composeWorkflowResolutionMenu(eui::Ui& ui, WorkflowCanvasState& stat
                 const std::string base =
                     "workflow.resMenu.item." + std::to_string(index);
                 const bool active = index == selected;
-                const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                const eui::Color& transparent = theme::kTransparent;
                 ui.rect(base)
                     .position(pad, rowY)
                     .size(width - pad * 2.0f, itemHeight)
@@ -2111,8 +2050,7 @@ inline void composeWorkflowResolutionMenu(eui::Ui& ui, WorkflowCanvasState& stat
                 }
                 rowY += itemHeight;
             }
-        })
-        .build();
+        });
 }
 
 // --- 工作流页四区组装（M11/DEC-021：右栏移除，五区改四区；几何由
@@ -2142,7 +2080,7 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
     // 起始、onDrag 按指针增量更新布局值（compose 期夹取生效）。
     // growWithNegative：底部上缘为反向缘（指针负向增量使布局值增大）。
     const float handleHit = 10.0f;
-    const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+    const eui::Color& transparent = theme::kTransparent;
     const auto dividerTint = [&state, &transparent](int index) {
         return state.dockDrag == index ? theme::dark().brand : transparent;
     };
@@ -2190,6 +2128,34 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
 }
 
 // --- pump 边界消费（RULE-05：渲染线程只做有界取快照与提交） ---
+
+/// pump 边界的引擎事件消费唯一实现（M12/CR-37；app.cpp 渲染 pump 与测试共用，
+/// 原测试侧内联复刻删除）：底部事件行更新 + 节点失败标注 + GraphApplied 清
+/// 待生效标注 + 离开 Running 清待生效（stop 排空待生效队列，画布图即待运行
+/// 图；Failed 下待生效队列同样丢弃，契约 applyGraph 状态分支）。契约
+/// tryLoad* 非阻塞最新态语义，每次调用至多消费最新一条事件。返回 true 表示
+/// 有可见变更（调用方需 requestUpdate）。
+inline bool pumpWorkflowEvents(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engine) {
+    bool changed = false;
+    rin::WorkflowEvent event;
+    if (engine.tryLoadEvent(event)) {
+        const std::string line = workflowEventLine(event);
+        if (line != canvas.lastEvent) {
+            canvas.lastEvent = line;
+            changed = true;
+        }
+        canvas.failures.applyEvent(event);
+        if (event.kind == rin::WorkflowEventKind::GraphApplied && canvas.graphPending) {
+            canvas.graphPending = false;
+            changed = true;
+        }
+    }
+    if (canvas.graphPending && engine.state() != rin::WorkflowEngineState::Running) {
+        canvas.graphPending = false;
+        changed = true;
+    }
+    return changed;
+}
 
 /// 监看器条目排空的唯一实现（M12/CR-35）：释放预览 GL 引用、清元数据；
 /// `resetWatermark` 决定是否复位序号水位——两台状态机的排空语义不同：

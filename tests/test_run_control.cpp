@@ -361,22 +361,9 @@ void testCameraFrameSourceSeam() {
 /// app.cpp pump 的工作流事件消费契约行内联复刻（app.cpp:378-399 的平台无关
 /// 语义：事件行 + 失败标注 + GraphApplied 清待生效 + 离开 Running 清待生效）。
 /// 返回本 tick 是否清除了待生效标志。
-bool pumpWorkflowEvents(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engine) {
-    bool cleared = false;
-    rin::WorkflowEvent event;
-    if (engine.tryLoadEvent(event)) {
-        canvas.failures.applyEvent(event);
-        if (event.kind == rin::WorkflowEventKind::GraphApplied && canvas.graphPending) {
-            canvas.graphPending = false;
-            cleared = true;
-        }
-    }
-    if (canvas.graphPending && engine.state() != rin::WorkflowEngineState::Running) {
-        canvas.graphPending = false;
-        cleared = true;
-    }
-    return cleared;
-}
+// pumpWorkflowEvents：viewer 唯一实现（node_canvas.hpp，M12/CR-37）——原
+// "app.cpp 事件消费语义内联复刻"删除；谓词侧观察待生效清除（见各 pollUntil）。
+using viewer::pumpWorkflowEvents;
 
 void testRunControlStateMachine() {
     kairo::Executor executor;
@@ -427,7 +414,7 @@ void testRunControlStateMachine() {
                   "runctl: graph change while Running enqueues (pending set)");
 
     // ---- pump 同构消费：GraphApplied 在有界轮询内清除待生效 ----
-    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine); }),
+    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine), !canvas.graphPending; }),
                   "runctl: GraphApplied clears the pending flag at frame boundary");
     RIN_CHECK(!canvas.graphPending);
 
@@ -483,7 +470,7 @@ void testRunControlStateMachine() {
     RIN_CHECK(canvas.graphPending);  // grayify(Gray8) → gaussian_blur(Gray8) 合法。
     engine->stop();
     RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
-    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine); }),
+    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine), !canvas.graphPending; }),
                   "runctl: leaving Running clears the pending flag");
     RIN_CHECK(!canvas.graphPending);
     engine->stop();  // 幂等双 stop。
@@ -497,7 +484,7 @@ void testRunControlStateMachine() {
     canvas.afterGraphChange(engine.get());
     RIN_CHECK_MSG(canvas.model.validation.ok && canvas.graphPending,
                   "runctl: pending semantics keep working in the new session");
-    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine); }),
+    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine), !canvas.graphPending; }),
                   "runctl: new-session GraphApplied clears pending");
     RIN_CHECK(!canvas.graphPending);
 

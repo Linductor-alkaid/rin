@@ -43,6 +43,15 @@ constexpr float kRadiusSm = 4.0f;   // 下限
 
 constexpr float kBorderHairline = 1.0f;
 
+// --- 浮层阴影（只用于浮层，见文件头规则；M12/CR-36 唯一化原三处内联字面量）---
+constexpr float kOverlayShadowOffsetX = 18.0f;
+constexpr float kOverlayShadowOffsetY = 10.0f;
+constexpr float kOverlayShadowBlur = 8.0f;
+constexpr eui::Color kOverlayShadowColor{0.0f, 0.0f, 0.0f, 0.35f};
+
+/// 全透明（scrim 底 / 悬停行默认底；M12/CR-42 唯一化原七处字面量）。
+constexpr eui::Color kTransparent{0.0f, 0.0f, 0.0f, 0.0f};
+
 // --- 语义色令牌（深色主题；对应 Zai Dark 的角色翻译） ---
 struct ThemeTokens {
     eui::Color background;  // 页面根

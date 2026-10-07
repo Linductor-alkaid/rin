@@ -20,6 +20,7 @@
 #include "navigation.hpp"
 #include "node_canvas.hpp"
 #include "pose_view.hpp"
+#include "viewer_components.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -440,24 +441,8 @@ void ViewerContext::pump() {
         if (sourceRouterRevision != workflowCanvas.revision) {
             refreshSourceRouter(*this);
         }
-        rin::WorkflowEvent workflowEvent;
-        if (workflow->tryLoadEvent(workflowEvent)) {
-            const std::string line = workflowEventLine(workflowEvent);
-            if (line != workflowCanvas.lastEvent) {
-                workflowCanvas.lastEvent = line;
-                app::requestUpdate();
-            }
-            workflowCanvas.failures.applyEvent(workflowEvent);
-            if (workflowEvent.kind == rin::WorkflowEventKind::GraphApplied &&
-                workflowCanvas.graphPending) {
-                workflowCanvas.graphPending = false;
-                app::requestUpdate();
-            }
-        }
-        // 待生效标注随引擎离开 Running 一并清除（stop 排空待生效队列，画布图
-        // 即待运行图；Failed 下待生效队列同样丢弃，契约 applyGraph 状态分支）。
-        if (workflowCanvas.graphPending && workflow->state() != rin::WorkflowEngineState::Running) {
-            workflowCanvas.graphPending = false;
+        // 引擎事件消费：pumpWorkflowEvents 唯一实现（M12/CR-37；测试同源消费）。
+        if (pumpWorkflowEvents(workflowCanvas, *workflow)) {
             app::requestUpdate();
         }
         // 监看器预览消费（M11/DEC-021 §5.6 替代）：Running 逐监看器拉取最新
@@ -742,7 +727,7 @@ void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
                     .radius(kRadiusLg)
                     .color(dark().menu)
                     .border(kBorderHairline, dark().border)
-                    .shadow(18.0f, 10.0f, 8.0f, {0.0f, 0.0f, 0.0f, 0.35f})
+                    .shadow(kOverlayShadowOffsetX, kOverlayShadowOffsetY, kOverlayShadowBlur, kOverlayShadowColor)
                     .build();
                 for (int index = 0; index < count; ++index) {
                     const bool active = index == selectedIndex;
@@ -770,29 +755,13 @@ void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
 
 void composeIntrinsicsCard(eui::Ui& ui, const ViewerContext& ctx, float width, float height,
                            float x, float y) {
-    const float pad = kSpace3;
-    const float titleHeight = kFontSm + kSpace1;
-    const float rowHeight = kFontBase + kSpace2;
-    const float valueX = 96.0f;
-
     ui.stack("intrinsics")
         .position(x, y)
         .size(width, height)
         .content([&] {
-            ui.rect("intrinsics.card")
-                .size(width, height)
-                .radius(kRadiusXl)
-                .color(dark().card)
-                .border(kBorderHairline, dark().cardBorder)
-                .build();
-            ui.text("intrinsics.title")
-                .position(pad, pad)
-                .size(width - pad * 2.0f, titleHeight)
-                .text("Intrinsics")
-                .fontSize(kFontSm)
-                .fontWeight(kWeightSemibold)
-                .color(dark().fgSubtle)
-                .build();
+            // 卡片底 + 标题 + 名称/值行列表：共享脚手架（M12/CR-33、CR-38）。
+            const CardGeometry card =
+                composeCardShell(ui, dark(), "intrinsics", "Intrinsics", width, height);
 
             const rin::StreamIntrinsics streams[] = {
                 ctx.hasIntrinsics ? ctx.intrinsics.color : rin::StreamIntrinsics{},
@@ -802,26 +771,26 @@ void composeIntrinsicsCard(eui::Ui& ui, const ViewerContext& ctx, float width, f
             const char* ids[] = {"color", "depth"};
             for (int index = 0; index < 2; ++index) {
                 const float rowY =
-                    pad + titleHeight + kSpace2 + static_cast<float>(index) * rowHeight;
+                    card.contentTop + static_cast<float>(index) * (kFontBase + kSpace2);
                 ui.text(std::string("intrinsics.") + ids[index] + ".name")
-                    .position(pad, rowY)
-                    .size(valueX - pad - kSpace2, rowHeight)
+                    .position(card.pad, rowY)
+                    .size(kLabeledRowsValueX - card.pad - kSpace2, kFontBase + kSpace2)
                     .text(names[index])
                     .fontSize(kFontCaption)
                     .fontWeight(kWeightMedium)
                     .color(dark().fgSubtle)
                     .build();
                 ui.text(std::string("intrinsics.") + ids[index] + ".values")
-                    .position(valueX, rowY)
-                    .size(width - valueX - pad, rowHeight)
+                    .position(kLabeledRowsValueX, rowY)
+                    .size(width - kLabeledRowsValueX - card.pad, kFontBase + kSpace2)
                     .text(formatIntrinsicsValues(streams[index]))
                     .fontSize(kFontBase)
                     .color(dark().fg)
                     .build();
                 if (streams[index].valid()) {
                     ui.text(std::string("intrinsics.") + ids[index] + ".model")
-                        .position(width - pad - 130.0f, rowY)
-                        .size(130.0f, rowHeight)
+                        .position(width - card.pad - kLabeledRowsMetaWidth, rowY)
+                        .size(kLabeledRowsMetaWidth, kFontBase + kSpace2)
                         .text(std::string("[") + distortionName(streams[index].model) + "]")
                         .fontSize(kFontXs)
                         .color(dark().fgSubtlest)
@@ -888,20 +857,9 @@ void composeSettingsPage(eui::Ui& ui, float ox, float y, float width) {
         .position(ox, y)
         .size(width, preferencesHeight)
         .content([&] {
-            ui.rect("settings.preferences.card")
-                .size(width, preferencesHeight)
-                .radius(kRadiusXl)
-                .color(tokens.card)
-                .border(kBorderHairline, tokens.cardBorder)
-                .build();
-            ui.text("settings.preferences.title")
-                .position(pad, pad)
-                .size(width - pad * 2.0f, titleHeight)
-                .text("Preferences")
-                .fontSize(kFontSm)
-                .fontWeight(kWeightSemibold)
-                .color(tokens.fgSubtle)
-                .build();
+            // 卡片底 + 标题：共享脚手架（M12/CR-33；同函数两卡同款）。
+            composeCardShell(ui, tokens, "settings.preferences", "Preferences", width,
+                             preferencesHeight);
             ui.text("settings.preferences.paletteLabel")
                 .position(pad, 48.0f)
                 .size(150.0f, 38.0f)
@@ -924,20 +882,7 @@ void composeSettingsPage(eui::Ui& ui, float ox, float y, float width) {
         .position(ox, y + preferencesHeight + kSpace3)
         .size(width, aboutHeight)
         .content([&] {
-            ui.rect("settings.about.card")
-                .size(width, aboutHeight)
-                .radius(kRadiusXl)
-                .color(tokens.card)
-                .border(kBorderHairline, tokens.cardBorder)
-                .build();
-            ui.text("settings.about.title")
-                .position(pad, pad)
-                .size(width - pad * 2.0f, titleHeight)
-                .text("About")
-                .fontSize(kFontSm)
-                .fontWeight(kWeightSemibold)
-                .color(tokens.fgSubtle)
-                .build();
+            composeCardShell(ui, tokens, "settings.about", "About", width, aboutHeight);
             ui.text("settings.about.name")
                 .position(pad, 46.0f)
                 .size(width - pad * 2.0f, kFontLg + kSpace2)

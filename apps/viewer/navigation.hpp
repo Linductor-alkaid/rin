@@ -137,7 +137,7 @@ inline void composeNavRail(eui::Ui& ui, const NavigationState& nav, float height
                 const bool active = index == nav.selectedIndex();
                 const float itemY = itemsTop + static_cast<float>(index) * itemHeight;
                 const std::string id = std::string("nav.rail.item.") + info.id;
-                const eui::Color transparent{0.0f, 0.0f, 0.0f, 0.0f};
+                const eui::Color& transparent = theme::kTransparent;
 
                 ui.stack(id)
                     .position(itemX, itemY)

@@ -13,6 +13,7 @@
 // 世界系 Z 轴向上；六轴 yaw 初值为 0 且绕重力轴漂移不可观，读数如实显示。
 
 #include "pose_view.hpp"
+#include "viewer_components.hpp"
 #include "viewer_theme.hpp"
 
 #include <eui_neo.h>
@@ -87,35 +88,20 @@ inline void composeImuPanelCard(eui::Ui& ui, const PoseViewState& pose, float wi
                                 float height, float x, float y) {
     using namespace viewer::theme;  // 语义令牌（DEC-005）；函数内引入，不泄漏头文件作用域
     const ThemeTokens& tokens = dark();
-    const float pad = kSpace3;
-    const float titleHeight = kFontSm + kSpace1;
-    const float rowHeight = kFontBase + kSpace2;
-    const float valueX = 96.0f;
 
     ui.stack("imu")
         .position(x, y)
         .size(width, height)
         .content([&] {
-            ui.rect("imu.card")
-                .size(width, height)
-                .radius(kRadiusXl)
-                .color(tokens.card)
-                .border(kBorderHairline, tokens.cardBorder)
-                .build();
-            ui.text("imu.title")
-                .position(pad, pad)
-                .size(width - pad * 2.0f, titleHeight)
-                .text("IMU")
-                .fontSize(kFontSm)
-                .fontWeight(kWeightSemibold)
-                .color(tokens.fgSubtle)
-                .build();
+            // 卡片底 + 标题 + 名称/值行列表：共享脚手架（M12/CR-33、CR-38）。
+            const CardGeometry card = composeCardShell(ui, tokens, "imu", "IMU", width, height);
 
             const bool hasSnapshot = pose.available && pose.snapshot.valid();
             const ImuAttitudeDegrees attitude =
                 hasSnapshot ? attitudeDegreesFromOrientation(pose.snapshot.orientation)
                             : ImuAttitudeDegrees{};
             const char* names[] = {"Gyro", "Accel", "R·P·Y", "Quat"};
+            const char* rowIds[] = {"row0", "row1", "row2", "row3"};
             const std::string values[] = {
                 hasSnapshot ? formatSourceRate(pose.snapshot.sources.gyroHz,
                                                pose.snapshot.sources.gyroSamples)
@@ -127,25 +113,8 @@ inline void composeImuPanelCard(eui::Ui& ui, const PoseViewState& pose, float wi
                 hasSnapshot ? formatOrientationQuaternion(pose.snapshot.orientation)
                             : std::string("n/a"),
             };
-            for (std::size_t index = 0; index < 4; ++index) {
-                const float rowY = pad + titleHeight + kSpace2 +
-                                   static_cast<float>(index) * rowHeight;
-                ui.text("imu.row" + std::to_string(index) + ".name")
-                    .position(pad, rowY)
-                    .size(valueX - pad - kSpace2, rowHeight)
-                    .text(names[index])
-                    .fontSize(kFontCaption)
-                    .fontWeight(kWeightMedium)
-                    .color(tokens.fgSubtle)
-                    .build();
-                ui.text("imu.row" + std::to_string(index) + ".value")
-                    .position(valueX, rowY)
-                    .size(width - valueX - pad, rowHeight)
-                    .text(values[index])
-                    .fontSize(kFontBase)
-                    .color(tokens.fg)
-                    .build();
-            }
+            composeLabeledRows(ui, tokens, "imu", card.pad, card.contentTop, width,
+                               kLabeledRowsValueX, 4, rowIds, names, values);
 
             if (hasSnapshot) {
                 // 快照序号（姿态通道会话单调递增）：通道活性的可观察读数。
@@ -153,8 +122,8 @@ inline void composeImuPanelCard(eui::Ui& ui, const PoseViewState& pose, float wi
                 std::snprintf(sequence, sizeof(sequence), "#%llu",
                               static_cast<unsigned long long>(pose.snapshot.sequence));
                 ui.text("imu.sequence")
-                    .position(width - pad - 130.0f, pad + titleHeight + kSpace2)
-                    .size(130.0f, rowHeight)
+                    .position(width - card.pad - kLabeledRowsMetaWidth, card.contentTop)
+                    .size(kLabeledRowsMetaWidth, kFontBase + kSpace2)
                     .text(sequence)
                     .fontSize(kFontXs)
                     .color(tokens.fgSubtlest)
