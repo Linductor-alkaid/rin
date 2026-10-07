@@ -11,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,9 @@
 // FFT 滤波节点实现内；仅实现细节，不进公开头（RULE-01）。
 #include <kiss_fft.h>
 #include <kiss_fftndr.h>
+
+// reflect-101 边界下标与一维高斯核的唯一实现（M12/CR-02、CR-03 收敛，冻结公式）。
+#include "sample_kernels.hpp"
 
 namespace rin {
 
@@ -63,11 +67,33 @@ std::uint8_t quantizeU8(double value) {
     return static_cast<std::uint8_t>(std::clamp(quantized, 0.0, 255.0));
 }
 
-/// 构造期参数读取：声明缺失或值种类错位（运行期直接构造的实例）显式失败，
-/// 由 buildNodeGraph 转为校验问题（BadParam）。
-std::int64_t requiredInteger(const NodeDescriptor& descriptor, const NodeInstance& instance,
-                             const std::string& paramId) {
-    const std::optional<std::int64_t> value = paramInteger(descriptor, instance, paramId);
+/// 构造期参数类型化读取（M12/CR-04）：按 T 分派到 image_node 的类型化访问器；
+/// 不支持的参数种类在编译期失败。
+template <typename T>
+std::optional<T> typedRead(const NodeDescriptor& descriptor, const NodeInstance& instance,
+                           const std::string& paramId) {
+    if constexpr (std::is_same_v<T, bool>) {
+        return paramBoolean(descriptor, instance, paramId);
+    } else if constexpr (std::is_same_v<T, std::int64_t>) {
+        return paramInteger(descriptor, instance, paramId);
+    } else if constexpr (std::is_same_v<T, double>) {
+        return paramReal(descriptor, instance, paramId);
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        return paramEnumeration(descriptor, instance, paramId);
+    } else if constexpr (std::is_same_v<T, std::vector<double>>) {
+        return paramRealArray(descriptor, instance, paramId);
+    } else {
+        static_assert(sizeof(T) == 0, "unsupported parameter kind");
+    }
+}
+
+/// 构造期必选参数读取的唯一包装（M12/CR-04）：声明缺失或值种类错位（运行期
+/// 直接构造的实例）显式失败，由 buildNodeGraph 转为校验问题（BadParam）。
+/// 范围/取值合法性校验仍留在调用点。
+template <typename T>
+T requiredParam(const NodeDescriptor& descriptor, const NodeInstance& instance,
+                const std::string& paramId) {
+    const std::optional<T> value = typedRead<T>(descriptor, instance, paramId);
     if (!value) {
         throw std::invalid_argument("'" + descriptor.typeId + "': parameter '" + paramId +
                                     "' is missing or has a mismatched kind");
@@ -75,15 +101,16 @@ std::int64_t requiredInteger(const NodeDescriptor& descriptor, const NodeInstanc
     return *value;
 }
 
+/// 构造期整数参数读取（薄包装）。
+std::int64_t requiredInteger(const NodeDescriptor& descriptor, const NodeInstance& instance,
+                             const std::string& paramId) {
+    return requiredParam<std::int64_t>(descriptor, instance, paramId);
+}
+
 /// 实数参数构造期读取（M10 深度域节点用；语义同 requiredInteger）。
 double requiredReal(const NodeDescriptor& descriptor, const NodeInstance& instance,
                     const std::string& paramId) {
-    const std::optional<double> value = paramReal(descriptor, instance, paramId);
-    if (!value) {
-        throw std::invalid_argument("'" + descriptor.typeId + "': parameter '" + paramId +
-                                    "' is missing or has a mismatched kind");
-    }
-    return *value;
+    return requiredParam<double>(descriptor, instance, paramId);
 }
 
 /// 裁切（M4-03）：Rgba8 → Rgba8，ROI 参数构造期定型；图像尺寸是运行期数据，
@@ -151,37 +178,27 @@ class DownscaleImageNode final : public IImageNode {
 public:
     DownscaleImageNode(const NodeDescriptor& descriptor, const NodeInstance& instance)
         : descriptor_(descriptor) {
-        const std::optional<std::string> interpolation =
-            paramEnumeration(descriptor_, instance, "interpolation");
-        if (!interpolation) {
-            throw std::invalid_argument("'" + descriptor_.typeId +
-                                        "': parameter 'interpolation'"
-                                        " is missing or has a mismatched kind");
-        }
-        if (*interpolation == "nearest") {
+        const std::string interpolation =
+            requiredParam<std::string>(descriptor_, instance, "interpolation");
+        if (interpolation == "nearest") {
             interpolation_ = DownscaleInterpolation::Nearest;
-        } else if (*interpolation == "bilinear") {
+        } else if (interpolation == "bilinear") {
             interpolation_ = DownscaleInterpolation::Bilinear;
         } else {
             throw std::invalid_argument("'" + descriptor_.typeId +
                                         "': unknown interpolation"
                                         " option '" +
-                                        *interpolation + "'");
+                                        interpolation + "'");
         }
-        const std::optional<double> scale = paramReal(descriptor_, instance, "scale");
-        if (!scale) {
-            throw std::invalid_argument("'" + descriptor_.typeId +
-                                        "': parameter 'scale'"
-                                        " is missing or has a mismatched kind");
-        }
+        const double scale = requiredParam<double>(descriptor_, instance, "scale");
         // 图准入范围为 [0.1,1.0]；构造期复核 (0,1] 为防御运行期直接构造的实例。
-        if (!std::isfinite(*scale) || *scale <= 0.0 || *scale > 1.0) {
+        if (!std::isfinite(scale) || scale <= 0.0 || scale > 1.0) {
             throw std::invalid_argument("'" + descriptor_.typeId +
                                         "': scale must be finite"
                                         " in (0, 1], got " +
-                                        std::to_string(*scale));
+                                        std::to_string(scale));
         }
-        scale_ = *scale;
+        scale_ = scale;
     }
 
     [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
@@ -254,9 +271,8 @@ private:
                         fx * (1.0 - fy) * row0[static_cast<std::size_t>(x1) * es + c] +
                         (1.0 - fx) * fy * row1[static_cast<std::size_t>(x0) * es + c] +
                         fx * fy * row1[static_cast<std::size_t>(x1) * es + c];
-                    // 凸组合下 v ∈ [0,255]；clamp 为浮点防御。
-                    const double quantized = std::floor(v + 0.5);
-                    dst[c] = static_cast<std::uint8_t>(std::clamp(quantized, 0.0, 255.0));
+                    // 凸组合下 v ∈ [0,255]；clamp 为浮点防御（quantizeU8 共用）。
+                    dst[c] = quantizeU8(v);
                 }
             }
         }
@@ -281,22 +297,8 @@ enum class ConvBorder {
     Zero,     /// 越界像素按 0（黑）计，对应系数项不贡献累加和。
 };
 
-/// Reflect-101 采样下标：周期 2(n−1) 折返（−1→1、n→n−2）；n=1 时一律取 0
-/// （零宽高在 ImageU8 层已被拒绝，此为防御）。
-std::int64_t reflectIndex(std::int64_t index, std::int64_t size) {
-    if (size <= 1) {
-        return 0;
-    }
-    const std::int64_t period = 2 * (size - 1);
-    std::int64_t folded = index % period;
-    if (folded < 0) {
-        folded += period;
-    }
-    if (folded >= size) {
-        folded = period - folded;
-    }
-    return folded;
-}
+/// Reflect-101 采样下标：唯一实现见 sample_kernels.hpp（M12/CR-02 收敛，
+/// M4-04 冻结公式；−1→1、n→n−2，n<=1 一律取 0）。
 
 /// 自定义卷积（M4-04）：Gray8 → Gray8，核尺寸/系数/边界策略构造期定型；输出
 /// 与输入同尺寸。执行为相关语义（核不翻转，系数矩阵与邻域逐点对应），double
@@ -305,43 +307,33 @@ class ConvKernelImageNode final : public IImageNode {
 public:
     ConvKernelImageNode(const NodeDescriptor& descriptor, const NodeInstance& instance)
         : descriptor_(descriptor) {
-        const std::optional<std::string> size = paramEnumeration(descriptor_, instance, "size");
-        if (!size) {
-            throw std::invalid_argument("'" + descriptor_.typeId +
-                                        "': parameter 'size'"
-                                        " is missing or has a mismatched kind");
-        }
-        if (*size == "1") {
+        const std::string size = requiredParam<std::string>(descriptor_, instance, "size");
+        if (size == "1") {
             kernelSize_ = 1;
-        } else if (*size == "3") {
+        } else if (size == "3") {
             kernelSize_ = 3;
-        } else if (*size == "5") {
+        } else if (size == "5") {
             kernelSize_ = 5;
         } else {
             throw std::invalid_argument("'" + descriptor_.typeId + "': unknown size option '" +
-                                        *size + "'");
+                                        size + "'");
         }
-        const std::optional<std::vector<double>> kernel =
-            paramRealArray(descriptor_, instance, "kernel");
-        if (!kernel) {
-            throw std::invalid_argument("'" + descriptor_.typeId +
-                                        "': parameter 'kernel'"
-                                        " is missing or has a mismatched kind");
-        }
-        if (kernel->size() != static_cast<std::size_t>(kernelSize_) * kernelSize_) {
+        const std::vector<double> kernel =
+            requiredParam<std::vector<double>>(descriptor_, instance, "kernel");
+        if (kernel.size() != static_cast<std::size_t>(kernelSize_) * kernelSize_) {
             throw std::invalid_argument("'" + descriptor_.typeId + "': kernel expects " +
                                         std::to_string(kernelSize_ * kernelSize_) +
                                         " coefficients (row-major " + std::to_string(kernelSize_) +
                                         "x" + std::to_string(kernelSize_) + "), got " +
-                                        std::to_string(kernel->size()));
+                                        std::to_string(kernel.size()));
         }
-        for (const double coefficient : *kernel) {
+        for (const double coefficient : kernel) {
             if (!std::isfinite(coefficient)) {
                 throw std::invalid_argument("'" + descriptor_.typeId +
                                             "': kernel coefficients must be finite");
             }
         }
-        kernel_ = *kernel;
+        kernel_ = kernel;
         border_ = requiredBorder(descriptor_, instance);
     }
 
@@ -404,23 +396,18 @@ private:
     /// 生效值并防御非法选项/种类错位）。
     static ConvBorder requiredBorder(const NodeDescriptor& descriptor,
                                      const NodeInstance& instance) {
-        const std::optional<std::string> border = paramEnumeration(descriptor, instance, "border");
-        if (!border) {
-            throw std::invalid_argument("'" + descriptor.typeId +
-                                        "': parameter 'border'"
-                                        " is missing or has a mismatched kind");
-        }
-        if (*border == "clamp") {
+        const std::string border = requiredParam<std::string>(descriptor, instance, "border");
+        if (border == "clamp") {
             return ConvBorder::Clamp;
         }
-        if (*border == "reflect") {
+        if (border == "reflect") {
             return ConvBorder::Reflect;
         }
-        if (*border == "zero") {
+        if (border == "zero") {
             return ConvBorder::Zero;
         }
         throw std::invalid_argument("'" + descriptor.typeId + "': unknown border option '" +
-                                    *border + "'");
+                                    border + "'");
     }
 
     /// 采样下标解析：越界按策略映射；Zero 策略返回 -1 哨兵（按黑计）。
@@ -430,7 +417,7 @@ private:
             case ConvBorder::Clamp:
                 return std::clamp(index, std::int64_t{0}, bound - 1);
             case ConvBorder::Reflect:
-                return reflectIndex(index, bound);
+                return detail::reflectIndex101(index, bound);
             case ConvBorder::Zero:
                 return (index >= 0 && index < bound) ? index : std::int64_t{-1};
         }
@@ -450,33 +437,23 @@ class GaussianBlurImageNode final : public IImageNode {
 public:
     GaussianBlurImageNode(const NodeDescriptor& descriptor, const NodeInstance& instance)
         : descriptor_(descriptor) {
-        const std::optional<std::int64_t> radius = paramInteger(descriptor_, instance, "radius");
-        if (!radius) {
-            throw std::invalid_argument("'" + descriptor_.typeId +
-                                        "': parameter 'radius'"
-                                        " is missing or has a mismatched kind");
-        }
+        const std::int64_t radius = requiredParam<std::int64_t>(descriptor_, instance, "radius");
         // 图准入范围 [1,10]；构造期复核为防御运行期直接构造的实例。
-        if (*radius < 1 || *radius > 10) {
+        if (radius < 1 || radius > 10) {
             throw std::invalid_argument("'" + descriptor_.typeId +
                                         "': radius must be in"
                                         " [1, 10], got " +
-                                        std::to_string(*radius));
+                                        std::to_string(radius));
         }
-        radius_ = static_cast<int>(*radius);
-        const std::optional<double> sigma = paramReal(descriptor_, instance, "sigma");
-        if (!sigma) {
-            throw std::invalid_argument("'" + descriptor_.typeId +
-                                        "': parameter 'sigma'"
-                                        " is missing or has a mismatched kind");
-        }
-        if (!std::isfinite(*sigma) || *sigma < 0.0 || *sigma > 10.0) {
+        radius_ = static_cast<int>(radius);
+        const double sigma = requiredParam<double>(descriptor_, instance, "sigma");
+        if (!std::isfinite(sigma) || sigma < 0.0 || sigma > 10.0) {
             throw std::invalid_argument("'" + descriptor_.typeId +
                                         "': sigma must be finite"
                                         " in [0, 10], got " +
-                                        std::to_string(*sigma));
+                                        std::to_string(sigma));
         }
-        sigma_ = *sigma;
+        sigma_ = sigma;
     }
 
     [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
@@ -541,25 +518,11 @@ public:
     }
 
 private:
-    /// 一维高斯核：G[i] ∝ exp(−(i−r)²/(2σ²)) 归一化 Σ=1；sigma=0 为 δ 核
-    /// （极限语义，输出逐像素恒等）。二维核为该核与自身的外积（对称可分离）。
+    /// 一维高斯核：gaussianKernel1D 唯一实现（M12/CR-03；G[i] ∝
+    /// exp(−(i−r)²/(2σ²)) 归一化 Σ=1，sigma=0 为 δ 核）。二维核为该核与自身
+    /// 的外积（对称可分离）。
     [[nodiscard]] std::vector<double> gaussianKernel() const {
-        const std::size_t size = static_cast<std::size_t>(2 * radius_ + 1);
-        std::vector<double> kernel(size, 0.0);
-        if (sigma_ == 0.0) {
-            kernel[static_cast<std::size_t>(radius_)] = 1.0;
-            return kernel;
-        }
-        double sum = 0.0;
-        for (std::size_t i = 0; i < size; ++i) {
-            const double delta = static_cast<double>(i) - static_cast<double>(radius_);
-            kernel[i] = std::exp(-(delta * delta) / (2.0 * sigma_ * sigma_));
-            sum += kernel[i];
-        }
-        for (double& value : kernel) {
-            value /= sum;
-        }
-        return kernel;
+        return detail::gaussianKernel1D(static_cast<std::size_t>(radius_), sigma_);
     }
 
     NodeDescriptor descriptor_;  /// 值拷贝：工厂与节点实例生命周期解耦。
@@ -795,17 +758,13 @@ private:
     [[nodiscard]] static double requireUnitFrequency(const NodeDescriptor& descriptor,
                                                      const NodeInstance& instance,
                                                      const std::string& paramId) {
-        const std::optional<double> value = paramReal(descriptor, instance, paramId);
-        if (!value) {
-            throw std::invalid_argument("'" + descriptor.typeId + "': parameter '" + paramId +
-                                        "' is missing or has a mismatched kind");
-        }
-        if (!std::isfinite(*value) || *value < 0.0 || *value > 1.0) {
+        const double value = requiredParam<double>(descriptor, instance, paramId);
+        if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
             throw std::invalid_argument("'" + descriptor.typeId + "': parameter '" + paramId +
                                         "' must be finite in [0, 1], got " +
-                                        std::to_string(*value));
+                                        std::to_string(value));
         }
-        return *value;
+        return value;
     }
 
     /// 掩膜判据（理想锐截止；边界归属与掩膜代数恒等式见 §7）。
@@ -869,108 +828,27 @@ const ImageU8& depthInput(const NodeDescriptor& descriptor, const std::vector<Im
     return image;
 }
 
-/// O1 无效深度填充（M8 冻结公式；参数 far_value / invalid_below）。
-class DepthFillInvalidNode final : public IImageNode {
+/// 深度域无状态节点唯一骨架（M12/CR-05）：构造注入 M8 冻结算子（工厂在构造期
+/// 读取参数并由闭包捕获定型），apply 固定换装管线 depthInput →
+/// depthFrameFromImage → 算子 → imageFromDepthFrame。有状态节点
+/// （depth_history）不适用，保持独立类。
+class DepthOpNode final : public IImageNode {
 public:
-    DepthFillInvalidNode(NodeDescriptor descriptor, const NodeInstance& instance)
-        : descriptor_(std::move(descriptor)),
-          farValue_(requiredReal(descriptor_, instance, "far_value")),
-          invalidBelow_(requiredReal(descriptor_, instance, "invalid_below")) {}
+    using DepthOp = std::function<DepthFrameF32(const DepthFrameF32&)>;
+
+    DepthOpNode(NodeDescriptor descriptor, DepthOp op)
+        : descriptor_(std::move(descriptor)), op_(std::move(op)) {}
 
     [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
+
     [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
-        return {imageFromDepthFrame(fillDepthInvalid(
-            depthFrameFromImage(depthInput(descriptor_, inputs)), farValue_, invalidBelow_))};
+        return {
+            imageFromDepthFrame(op_(depthFrameFromImage(depthInput(descriptor_, inputs))))};
     }
 
 private:
     NodeDescriptor descriptor_;
-    double farValue_;
-    double invalidBelow_;
-};
-
-/// O2 面积加权降采样（仅缩小；参数 width / height，冻结公式 = cv2 INTER_AREA）。
-class DepthResizeNode final : public IImageNode {
-public:
-    DepthResizeNode(NodeDescriptor descriptor, const NodeInstance& instance)
-        : descriptor_(std::move(descriptor)),
-          width_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "width"))),
-          height_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "height"))) {}
-
-    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
-    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
-        return {imageFromDepthFrame(resizeDepthArea(
-            depthFrameFromImage(depthInput(descriptor_, inputs)), width_, height_))};
-    }
-
-private:
-    NodeDescriptor descriptor_;
-    std::uint32_t width_;
-    std::uint32_t height_;
-};
-
-/// O3 裁切（参数 up / down / left / right，与 noise_model.crop_and_resize 索引逐位一致）。
-class DepthCropNode final : public IImageNode {
-public:
-    DepthCropNode(NodeDescriptor descriptor, const NodeInstance& instance)
-        : descriptor_(std::move(descriptor)),
-          up_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "up"))),
-          down_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "down"))),
-          left_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "left"))),
-          right_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "right"))) {}
-
-    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
-    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
-        return {imageFromDepthFrame(cropDepth(depthFrameFromImage(depthInput(descriptor_, inputs)),
-                                              up_, down_, left_, right_))};
-    }
-
-private:
-    NodeDescriptor descriptor_;
-    std::uint32_t up_;
-    std::uint32_t down_;
-    std::uint32_t left_;
-    std::uint32_t right_;
-};
-
-/// O4 可分离高斯模糊（reflect-101，σ=0 恒等；参数 radius / sigma）。
-class DepthBlurNode final : public IImageNode {
-public:
-    DepthBlurNode(NodeDescriptor descriptor, const NodeInstance& instance)
-        : descriptor_(std::move(descriptor)),
-          radius_(static_cast<std::uint32_t>(requiredInteger(descriptor_, instance, "radius"))),
-          sigma_(requiredReal(descriptor_, instance, "sigma")) {}
-
-    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
-    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
-        return {imageFromDepthFrame(gaussianBlurDepth(
-            depthFrameFromImage(depthInput(descriptor_, inputs)), radius_, sigma_))};
-    }
-
-private:
-    NodeDescriptor descriptor_;
-    std::uint32_t radius_;
-    double sigma_;
-};
-
-/// O5 裁切归一化（参数 near / far）。
-class DepthNormalizeNode final : public IImageNode {
-public:
-    DepthNormalizeNode(NodeDescriptor descriptor, const NodeInstance& instance)
-        : descriptor_(std::move(descriptor)),
-          near_(requiredReal(descriptor_, instance, "near")),
-          far_(requiredReal(descriptor_, instance, "far")) {}
-
-    [[nodiscard]] const NodeDescriptor& descriptor() const noexcept override { return descriptor_; }
-    [[nodiscard]] std::vector<ImageU8> apply(const std::vector<ImageU8>& inputs) const override {
-        return {imageFromDepthFrame(
-            clipNormalizeDepth(depthFrameFromImage(depthInput(descriptor_, inputs)), near_, far_))};
-    }
-
-private:
-    NodeDescriptor descriptor_;
-    double near_;
-    double far_;
+    DepthOp op_;
 };
 
 /// O7 时序历史堆叠（有状态，IStatefulImageNode；DEC-020 决策 3）：参数
@@ -990,7 +868,9 @@ public:
               static_cast<std::size_t>(requiredInteger(descriptor_, instance, "sample_skip"))),
           sampleDelay_(
               static_cast<std::size_t>(requiredInteger(descriptor_, instance, "sample_delay"))) {
-        // 约束镜像 PolicyDepthConfig::valid() 的历史子集（乘法回绕钳制同款）。
+        // 约束与 detail::historyParamsValid（PolicyDepthConfig::valid() 唯一判据，
+        // M12/CR-06）逐子句对应；分组抛出保留可定位消息，末尾以总判据兜底
+        // （两处仅消息不同，约束集合同源）。
         if (historyLength_ == 0 || historyLength_ > 4096) {
             throw std::invalid_argument("depth_history history_length must be in [1, 4096]");
         }
@@ -1001,9 +881,8 @@ public:
             sampleDelay_ > historyLength_) {
             throw std::invalid_argument("depth_history sampling exceeds history length");
         }
-        const std::uint64_t framesNeeded =
-            (static_cast<std::uint64_t>(sampleCount_) - 1u) * sampleSkip_ + 1u + sampleDelay_;
-        if (framesNeeded > historyLength_) {
+        if (!detail::historyParamsValid(historyLength_, sampleCount_, sampleSkip_,
+                                        sampleDelay_)) {
             throw std::invalid_argument(
                 "depth_history (sample_count-1)*sample_skip+1+delay"
                 " must be <= history_length");
@@ -1035,22 +914,18 @@ public:
                 std::copy_n(depthF32Row(image, y), planeWidth_,
                             dst + static_cast<std::size_t>(y) * planeWidth_);
             }
-            head_ = (head_ + 1u) % historyLength_;
-            if (count_ < historyLength_) {
-                ++count_;
-            }
+            // 入环推进唯一实现（M12/CR-06）。
+            detail::advanceHistoryRing(head_, count_, historyLength_);
             lastPixels_ = image.pixels();
         }
 
-        // 抽样输出：竖直堆叠（M8 O7 下标公式；oldest 顶、最新底）。
+        // 抽样输出：竖直堆叠（M8 O7 下标公式唯一实现；oldest 顶、最新底）。
         const std::size_t frameSize = static_cast<std::size_t>(planeWidth_) * planeHeight_;
-        const std::size_t first = (head_ + historyLength_ - count_) % historyLength_;
-        const std::size_t pad = historyLength_ - count_;
         std::vector<std::uint8_t> outBytes(sampleCount_ * frameSize * 4u);
         for (std::size_t i = 0; i < sampleCount_; ++i) {
-            const std::size_t idx =
-                historyLength_ - ((sampleCount_ - 1u - i) * sampleSkip_) - 1u - sampleDelay_;
-            const std::size_t pos = idx < pad ? first : (first + (idx - pad)) % historyLength_;
+            const std::size_t pos = detail::historySamplePos(historyLength_, count_, head_, i,
+                                                             sampleCount_, sampleSkip_,
+                                                             sampleDelay_);
             float* dstRow = reinterpret_cast<float*>(outBytes.data() + i * frameSize * 4u);
             std::copy_n(ring_.data() + pos * frameSize, frameSize, dstRow);
         }
@@ -1123,19 +998,55 @@ std::unique_ptr<IImageNode> makeDefaultImageNode(const NodeDescriptor& descripto
         return std::make_unique<ViewerNode>(descriptor);  // 无参数（M11 目录）。
     }
     if (descriptor.typeId == "depth_fill_invalid") {
-        return std::make_unique<DepthFillInvalidNode>(descriptor, instance);
+        // O1 无效深度填充（M8 冻结公式；参数 far_value / invalid_below）。
+        const double farValue = requiredReal(descriptor, instance, "far_value");
+        const double invalidBelow = requiredReal(descriptor, instance, "invalid_below");
+        return std::make_unique<DepthOpNode>(
+            descriptor, [farValue, invalidBelow](const DepthFrameF32& frame) {
+                return fillDepthInvalid(frame, farValue, invalidBelow);
+            });
     }
     if (descriptor.typeId == "depth_resize") {
-        return std::make_unique<DepthResizeNode>(descriptor, instance);
+        // O2 面积加权降采样（仅缩小；参数 width / height，冻结公式 = cv2 INTER_AREA）。
+        const auto width = static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "width"));
+        const auto height =
+            static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "height"));
+        return std::make_unique<DepthOpNode>(
+            descriptor, [width, height](const DepthFrameF32& frame) {
+                return resizeDepthArea(frame, width, height);
+            });
     }
     if (descriptor.typeId == "depth_crop") {
-        return std::make_unique<DepthCropNode>(descriptor, instance);
+        // O3 裁切（参数 up / down / left / right，与 noise_model.crop_and_resize
+        // 索引逐位一致）。
+        const auto up = static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "up"));
+        const auto down = static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "down"));
+        const auto left = static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "left"));
+        const auto right =
+            static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "right"));
+        return std::make_unique<DepthOpNode>(
+            descriptor, [up, down, left, right](const DepthFrameF32& frame) {
+                return cropDepth(frame, up, down, left, right);
+            });
     }
     if (descriptor.typeId == "depth_gaussian_blur") {
-        return std::make_unique<DepthBlurNode>(descriptor, instance);
+        // O4 可分离高斯模糊（reflect-101，σ=0 恒等；参数 radius / sigma）。
+        const auto radius =
+            static_cast<std::uint32_t>(requiredInteger(descriptor, instance, "radius"));
+        const double sigma = requiredReal(descriptor, instance, "sigma");
+        return std::make_unique<DepthOpNode>(
+            descriptor, [radius, sigma](const DepthFrameF32& frame) {
+                return gaussianBlurDepth(frame, radius, sigma);
+            });
     }
     if (descriptor.typeId == "depth_normalize") {
-        return std::make_unique<DepthNormalizeNode>(descriptor, instance);
+        // O5 裁切归一化（参数 near / far）。
+        const double near = requiredReal(descriptor, instance, "near");
+        const double far = requiredReal(descriptor, instance, "far");
+        return std::make_unique<DepthOpNode>(
+            descriptor, [near, far](const DepthFrameF32& frame) {
+                return clipNormalizeDepth(frame, near, far);
+            });
     }
     if (descriptor.typeId == "depth_history") {
         return std::make_unique<DepthHistoryNode>(descriptor, instance);

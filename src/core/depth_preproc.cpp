@@ -1,5 +1,8 @@
 #include "rin/depth_preproc.hpp"
 
+// reflect-101 边界下标与一维高斯核的唯一实现（M12/CR-02、CR-03 收敛，冻结公式）。
+#include "sample_kernels.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -39,22 +42,9 @@ std::uint64_t u64(std::uint32_t value) noexcept {
     return static_cast<std::uint64_t>(value);
 }
 
-/// reflect-101 边界下标（M4-04 reflectIndex 同款语义：−1→1、n→n−2；尺寸 1
-/// 的维度下标恒 0）。
-std::int64_t reflectIndex101(std::int64_t index, std::int64_t size) noexcept {
-    if (size == 1) {
-        return 0;
-    }
-    const std::int64_t period = 2 * size - 2;
-    std::int64_t m = index % period;
-    if (m < 0) {
-        m += period;
-    }
-    if (m >= size) {
-        m = period - m;
-    }
-    return m;
-}
+/// reflect-101 边界下标：唯一实现见 sample_kernels.hpp（M12/CR-02 收敛，
+/// M4-04 冻结公式：−1→1、n→n−2；n<=1 的维度下标恒 0）。
+using detail::reflectIndex101;
 
 }  // namespace
 
@@ -130,22 +120,8 @@ bool PolicyDepthConfig::valid() const noexcept {
     if (!(blurSigma >= 0.0 && blurSigma <= 10.0) || !std::isfinite(blurSigma)) {
         return false;
     }
-    if (historyLength == 0 || historyLength > 4096) {
-        return false;
-    }
-    if (sampleCount == 0 || sampleSkip == 0) {
-        return false;
-    }
-    // 乘法回绕钳制：framesNeeded = (sampleCount−1)·sampleSkip + 1 + delay 恒
-    // ≥ sampleCount 且 ≥ sampleSkip，二者超 historyLength 必然越界；钳制后
-    // 乘数均 ≤ 4096，64 位乘法无回绕。
-    if (sampleCount > historyLength || sampleSkip > historyLength || sampleDelay > historyLength) {
-        return false;
-    }
-    // 对齐 delayed_visualizable_image.check_delay_bounds 的通过条件（≤）。
-    const std::uint64_t framesNeeded =
-        (u64(sampleCount) - 1u) * u64(sampleSkip) + 1u + u64(sampleDelay);
-    if (framesNeeded > u64(historyLength)) {
+    // O7 历史参数约束唯一判据（M12/CR-06，sample_kernels.hpp）。
+    if (!detail::historyParamsValid(historyLength, sampleCount, sampleSkip, sampleDelay)) {
         return false;
     }
     return true;
@@ -282,20 +258,8 @@ DepthFrameF32 gaussianBlurDepth(const DepthFrameF32& in, std::uint32_t radius, d
         throw std::invalid_argument("gaussianBlurDepth sigma must be in [0, 10]");
     }
     const std::size_t kSize = 2u * radius + 1u;
-    std::vector<double> kernel(kSize, 0.0);
-    if (sigma == 0.0) {
-        kernel[radius] = 1.0;
-    } else {
-        double sum = 0.0;
-        for (std::size_t i = 0; i < kSize; ++i) {
-            const double delta = static_cast<double>(i) - static_cast<double>(radius);
-            kernel[i] = std::exp(-(delta * delta) / (2.0 * sigma * sigma));
-            sum += kernel[i];
-        }
-        for (double& value : kernel) {
-            value /= sum;
-        }
-    }
+    // 一维高斯核唯一实现（M12/CR-03；sigma=0 为 δ 核的极限语义）。
+    const std::vector<double> kernel = detail::gaussianKernel1D(radius, sigma);
 
     const std::uint32_t w = in.width();
     const std::uint32_t h = in.height();
@@ -404,10 +368,8 @@ void PolicyDepthHistory::append(const DepthFrameF32& frame) {
     for (std::uint32_t y = 0; y < config_.policyHeight(); ++y) {
         std::copy_n(frame.row(y), width, dst + u64(y) * u64(width));
     }
-    head_ = (head_ + 1u) % config_.historyLength;
-    if (count_ < config_.historyLength) {
-        ++count_;
-    }
+    // 入环推进唯一实现（M12/CR-06）。
+    detail::advanceHistoryRing(head_, count_, config_.historyLength);
 }
 
 std::vector<float> PolicyDepthHistory::sample() const {
@@ -417,15 +379,13 @@ std::vector<float> PolicyDepthHistory::sample() const {
     if (count_ == 0) {
         return out;
     }
-    // 欠帧首帧填充：概念序列 = [首帧] × (L − count) + 实际帧（oldest→newest）。
-    const std::size_t first = (head_ + config_.historyLength - count_) % config_.historyLength;
-    const std::size_t pad = config_.historyLength - count_;
+    // 抽样下标唯一实现（M12/CR-06）：欠帧首帧填充，概念序列 = [首帧] ×
+    // (L − count) + 实际帧（oldest→newest）。
     for (std::size_t i = 0; i < config_.sampleCount; ++i) {
-        // idx 单调递增（oldest → newest）；64 位防回绕。
-        const std::size_t idx = config_.historyLength -
-                                ((config_.sampleCount - 1u - i) * config_.sampleSkip) - 1u -
-                                config_.sampleDelay;
-        const std::size_t pos = idx < pad ? first : (first + (idx - pad)) % config_.historyLength;
+        const std::size_t pos = detail::historySamplePos(config_.historyLength, count_, head_,
+                                                         i, config_.sampleCount,
+                                                         config_.sampleSkip,
+                                                         config_.sampleDelay);
         std::copy_n(ring_.data() + pos * frameSize, frameSize, out.data() + i * frameSize);
     }
     return out;
