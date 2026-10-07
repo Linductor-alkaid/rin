@@ -24,6 +24,9 @@
 #include "default_catalog.hpp"
 #include "param_check.hpp"
 
+// 单调毫秒时钟唯一实现（M12/CR-24）。
+#include "monotonic_time.hpp"
+
 namespace rin {
 namespace {
 
@@ -36,10 +39,19 @@ using workflow_detail::paramValueMatches;
 /// 冻结语义）。
 constexpr std::size_t kStatsWindow = 32;
 
-double steadyMs() {
-    return std::chrono::duration<double, std::milli>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
+// 单调毫秒时钟唯一实现（M12/CR-24，monotonic_time.hpp）。
+using detail::steadyMs;
+
+/// 图构建失败消息唯一格式化（M12/CR-20）：前缀 + 首个校验问题（足够定位；
+/// 全部问题在 applyGraph 校验路径可见）。
+std::string formatBuildFailure(const NodeGraphBuild& build) {
+    std::string message = "graph build failed";
+    for (const ValidationIssue& issue : build.validation.issues) {
+        message += ": ";
+        message += issue.message;
+        break;
+    }
+    return message;
 }
 
 /// 节点执行失败：携带节点 id 逃逸到 future，reaper 转化为 NodeFailed/Failed
@@ -111,6 +123,9 @@ public:
 
     [[nodiscard]] WorkflowValidation applyGraph(const WorkflowGraph& graph) override {
         WorkflowValidation validation = validateWorkflowGraph(graph, config_.catalog);
+        // 节点准入预检（与 buildNodeGraph 内部检查同款判据，node_graph.cpp）：
+        // 预检使拒绝以 WorkflowValidation 问题形态先于状态分支可见；两者互指，
+        // 调整限额语义须同步。
         if (validation.ok && graph.nodes.size() > config_.maxNodes) {
             validation.ok = false;
             validation.issues.push_back(
@@ -193,15 +208,11 @@ public:
         }
 
         if (current == WorkflowEngineState::Running) {
-            // 预编译校验（DEC-013）：参数落在目标图后图必须仍可构建（如带通
-            // lowCut ≥ highCut 的工厂期拒绝在受理时同步暴露），避免帧边界重建
-            // 失败进入重试风暴。
-            WorkflowGraph candidate = *target;
-            const bool applied = applyParamToGraph(candidate, node, paramId, value, false);
-            if (!applied || !compileOrMessage(candidate, error)) {
-                if (error != nullptr && error->empty()) {
-                    *error = "param update rejected: graph build failed";
-                }
+            // 预编译校验（DEC-013，checkedParamApply 唯一路径）：参数落在目标图
+            // 后图必须仍可构建（如带通 lowCut ≥ highCut 的工厂期拒绝在受理时同步
+            // 暴露），避免帧边界重建失败进入重试风暴。
+            WorkflowGraph candidate;
+            if (!checkedParamApply(*target, node, paramId, value, candidate, error)) {
                 return false;
             }
             ParamCommand command;
@@ -218,12 +229,8 @@ public:
         } else {
             // Idle/Failed：无执行上下文，直接改待运行图并即时报告（同步生效）；
             // 不可构建的修改同步拒绝（start 期才会重建，缺陷提前到受理时暴露）。
-            WorkflowGraph updated = *pendingStart_;
-            const bool applied = applyParamToGraph(updated, node, paramId, value, false);
-            if (!applied || !compileOrMessage(updated, error)) {
-                if (error != nullptr && error->empty()) {
-                    *error = "param update rejected: graph build failed";
-                }
+            WorkflowGraph updated;
+            if (!checkedParamApply(*pendingStart_, node, paramId, value, updated, error)) {
                 return false;
             }
             pendingStart_ = std::make_shared<const WorkflowGraph>(std::move(updated));
@@ -313,13 +320,8 @@ public:
         inflight_.clear();
         inFlightCount_.store(0, std::memory_order_relaxed);
         for (auto& entry : draining) {
-            std::exception_ptr error;
-            try {
-                entry->future.get();
-            } catch (...) {
-                error = std::current_exception();
-            }
-            if (error != nullptr) {
+            if (std::exception_ptr error = consumeFuture(entry->future);
+                error != nullptr) {
                 consumeFailureDuringStop(std::move(error));
             }
         }
@@ -409,15 +411,26 @@ private:
             return true;
         }
         if (error != nullptr) {
-            std::string message = "graph build failed";
-            for (const ValidationIssue& issue : build.validation.issues) {
-                message += ": ";
-                message += issue.message;
-                break;  // 首个问题足够定位；全部问题在 applyGraph 校验路径可见。
-            }
-            *error = message;
+            *error = formatBuildFailure(build);
         }
         return false;
+    }
+
+    /// 参数预编译校验唯一路径（M12/CR-21，DEC-013）：参数落到 base 的副本后图
+    /// 必须仍可构建（工厂期拒绝在受理时同步暴露，避免帧边界重建失败进入重试
+    /// 风暴）；失败填 *error 返回 false，成功经 out 交还更新后的图。
+    bool checkedParamApply(const WorkflowGraph& base, NodeId node, const std::string& paramId,
+                           const ParamValue& value, WorkflowGraph& out, std::string* error) {
+        WorkflowGraph candidate = base;
+        const bool applied = applyParamToGraph(candidate, node, paramId, value, false);
+        if (!applied || !compileOrMessage(candidate, error)) {
+            if (error != nullptr && error->empty()) {
+                *error = "param update rejected: graph build failed";
+            }
+            return false;
+        }
+        out = std::move(candidate);
+        return true;
     }
 
     /// 编译并装配一代；失败返回 nullptr（buildFailureMessage_ 临时携带原因）。
@@ -430,13 +443,7 @@ private:
         NodeGraphBuild build =
             buildNodeGraph(graph, config_.catalog, config_.nodeFactory, config_.maxNodes);
         if (build.graph == nullptr) {
-            std::string message = "graph build failed";
-            for (const ValidationIssue& issue : build.validation.issues) {
-                message += ": ";
-                message += issue.message;
-                break;
-            }
-            buildFailureMessage_ = std::move(message);
+            buildFailureMessage_ = formatBuildFailure(build);
             return nullptr;
         }
         auto generation = std::make_shared<Generation>();
@@ -794,6 +801,19 @@ private:
 
     // --- 帧泵任务回收与失败分类（假引擎同款语义） ---
 
+    /// future 消费唯一路径（M12/CR-30）：阻塞取结果并把任务异常保持为
+    /// exception_ptr（不被吞掉）；分类处置由调用方决定——运行期
+    /// handleTaskFailure 与停止期 consumeFailureDuringStop 语义不同，catch 链
+    /// 保持分离。
+    std::exception_ptr consumeFuture(std::future<void>& future) {
+        try {
+            future.get();
+        } catch (...) {
+            return std::current_exception();
+        }
+        return nullptr;
+    }
+
     /// 消费已完成任务的 future（异常经 future 保持可见，不被吞掉）。
     /// 调用方持 lifecycleMutex_；只消费已就绪 future，不阻塞。
     void reapFinished() {
@@ -802,12 +822,7 @@ private:
                 ++it;
                 continue;
             }
-            std::exception_ptr error;
-            try {
-                it->get()->future.get();
-            } catch (...) {
-                error = std::current_exception();
-            }
+            std::exception_ptr error = consumeFuture(it->get()->future);
             it = inflight_.erase(it);
             inFlightCount_.store(inflight_.size(), std::memory_order_relaxed);
             if (error != nullptr) {
