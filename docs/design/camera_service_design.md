@@ -149,16 +149,21 @@ run(StopToken):
     若 stop_token.stop_requested(): 跳出
     若命令邮箱有新 StreamRequest: state=Restreaming；stop/restart pipeline；更新内参
     若命令邮箱有新深度配色（DEC-007）: 仅切换后续帧转换 ramp，不重流
-    pipeline.wait_for_frames(timeout)
+    poll_for_frames 自旋（10ms 睡眠 + 1s deadline 自律，2026-10-07 热插拔修复）
       成功: RGB8→RGBA8、Z16→按所选配色 RGBA8（纯函数，见 DEC-003/DEC-007），发布帧邮箱
-      失败: 发布 ServiceEvent(Failed) 并跳出 → state=Failed
+      超时/错误: 失败计数；连续 3 次后设备离线转 Waiting/DeviceLost，在线转 Failed
   退出: release 资源；state = (失败? Failed : Idle)
 ```
 
-`wait_for_frames` 使用带超时版本（默认 1s < 关闭预算），保证 `wakeup()`/停止请求到达后
-循环可在该超时内到达取消检查点；这是第三方阻塞调用无法被 StopToken 直接中断时的
-边界处理，属于 API 的正常用法而非能力缺口（executor 集成指南：StopToken 不能中断
-第三方 read/poll 调用）。
+采集等待历经三代（2026-10-07 真机实证演进）：阻塞式 `wait_for_frames(timeout)` 在
+设备移除时超时后走 librealsense hub 自动重连分支，可阻塞 ~15s 或悬挂——命令/热插拔
+检查点不可达，状态停留 Streaming、画面留末帧；`try_wait_for_frames(200ms)` 的短超时
+不被底层遵守（实测阻塞 ~15s）；最终为 `poll_for_frames`（契约级非阻塞，无自动重连
+副作用）+ 10ms 自旋睡眠，deadline 与失败计数由循环自律执行（50ms 版本独立验证实证
+丢 ~25-35% frameset——聚合器容量 1、newest-wins——10ms 间隔内至多到达 1 帧基本零
+丢失）。停止请求响应 ≤~50ms；第三方调用无法被 StopToken 直接中断的边界处理结论
+不变（executor 集成指南），poll 自旋是自律超时的等价实现而非能力缺口。帧序号为
+服务生命周期单调计数（nextFrameSequence，热插拔/重连连续）。
 
 ## EUI-NEO viewer 集成（对应 DEC-002）
 

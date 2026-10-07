@@ -246,6 +246,14 @@ public:
     [[nodiscard]] LatestMailbox<ControlCommand>& commandMailbox() { return commands_; }
     [[nodiscard]] LatestMailbox<int>& hotPlugMailbox() { return hotPlug_; }
 
+    /// 视频帧序号（服务生命周期单调，2026-10-07 热插拔修复）：重连/重开
+    /// 后继续递增——streamLoop 局部序号在 DeviceLost 重连后从 0 重置，消费者
+    /// 水位（预览页/工作流引擎的"上次已见序号"）停在断线前高位，新帧永远
+    /// 不比水位新，表现为"设备状态恢复 Streaming 而画面永久冻结"。
+    [[nodiscard]] std::uint64_t nextFrameSequence() noexcept {
+        return frameSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
     [[nodiscard]] std::uint64_t nextSnapshotSequence() noexcept {
         return snapshotSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
@@ -332,6 +340,7 @@ private:
     kairo::WorkerHandle worker_{};
     std::atomic<bool> workerRunning_{false};
     std::atomic<std::uint64_t> snapshotSequence_{0};
+    std::atomic<std::uint64_t> frameSequence_{0};
 
     mutable std::mutex errorMutex_;
     std::string lastError_;
@@ -686,7 +695,8 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                                                 const std::string& serial,
                                                 kairo::StopToken stopToken) {
     int consecutiveFailures = 0;
-    std::uint64_t sequence = 0;
+    // 帧序号取服务生命周期计数（热插拔修复，见 nextFrameSequence 注释）：
+    // 本函数在 DeviceLost 重连后会被重新调用，局部序号会使消费者水位饿死。
     std::vector<std::uint8_t> rgba;
     activeSerial_ = serial;
 
@@ -820,13 +830,36 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             }
         }
 
+        // 分片有界等待（2026-10-07 热插拔反馈第二/三轮）：阻塞式 wait 与
+        // try_wait(timeout) 在设备移除时都不遵守短超时（真机实证 try_wait
+        // (200ms) 实际阻塞 ~15s ≈ RS2_DEFAULT_TIMEOUT，16s 后才经检查点转
+        // Waiting）；改用真非阻塞 poll_for_frames + 50ms 自旋睡眠，deadline
+        // 由本循环自律执行——循环每 ~1s 必回命令/热插拔检查点，拔线后
+        // 3×超时内经 serialOnline 复查转 Waiting，插回走 DeviceLost→重解析
+        // →重开路径（帧序号服务生命周期连续，画面水位直接恢复）。
         rs2::frameset frameset;
+        bool haveFrames = false;
         try {
-            frameset = pipeline.wait_for_frames(static_cast<unsigned int>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(kFrameWaitTimeout)
-                    .count()));
-            consecutiveFailures = 0;
+            const auto frameDeadline = std::chrono::steady_clock::now() + kFrameWaitTimeout;
+            while (!stopToken.stop_requested() &&
+                   std::chrono::steady_clock::now() < frameDeadline) {
+                if (pipeline.poll_for_frames(&frameset)) {
+                    haveFrames = true;
+                    break;
+                }
+                // 10ms 轮询（独立验证实证：50ms 在 30fps 下丢 ~25-35% frameset
+                // ——聚合器容量 1、newest-wins，两次轮询间到达 2+ 帧时只留最新，
+                // IMU 交付 27-30Hz→20-23Hz；10ms 间隔内至多到达 1 帧，基本零
+                // 丢失，唤醒开销 ~100/s 可忽略）。
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
         } catch (const rs2::error&) {
+            haveFrames = false;  // 后端真错误与超时同款失败计数路径。
+        }
+        if (stopToken.stop_requested()) {
+            return StreamExit::Stopped;
+        }
+        if (!haveFrames) {
             if (++consecutiveFailures >= kMaxConsecutiveFrameFailures) {
                 // 设备已不在总线上 → 按热插拔移除处理（Waiting），否则按真实错误上抛。
                 if (!serialOnline(context, activeSerial_)) {
@@ -842,6 +875,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             }
             continue;
         }
+        consecutiveFailures = 0;
 
         // 运动帧轻量分支（EXEC-06，M3-04）：syncer 按时间戳分组出 frameset，
         // 运动合成帧可能不含视频帧且到达频率为 IMU ODR（~100-400Hz）——必须在
@@ -872,7 +906,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
         if (!color || !depth) {
             continue;  // 纯运动 frameset：视频通道无事可做。
         }
-        ++sequence;
+        const std::uint64_t sequence = owner_.nextFrameSequence();
 
         const auto colorWidth = static_cast<std::uint32_t>(color.get_width());
         const auto colorHeight = static_cast<std::uint32_t>(color.get_height());
