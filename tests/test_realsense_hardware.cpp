@@ -68,6 +68,8 @@ constexpr double kMinDeliveredSourceHz = 5.0;
 constexpr double kFreqConsistencyRelTol = 0.35;
 
 /// 有界轮询：每 100ms 谓词一次，budget 内为真返回 true，超时返回 false。
+/// 硬件变体保留独立签名（budget 前置、100ms 步进、超时不做末次复核——
+/// 真机节拍不同）；通用版见 tests/test_util.hpp（M12/CR-23 互指）。
 template <typename Pred>
 bool pollUntil(std::chrono::steady_clock::duration budget, Pred&& pred) {
     const auto deadline = std::chrono::steady_clock::now() + budget;

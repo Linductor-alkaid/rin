@@ -69,10 +69,9 @@
 // 组合）与"pending - applies next frame"待生效标注的视觉呈现、pumpNodeOutput
 // 的缩略图 GL 上传分支。本文件只覆盖其平台无关语义（缓存清空分支）。
 //
-// 测试壳为 tests/test_util.hpp 的 RIN_CHECK*；有界等待用本文件匿名命名空间的
-// pollUntil/quietFor（与 workflow_engine_contract_suite.hpp 同款，不引入该头以
-// 避免契约套件符号混入）。假相机服务为脚本化最小实现：ICameraService 全部纯虚
-// 函数（含 M6-04 的 tryLoadGrayFrame 灰度 rendition 通道），帧由测试线程同步
+// 测试壳为 tests/test_util.hpp 的 RIN_CHECK*；有界等待（pollUntil/quietFor）与
+// 假相机服务由共享头唯一提供（M12/CR-23、CR-34：test_util.hpp +
+// fake_camera_service.hpp，原匿名命名空间手抄副本已删除）。帧由测试线程同步
 // 发布（按 FrameKind / GrayFrameKind 分槽的最新帧槽，"上次已见序号"语义），
 // 不创建 std::thread；Executor 线程（引擎帧泵）与测试线程的全部共享经该 mutex。
 // DOD-02 适用性说明（文件头"取舍说明"段）：§5/§6/§7 为 M6 新增——§5 路由分发
@@ -86,6 +85,8 @@
 #include "workflow_frame_source.hpp"
 
 #include "test_util.hpp"
+
+#include "fake_camera_service.hpp"
 
 #include <kairo/executor.hpp>
 
@@ -112,165 +113,17 @@ namespace {
 
 using viewer::WorkflowCanvasState;
 
-// --- 断言与有界等待辅助（与 test_param_panel.cpp 同纪律） ---
+// --- 断言与有界等待辅助：runSection/pollUntil/quietFor/kQuietWindow 由
+// tests/test_util.hpp 唯一提供（M12/CR-23、CR-39；原手抄副本已删除）。 ---
+using rin_test::kQuietWindow;
+using rin_test::pollUntil;
+using rin_test::quietFor;
+using rin_test::runSection;
 
-void runSection(const char* name, void (*fn)()) {
-    std::printf("== %s\n", name);
-    fn();
-}
-
-// 有界轮询（5s 死限，防悬挂；pred() 为真即返回；超时后最后一次 pred() 定结果）。
-template <typename Pred>
-bool pollUntil(Pred&& pred,
-               std::chrono::milliseconds timeout = std::chrono::milliseconds{5000}) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (pred()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    return pred();
-}
-
-// 静默检查：window 内 hasNew() 一旦为真即返回 false（出现新发布）；全窗安静
-// 返回 true。
-template <typename HasNew>
-bool quietFor(HasNew&& hasNew, std::chrono::milliseconds window) {
-    const auto deadline = std::chrono::steady_clock::now() + window;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (hasNew()) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{5});
-    }
-    return true;
-}
-
-constexpr std::chrono::milliseconds kQuietWindow{300};
-
-// --- 脚本化假相机服务（测试脚本面 + ICameraService 全纯虚实现） ---
-
-/// 测试线程同步发布最新帧（RGBA8 rendition 按 FrameKind 分槽；M6-04 起灰度
-/// rendition 按 GrayFrameKind 分槽）；stop() 后 tryLoadFrame/tryLoadGrayFrame
-/// 恒为 false（ICameraService::stop 排空契约的最小等价：返回后全部数据通道
-/// 不再有新发布）。帧读取与引擎帧泵线程之间的共享经 mutex（帧源契约"非阻塞"
-/// 指不等待帧到达，mutex 短临界区满足）。
-class FakeCameraService final : public rin::ICameraService {
-public:
-    // --- 测试脚本面（测试主线程同步调用） ---
-    void publish(rin::Frame frame) {
-        const std::scoped_lock lock(mutex_);
-        latestRgba_[frame.kind] = std::move(frame);
-    }
-
-    void publishGray(rin::GrayFrameKind kind, rin::GrayFrame frame) {
-        const std::scoped_lock lock(mutex_);
-        latestGray_[kind] = std::move(frame);
-    }
-
-    // --- ICameraService（相机源接缝只经 tryLoadFrame/tryLoadGrayFrame；其余为
-    //     契约桩） ---
-    rin::StartOutcome start(const rin::StreamRequest&) override {
-        const std::scoped_lock lock(mutex_);
-        state_ = rin::CameraServiceState::Streaming;
-        rin::StartOutcome outcome;
-        outcome.admitted = true;
-        return outcome;
-    }
-
-    bool requestResolution(const rin::StreamRequest&, std::string*) override {
-        return true;
-    }
-
-    bool requestDevice(const std::string&, std::string*) override { return true; }
-
-    bool requestDepthColorScheme(rin::DepthColorScheme, std::string*) override {
-        return true;
-    }
-
-    void stop() override {
-        const std::scoped_lock lock(mutex_);
-        stopped_ = true;
-        state_ = rin::CameraServiceState::Idle;
-    }
-
-    [[nodiscard]] rin::CameraServiceState state() const override {
-        const std::scoped_lock lock(mutex_);
-        return state_;
-    }
-
-    [[nodiscard]] std::string lastError() const override { return {}; }
-
-    [[nodiscard]] bool tryLoadFrame(rin::FrameKind kind,
-                                    std::uint64_t& lastSeenSequence,
-                                    rin::Frame& out) override {
-        const std::scoped_lock lock(mutex_);
-        if (stopped_) {
-            return false;  // 排空契约：stop 返回后不再有新发布。
-        }
-        const auto it = latestRgba_.find(kind);
-        if (it == latestRgba_.end() || !it->second.valid() ||
-            it->second.sequence <= lastSeenSequence) {
-            return false;
-        }
-        out = it->second;
-        lastSeenSequence = it->second.sequence;
-        return true;
-    }
-
-    // M9 米制深度通道：fake 保持空通道（无新帧返回 false）；策略深度组件的
-    // 时序测试使用脚本化米制帧发布（见 test_depth_preproc/独立验证套件）。
-    [[nodiscard]] bool tryLoadDepthMetric(std::uint64_t& lastSeenSequence,
-                                          rin::DepthMetricSample& out) override {
-        (void)lastSeenSequence;
-        (void)out;
-        return false;
-    }
-
-    [[nodiscard]] bool tryLoadGrayFrame(rin::GrayFrameKind kind,
-                                        std::uint64_t& lastSeenSequence,
-                                        rin::GrayFrame& out) override {
-        const std::scoped_lock lock(mutex_);
-        if (stopped_) {
-            return false;  // 排空契约：stop 返回后不再有新发布。
-        }
-        const auto it = latestGray_.find(kind);
-        if (it == latestGray_.end() || !it->second.valid() ||
-            it->second.sequence <= lastSeenSequence) {
-            return false;
-        }
-        out = it->second;
-        lastSeenSequence = it->second.sequence;
-        return true;
-    }
-
-    [[nodiscard]] bool tryLoadIntrinsics(std::uint64_t&,
-                                         rin::IntrinsicsSnapshot&) override {
-        return false;
-    }
-
-    [[nodiscard]] bool tryLoadMotion(std::uint64_t&, rin::MotionSample&) override {
-        return false;
-    }
-
-    [[nodiscard]] bool tryLoadPose(std::uint64_t&, rin::ImuSnapshot&) override {
-        return false;
-    }
-
-    [[nodiscard]] bool tryLoadCatalog(std::uint64_t&, rin::DeviceCatalog&) override {
-        return false;
-    }
-
-    [[nodiscard]] bool tryLoadEvent(rin::ServiceEvent&) override { return false; }
-
-private:
-    mutable std::mutex mutex_;
-    std::map<rin::FrameKind, rin::Frame> latestRgba_;
-    std::map<rin::GrayFrameKind, rin::GrayFrame> latestGray_;
-    bool stopped_ = false;
-    rin::CameraServiceState state_ = rin::CameraServiceState::Idle;
-};
+// --- 脚本化假相机服务（M12/CR-34）：rin_test::FakeCameraService 唯一实现见
+// tests/fake_camera_service.hpp（RGBA 按 FrameKind 分槽、灰度按 GrayFrameKind
+// 分槽、米制单槽、rgbReads 计数；stop() 后全部通道恒为"无新发布"）。 ---
+using rin_test::FakeCameraService;
 
 // --- 帧夹具 ---
 
@@ -508,22 +361,9 @@ void testCameraFrameSourceSeam() {
 /// app.cpp pump 的工作流事件消费契约行内联复刻（app.cpp:378-399 的平台无关
 /// 语义：事件行 + 失败标注 + GraphApplied 清待生效 + 离开 Running 清待生效）。
 /// 返回本 tick 是否清除了待生效标志。
-bool pumpWorkflowEvents(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engine) {
-    bool cleared = false;
-    rin::WorkflowEvent event;
-    if (engine.tryLoadEvent(event)) {
-        canvas.failures.applyEvent(event);
-        if (event.kind == rin::WorkflowEventKind::GraphApplied && canvas.graphPending) {
-            canvas.graphPending = false;
-            cleared = true;
-        }
-    }
-    if (canvas.graphPending && engine.state() != rin::WorkflowEngineState::Running) {
-        canvas.graphPending = false;
-        cleared = true;
-    }
-    return cleared;
-}
+// pumpWorkflowEvents：viewer 唯一实现（node_canvas.hpp，M12/CR-37）——原
+// "app.cpp 事件消费语义内联复刻"删除；谓词侧观察待生效清除（见各 pollUntil）。
+using viewer::pumpWorkflowEvents;
 
 void testRunControlStateMachine() {
     kairo::Executor executor;
@@ -574,7 +414,7 @@ void testRunControlStateMachine() {
                   "runctl: graph change while Running enqueues (pending set)");
 
     // ---- pump 同构消费：GraphApplied 在有界轮询内清除待生效 ----
-    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine); }),
+    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine), !canvas.graphPending; }),
                   "runctl: GraphApplied clears the pending flag at frame boundary");
     RIN_CHECK(!canvas.graphPending);
 
@@ -630,7 +470,7 @@ void testRunControlStateMachine() {
     RIN_CHECK(canvas.graphPending);  // grayify(Gray8) → gaussian_blur(Gray8) 合法。
     engine->stop();
     RIN_CHECK(engine->state() == rin::WorkflowEngineState::Idle);
-    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine); }),
+    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine), !canvas.graphPending; }),
                   "runctl: leaving Running clears the pending flag");
     RIN_CHECK(!canvas.graphPending);
     engine->stop();  // 幂等双 stop。
@@ -644,7 +484,7 @@ void testRunControlStateMachine() {
     canvas.afterGraphChange(engine.get());
     RIN_CHECK_MSG(canvas.model.validation.ok && canvas.graphPending,
                   "runctl: pending semantics keep working in the new session");
-    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine); }),
+    RIN_CHECK_MSG(pollUntil([&] { return pumpWorkflowEvents(canvas, *engine), !canvas.graphPending; }),
                   "runctl: new-session GraphApplied clears pending");
     RIN_CHECK(!canvas.graphPending);
 

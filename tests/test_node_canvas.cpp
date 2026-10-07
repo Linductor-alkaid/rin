@@ -36,6 +36,8 @@
 
 #include "test_util.hpp"
 
+#include "validation_test_util.hpp"
+
 #include <rin/workflow_types.hpp>
 
 #include <algorithm>
@@ -47,15 +49,16 @@
 
 namespace {
 
-constexpr float kTol = 1e-3f;
 constexpr float kFitTol = 0.05f;
 
-[[nodiscard]] bool nearF(float a, float b, float tol = kTol) {
-    return std::fabs(a - b) <= tol;
-}
+// nearF/hasKind/runSection 由 tests/test_util.hpp 唯一提供（M12/CR-39）；
+// nearPoint 为画布几何专属（viewer::CanvasPoint），保留本地。
+using rin_test::hasKind;
+using rin_test::nearF;
+using rin_test::runSection;
 
 [[nodiscard]] bool nearPoint(const viewer::CanvasPoint& a, const viewer::CanvasPoint& b,
-                             float tol = kTol) {
+                             float tol = 1e-3f) {
     return nearF(a.x, b.x, tol) && nearF(a.y, b.y, tol);
 }
 
@@ -138,16 +141,6 @@ struct GraphFixture {
     return actual == expected;
 }
 
-[[nodiscard]] bool hasKind(const rin::WorkflowValidation& validation,
-                           rin::ValidationIssueKind kind) {
-    for (const rin::ValidationIssue& issue : validation.issues) {
-        if (issue.kind == kind) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // CanvasNode 无 operator==：逐字段比较。
 [[nodiscard]] bool nodesEqual(const std::vector<viewer::CanvasNode>& a,
                               const std::vector<viewer::CanvasNode>& b) {
@@ -177,10 +170,6 @@ void releaseIgnore(viewer::CanvasInteraction& it, viewer::CanvasGraphModel& m,
     static_cast<void>(r);
 }
 
-void runSection(const char* name, void (*fn)()) {
-    std::printf("== %s\n", name);
-    fn();
-}
 
 // --- 1. 视图变换 ---
 

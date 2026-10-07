@@ -41,6 +41,8 @@
 
 #include "test_util.hpp"
 
+#include "validation_test_util.hpp"
+
 #include "default_catalog.hpp"
 
 #include <rin/image_node.hpp>
@@ -58,26 +60,11 @@
 
 namespace {
 
-constexpr float kTol = 1e-3f;
-
-[[nodiscard]] bool nearF(float a, float b, float tol = kTol) {
-    return std::fabs(a - b) <= tol;
-}
-
-void runSection(const char* name, void (*fn)()) {
-    std::printf("== %s\n", name);
-    fn();
-}
-
-[[nodiscard]] bool hasKind(const rin::WorkflowValidation& validation,
-                           rin::ValidationIssueKind kind) {
-    for (const rin::ValidationIssue& issue : validation.issues) {
-        if (issue.kind == kind) {
-            return true;
-        }
-    }
-    return false;
-}
+// nearF/runSection/hasKind 由 tests/test_util.hpp 唯一提供
+// （M12/CR-39；原本文件手抄副本已删除）。
+using rin_test::hasKind;
+using rin_test::nearF;
+using rin_test::runSection;
 
 [[nodiscard]] bool imagesByteEqual(const rin::ImageU8& a, const rin::ImageU8& b) {
     return a.pixels() != nullptr && a.pixels() == b.pixels() &&

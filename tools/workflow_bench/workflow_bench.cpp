@@ -428,7 +428,7 @@ int main() {
                 const double medianExternal = medianOf(externalSamples);
                 row.externalFps = medianExternal;
                 // 引擎自报 fps 与逐节点耗时取外测 fps 最接近中位数的一轮
-                // （代表样本；逐节点滚动窗口 32，轮间稳定）。
+                // （代表样本；逐节点滚动窗口 rin::kStatsWindow，轮间稳定）。
                 const RunResult* representative = &runs.front();
                 double bestDelta = std::abs(representative->externalFps -
                                             medianExternal);

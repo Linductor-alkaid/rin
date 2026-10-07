@@ -17,17 +17,10 @@ constexpr double kParallelEpsilon = 1e-9;
 using Quatd = std::array<double, 4>;  /// (w, x, y, z)，标量在前
 using Vec3d = std::array<double, 3>;
 
-bool allFinite(const Quatd& q) noexcept {
-    for (const double component : q) {
-        if (!std::isfinite(component)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool allFinite(const Vec3d& v) noexcept {
-    for (const double component : v) {
+/// 有限性判定唯一实现（M12/CR-12）：分量逐个 isfinite（Quatd/Vec3d 共用）。
+template <std::size_t N>
+bool allFinite(const std::array<double, N>& values) noexcept {
+    for (const double component : values) {
         if (!std::isfinite(component)) {
             return false;
         }

@@ -28,6 +28,8 @@ NodeGraphBuild buildNodeGraph(const WorkflowGraph& graph, const NodeCatalog& cat
         build.validation.ok = false;
         build.validation.issues.push_back({kind, node, std::move(message)});
     };
+    // 节点准入唯一判据（engine 的 applyGraph 另有同款预检使拒绝先于状态分支
+    // 以 WorkflowValidation 形态可见，两处互指，调整须同步——M12/CR-25）。
     if (graph.nodes.size() > maxNodes) {
         reject(ValidationIssueKind::BadParam, kInvalidNode,
                "graph exceeds node admission limit (" + std::to_string(maxNodes) + ")");

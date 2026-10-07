@@ -78,19 +78,9 @@ using rin::WorkflowFrameInput;
 using rin::WorkflowGraph;
 using rin::WorkflowStats;
 
-constexpr auto kPollDeadline = std::chrono::milliseconds{5000};
-
-template <typename Pred>
-bool pollUntil(Pred&& pred, std::chrono::milliseconds timeout = kPollDeadline) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (pred()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    return pred();
-}
+// kPollDeadline/pollUntil 由 tests/test_util.hpp 唯一提供（M12/CR-23）。
+using rin_test::kPollDeadline;
+using rin_test::pollUntil;
 
 /// 常量米制深度帧（每次调用独立缓冲对象：指针同一性测试需要可区分缓冲）。
 ImageU8 depthConstantFrame(std::uint32_t width, std::uint32_t height, float value) {

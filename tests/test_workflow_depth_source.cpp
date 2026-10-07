@@ -21,6 +21,8 @@
 // 单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 并发矩阵不适用，见文件头）。
 #include "test_util.hpp"
 
+#include "fake_camera_service.hpp"
+
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -52,79 +54,10 @@ using rin::PortType;
 using viewer::WorkflowSourceRendition;
 using viewer::WorkflowSourceRouter;
 
-/// 脚本化假相机服务：米制通道 + RGB 通道分槽发布；stop() 后全部通道排空
-/// （返回后不再有新发布）；RGB 读取计数用于"未知节点回退 RGB"见证。
-class FakeCameraService final : public rin::ICameraService {
-public:
-    void publishMetric(DepthMetricSample sample) {
-        const std::scoped_lock lock(mutex_);
-        latestMetric_ = std::move(sample);
-    }
-
-    void publishRgb(Frame frame) {
-        const std::scoped_lock lock(mutex_);
-        latestRgb_ = std::move(frame);
-    }
-
-    [[nodiscard]] int rgbReads() const {
-        const std::scoped_lock lock(mutex_);
-        return rgbReads_;
-    }
-
-    rin::StartOutcome start(const rin::StreamRequest&) override { return {}; }
-    bool requestResolution(const rin::StreamRequest&, std::string*) override { return false; }
-    bool requestDevice(const std::string&, std::string*) override { return false; }
-    bool requestDepthColorScheme(rin::DepthColorScheme, std::string*) override { return false; }
-    void stop() override {
-        const std::scoped_lock lock(mutex_);
-        stopped_ = true;
-        latestMetric_.reset();
-        latestRgb_.reset();
-    }
-    rin::CameraServiceState state() const override { return rin::CameraServiceState::Idle; }
-    std::string lastError() const override { return {}; }
-
-    bool tryLoadFrame(FrameKind kind, std::uint64_t& lastSeenSequence, Frame& out) override {
-        const std::scoped_lock lock(mutex_);
-        if (kind != FrameKind::Rgb) {
-            return false;
-        }
-        ++rgbReads_;
-        if (stopped_ || !latestRgb_.has_value() || !latestRgb_->valid() ||
-            latestRgb_->sequence <= lastSeenSequence) {
-            return false;
-        }
-        out = *latestRgb_;
-        lastSeenSequence = out.sequence;
-        return true;
-    }
-
-    bool tryLoadGrayFrame(GrayFrameKind, std::uint64_t&, GrayFrame&) override { return false; }
-
-    bool tryLoadDepthMetric(std::uint64_t& lastSeenSequence, DepthMetricSample& out) override {
-        const std::scoped_lock lock(mutex_);
-        if (stopped_ || !latestMetric_.has_value() || !latestMetric_->valid() ||
-            latestMetric_->sequence <= lastSeenSequence) {
-            return false;
-        }
-        out = *latestMetric_;
-        lastSeenSequence = out.sequence;
-        return true;
-    }
-
-    bool tryLoadIntrinsics(std::uint64_t&, rin::IntrinsicsSnapshot&) override { return false; }
-    bool tryLoadMotion(std::uint64_t&, rin::MotionSample&) override { return false; }
-    bool tryLoadPose(std::uint64_t&, rin::ImuSnapshot&) override { return false; }
-    bool tryLoadCatalog(std::uint64_t&, rin::DeviceCatalog&) override { return false; }
-    bool tryLoadEvent(rin::ServiceEvent&) override { return false; }
-
-private:
-    mutable std::mutex mutex_;
-    std::optional<DepthMetricSample> latestMetric_;
-    std::optional<Frame> latestRgb_;
-    int rgbReads_ = 0;
-    bool stopped_ = false;
-};
+/// 脚本化假相机服务（M12/CR-34）：rin_test::FakeCameraService 唯一实现见
+/// tests/fake_camera_service.hpp（米制单槽 + RGB 分槽 + rgbReads 计数；stop()
+/// 后全部通道排空）。本文件以别名保持脚本面命名。
+using rin_test::FakeCameraService;
 
 DepthFrameF32 makeMetricFrame(const std::vector<float>& values, std::uint32_t width,
                               std::uint32_t height) {
@@ -297,7 +230,7 @@ int main() {
             frame.sequence = 9;
             frame.pixels = std::make_shared<const std::vector<std::uint8_t>>(
                 std::vector<std::uint8_t>{1, 2, 3, 255, 5, 6, 7, 255});
-            service->publishRgb(std::move(frame));
+            service->publish(std::move(frame));
 
             const int readsBefore = service->rgbReads();
             std::uint64_t watermark = 0;

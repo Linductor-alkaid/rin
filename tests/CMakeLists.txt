@@ -164,7 +164,11 @@ target_link_libraries(test_workflow_contracts PRIVATE rin::core)
 target_include_directories(test_workflow_contracts PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     # M6 目录扩展检查（第 15 节）引用默认目录单一事实源（仅头文件，无 src 链接）。
-    ${CMAKE_SOURCE_DIR}/src/workflow)
+    ${CMAKE_SOURCE_DIR}/src/workflow
+    # M12/CR-15 回归（第 16 节）：param_check.hpp 转发头解析到 src/core/
+    # param_match.hpp（仅头文件，无 src 链接），与 validateWorkflowGraph 做
+    # 双路径一致性核对。
+    ${CMAKE_SOURCE_DIR}/src/core)
 add_test(NAME workflow_contracts COMMAND test_workflow_contracts)
 set_tests_properties(workflow_contracts PROPERTIES LABELS "unit")
 

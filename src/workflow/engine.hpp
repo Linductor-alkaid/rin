@@ -2,6 +2,7 @@
 
 #include <kairo/executor.hpp>
 
+#include <cstddef>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,11 @@
 #include "rin/workflow_types.hpp"
 
 namespace rin {
+
+/// 统计滚动窗口长度（NodeStats.avgCostMs / endToEndFps；与假引擎一致，契约只
+/// 冻结语义）。M12/CR-27：导出为唯一事实源，workflow_bench 等消费方引用之，
+/// 不再以注释硬编码窗口宽度。
+inline constexpr std::size_t kStatsWindow = 32;
 
 /// 注入型源节点的帧输入（M4-07 帧源接缝，DEC-013 冻结）：本帧图像 + 源帧序号。
 ///
