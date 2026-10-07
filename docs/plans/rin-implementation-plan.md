@@ -252,6 +252,7 @@ v0.5.1（2026-09-30）。2026-10-06 用户需求立项 [M11](m11-canvas-monitor-
 | M10 工作流深度域（米制算子进画布） | [m10-workflow-depth-domain.md](m10-workflow-depth-domain.md) | M8、M9 | v0.5.1 |
 | M11 监看器节点与画布内嵌参数编辑 | [m11-canvas-monitor-inline.md](m11-canvas-monitor-inline.md) | M10 | v0.5.2 |
 | M12 代码复用收敛（审查问题台账整合） | [m12-code-reuse-consolidation.md](m12-code-reuse-consolidation.md) | M11 | 无独立发布点 |
+| M13 帧率档位选择（分辨率档位放开 fps） | [m13-fps-selection.md](m13-fps-selection.md) | M1 | 无独立发布点 |
 
 ## 暂定决策（未冻结）
 
