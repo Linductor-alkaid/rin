@@ -2191,6 +2191,31 @@ inline void composeWorkflowPage(eui::Ui& ui, WorkflowCanvasState& state,
 
 // --- pump 边界消费（RULE-05：渲染线程只做有界取快照与提交） ---
 
+/// 监看器条目排空的唯一实现（M12/CR-35）：释放预览 GL 引用、清元数据；
+/// `resetWatermark` 决定是否复位序号水位——两台状态机的排空语义不同：
+/// - 工作流引擎非 Running（pumpMonitorViews）：复位 lastSeen=0。引擎每次启动
+///   产物序号重新计数，不复位会压制新会话快照（test_run_control 冻结断言
+///   lastSeen==0，重投靠最新态通道）。
+/// - 相机服务 Waiting/Failed（app.cpp 无设备稳态）：保持水位。服务帧序号为
+///   服务生命周期连续（热插拔恢复不回退，见 test_realsense_hardware 服务
+///   生命周期契约），新帧序号必然越过旧水位，复位反而多余。
+/// 返回 true 表示有可见变更（调用方需 requestUpdate）。
+inline bool drainMonitorViews(WorkflowCanvasState& canvas, bool resetWatermark) {
+    bool changed = false;
+    for (auto& [id, monitor] : canvas.monitors) {
+        (void)id;
+        if (resetWatermark && monitor.lastSeen != 0) {
+            monitor.lastSeen = 0;  // 水位复位无可见效果，不计入 changed。
+        }
+        if (monitor.view.valid() || !monitor.meta.empty()) {
+            monitor.view.release();
+            monitor.meta.clear();
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 /// pump 边界的监看器预览消费（M11/DEC-021）：引擎 Running 时逐监看器节点拉取
 /// 最新产物并上传预览纹理（GL 当前线程）；非 Running 整体排空释放（§4 停止/
 /// 关闭排空，stale 快照不得显示活动状态）。已删除/不再是监看器的节点条目
@@ -2214,15 +2239,7 @@ inline bool pumpMonitorViews(WorkflowCanvasState& canvas, rin::IWorkflowEngine& 
     }
 
     if (!running) {
-        for (auto& [id, monitor] : canvas.monitors) {
-            if (monitor.view.valid() || !monitor.meta.empty()) {
-                monitor.view.release();
-                monitor.meta.clear();
-                monitor.lastSeen = 0;
-                changed = true;
-            }
-        }
-        return changed;
+        return drainMonitorViews(canvas, /*resetWatermark=*/true) || changed;
     }
 
     for (const CanvasNode& node : canvas.model.nodes) {

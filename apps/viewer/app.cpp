@@ -413,6 +413,9 @@ void ViewerContext::pump() {
     // 无设备稳态排空（2026-10-07 热插拔反馈）：Waiting/Failed 下不显示陈旧
     // 画面——预览卡回空态、监看器预览回占位符（序号水位保持，重连后经服务
     // 生命周期帧序号恢复推进）；Opening/Restreaming 为瞬态，保留末帧避免闪烁。
+    // 监看器排空走 viewer::drainMonitorViews 唯一实现（M12/CR-35），
+    // resetWatermark=false：相机服务帧序号为服务生命周期连续，与新帧序号
+    // 比较的水位必须保留（引擎侧非 Running 排空才复位，见 node_canvas.hpp）。
     if (statusState == rin::CameraServiceState::Waiting ||
         statusState == rin::CameraServiceState::Failed) {
         if (rgbView.valid() || depthView.valid()) {
@@ -422,16 +425,7 @@ void ViewerContext::pump() {
             depthMeta = "waiting for device";
             frameUpdated = true;
         }
-        bool drainedMonitor = false;
-        for (auto& [id, monitor] : workflowCanvas.monitors) {
-            (void)id;
-            if (monitor.view.valid() || !monitor.meta.empty()) {
-                monitor.view.release();
-                monitor.meta.clear();
-                drainedMonitor = true;
-            }
-        }
-        if (drainedMonitor) {
+        if (viewer::drainMonitorViews(workflowCanvas, /*resetWatermark=*/false)) {
             app::requestUpdate();
         }
     }
