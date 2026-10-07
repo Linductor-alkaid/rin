@@ -63,6 +63,8 @@
 // M4-07 引擎与 M5-08 契约套件。
 #include "test_util.hpp"
 
+#include "image_test_util.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -177,35 +179,11 @@ using GrayFn = std::function<std::uint8_t(std::uint32_t, std::uint32_t)>;
 
 // 构造紧凑（stride=0 → 最小行宽）或行尾 padding（stride=rowBytes）的 Rgba8 图像；
 // padding 区域填充 padByte（默认 0xEE，用于断言不泄漏进输出）。
-ImageU8 makeRgba(std::uint32_t width, std::uint32_t height, const RgbaFn& pixel,
-                 std::uint32_t rowBytes = 0, std::uint8_t padByte = 0xEE) {
-    const std::uint32_t stride = rowBytes == 0 ? width * 4u : rowBytes;
-    std::vector<std::uint8_t> buffer(std::size_t{stride} * height, padByte);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
-            const std::array<std::uint8_t, 4> p = pixel(x, y);
-            std::memcpy(buffer.data() + std::size_t{stride} * y + std::size_t{x} * 4u,
-                        p.data(), 4);
-        }
-    }
-    auto shared = std::make_shared<const std::vector<std::uint8_t>>(std::move(buffer));
-    return ImageU8::wrap(PortType::Rgba8, width, height, stride, std::move(shared));
-}
+// makeRgba/makeGray 由 tests/image_test_util.hpp 唯一提供（M12/CR-40）。
+using rin_test::makeGray;
+using rin_test::makeRgba;
 
 // 构造紧凑（stride=0 → 宽）或行尾 padding（stride=rowBytes）的 Gray8 图像。
-ImageU8 makeGray(std::uint32_t width, std::uint32_t height, const GrayFn& pixel,
-                 std::uint32_t rowBytes = 0, std::uint8_t padByte = 0xEE) {
-    const std::uint32_t stride = rowBytes == 0 ? width : rowBytes;
-    std::vector<std::uint8_t> buffer(std::size_t{stride} * height, padByte);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
-            buffer[std::size_t{stride} * y + x] = pixel(x, y);
-        }
-    }
-    auto shared = std::make_shared<const std::vector<std::uint8_t>>(std::move(buffer));
-    return ImageU8::wrap(PortType::Gray8, width, height, stride, std::move(shared));
-}
-
 // 由紧凑字节向量构造 Gray8 图像（参考亮度图注入用）。
 ImageU8 wrapGray(std::uint32_t width, std::uint32_t height,
                  const std::vector<std::uint8_t>& bytes) {

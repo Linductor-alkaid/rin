@@ -57,38 +57,8 @@
 
 namespace rin_test {
 
-/// 共用轮询死限（单次有界等待上限；不许无限等待）。
-inline constexpr std::chrono::milliseconds kContractPollDeadline{5000};
-/// 静默检查窗（"无新发布"类断言的观察时长）。
-inline constexpr std::chrono::milliseconds kContractQuietWindow{300};
-
-/// 有界轮询：pred() 为真即返回 true；超时后做最后一次 pred() 并返回其结果。
-template <typename Pred>
-inline bool pollUntil(Pred&& pred,
-                      std::chrono::milliseconds timeout = kContractPollDeadline) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (pred()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    return pred();
-}
-
-/// 静默检查：在 window 内 hasNew() 一旦为真即返回 false（出现新发布）；
-/// 全窗安静返回 true。
-template <typename HasNew>
-inline bool quietFor(HasNew&& hasNew, std::chrono::milliseconds window) {
-    const auto deadline = std::chrono::steady_clock::now() + window;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (hasNew()) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{5});
-    }
-    return true;
-}
+// 有界等待 helper（pollUntil/quietFor）与死限/静默窗常量由 test_util.hpp
+// 提供（M12/CR-23 收敛；本套件原手抄版已删除，同命名空间直接可见）。
 
 /// 工作流引擎契约套件的参数化 fixture。
 struct WorkflowEngineFixture {
@@ -513,7 +483,7 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
                         rin::WorkflowStats discarded;
                         return engine->tryLoadStats(probe, discarded);
                     },
-                    kContractQuietWindow));
+                    kQuietWindow));
                 std::uint64_t fromZero = 0;
                 rin::WorkflowStats stale;
                 RIN_CHECK(engine->tryLoadStats(fromZero, stale));
@@ -578,7 +548,7 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
 
             // 高频采样事件通道直至 Failed 终态（有界：死限 5s）。
             bool reachedFailed = false;
-            const auto deadline = std::chrono::steady_clock::now() + kContractPollDeadline;
+            const auto deadline = std::chrono::steady_clock::now() + kPollDeadline;
             while (std::chrono::steady_clock::now() < deadline) {
                 rin::WorkflowEvent sampled;
                 if (engine->tryLoadEvent(sampled)) {
@@ -624,7 +594,7 @@ inline void runWorkflowEngineContractChecks(const WorkflowEngineFixture& fixture
                         rin::WorkflowStats discarded;
                         return engine->tryLoadStats(probe, discarded);
                     },
-                    kContractQuietWindow));
+                    kQuietWindow));
             }
 
             engine.reset();  // 析构内幂等 stop。

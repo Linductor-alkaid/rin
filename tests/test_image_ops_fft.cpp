@@ -69,6 +69,8 @@
 // M4-07 引擎与 M5-08 契约套件。
 #include "test_util.hpp"
 
+#include "image_test_util.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -227,31 +229,9 @@ std::uint8_t saturateRound(double value) {
 
 // 构造紧凑（stride=0 → 宽）或行尾 padding（stride=rowBytes）的 Gray8 图像；
 // padding 区域填充 padByte（默认 0xEE，用于断言不泄漏进输出）。
-ImageU8 makeGray(std::uint32_t width, std::uint32_t height, const GrayFn& pixel,
-                 std::uint32_t rowBytes = 0, std::uint8_t padByte = 0xEE) {
-    const std::uint32_t stride = rowBytes == 0 ? width : rowBytes;
-    std::vector<std::uint8_t> buffer(std::size_t{stride} * height, padByte);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
-            buffer[std::size_t{stride} * y + x] = pixel(x, y);
-        }
-    }
-    auto shared = std::make_shared<const std::vector<std::uint8_t>>(std::move(buffer));
-    return ImageU8::wrap(PortType::Gray8, width, height, stride, std::move(shared));
-}
-
-// 确定性字节伪随机（LCG，测试内自含；与被测实现无共享状态）。
-class ByteLcg {
-public:
-    explicit ByteLcg(std::uint32_t seed) : state_(seed) {}
-    std::uint8_t next() {
-        state_ = state_ * 1664525u + 1013904223u;
-        return static_cast<std::uint8_t>((state_ >> 16) & 0xFFu);
-    }
-
-private:
-    std::uint32_t state_;
-};
+// makeGray/ByteLcg 由 tests/image_test_util.hpp 唯一提供（M12/CR-40）。
+using rin_test::ByteLcg;
+using rin_test::makeGray;
 
 ImageU8 makeNoise(std::uint32_t width, std::uint32_t height, std::uint32_t seed) {
     ByteLcg lcg{seed};

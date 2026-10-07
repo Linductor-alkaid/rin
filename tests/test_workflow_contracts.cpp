@@ -51,6 +51,8 @@
 // 由主循环裁决修复，测试不迁就实现。
 #include "test_util.hpp"
 
+#include "validation_test_util.hpp"
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -226,14 +228,8 @@ std::size_t countIssues(const WorkflowValidation& v, ValidationIssueKind kind, N
     return count;
 }
 
-bool hasKind(const WorkflowValidation& v, ValidationIssueKind kind) {
-    for (const auto& issue : v.issues) {
-        if (issue.kind == kind) {
-            return true;
-        }
-    }
-    return false;
-}
+// hasKind 由 tests/test_util.hpp 唯一提供（M12/CR-39）。
+using rin_test::hasKind;
 
 // 参数 schema 逐字段相等（ParamDescriptor 无 operator==，逐字段比较）。
 bool paramSchemasEqual(const std::vector<ParamDescriptor>& lhs,

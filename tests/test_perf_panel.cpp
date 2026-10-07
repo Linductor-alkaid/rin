@@ -39,6 +39,8 @@
 
 #include "test_util.hpp"
 
+#include "image_test_util.hpp"
+
 #include <kairo/executor.hpp>
 
 #include <rin/image_node.hpp>
@@ -58,26 +60,10 @@
 
 namespace {
 
-// --- 断言与轮询辅助（与 test_param_panel.cpp 同纪律） ---
-
-void runSection(const char* name, void (*fn)()) {
-    std::printf("== %s\n", name);
-    fn();
-}
-
-// 有界轮询（秒级死限，防悬挂；pred() 为真即返回）。
-template <typename Pred>
-bool pollUntil(Pred&& pred, std::chrono::milliseconds timeout =
-                                std::chrono::milliseconds{5000}) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (pred()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    return pred();
-}
+// --- 断言与轮询辅助：runSection/pollUntil 由 tests/test_util.hpp 唯一提供
+// （M12/CR-23、CR-39；原本文件手抄副本已删除）。
+using rin_test::pollUntil;
+using rin_test::runSection;
 
 // 反复 consume 直到无可见变更（best-effort 排空；guard 防悬挂，Running 下
 // 发布间隔 10ms 远大于单次 consume 周期，收敛确定）。
@@ -146,22 +132,10 @@ constexpr std::uint32_t kFixtureWidth = 32;
 constexpr std::uint32_t kFixtureHeight = 24;
 
 // 确定性 32x24 Rgba8 图案（共享不可变缓冲；本测试不断言具体像素值）。
+/// 确定性图案帧（公式见 rin_test::deterministicRgbaPixels，M12/CR-41）。
 [[nodiscard]] const std::shared_ptr<const std::vector<std::uint8_t>>& fixturePixels() {
-    static const std::shared_ptr<const std::vector<std::uint8_t>> pixels = [] {
-        auto buffer = std::make_shared<std::vector<std::uint8_t>>(
-            static_cast<std::size_t>(kFixtureWidth) * kFixtureHeight * 4);
-        for (std::uint32_t y = 0; y < kFixtureHeight; ++y) {
-            for (std::uint32_t x = 0; x < kFixtureWidth; ++x) {
-                const std::size_t offset =
-                    (static_cast<std::size_t>(y) * kFixtureWidth + x) * 4;
-                (*buffer)[offset + 0] = static_cast<std::uint8_t>((x * 2 + y) & 0xFF);
-                (*buffer)[offset + 1] = static_cast<std::uint8_t>((x + y * 3) & 0xFF);
-                (*buffer)[offset + 2] = static_cast<std::uint8_t>((x * 5 + y * 7) & 0xFF);
-                (*buffer)[offset + 3] = 0xFF;
-            }
-        }
-        return buffer;
-    }();
+    static const std::shared_ptr<const std::vector<std::uint8_t>> pixels =
+        rin_test::deterministicRgbaPixels(kFixtureWidth, kFixtureHeight);
     return pixels;
 }
 

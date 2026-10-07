@@ -68,30 +68,11 @@
 
 namespace {
 
-// --- 断言辅助 ---
-
-void runSection(const char* name, void (*fn)()) {
-    std::printf("== %s\n", name);
-    fn();
-}
-
-[[nodiscard]] bool nearD(double a, double b, double tol = 1e-9) {
-    return std::fabs(a - b) <= tol;
-}
-
-// 有界轮询（秒级死限，防悬挂；pred() 为真即返回）。
-template <typename Pred>
-bool pollUntil(Pred&& pred, std::chrono::milliseconds timeout =
-                                std::chrono::milliseconds{5000}) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (pred()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    return pred();
-}
+// --- 断言辅助：runSection/nearD/pollUntil 由 tests/test_util.hpp 唯一提供
+// （M12/CR-23、CR-39；原本文件手抄副本已删除）。
+using rin_test::nearD;
+using rin_test::pollUntil;
+using rin_test::runSection;
 
 // 构造 NodeOutputSnapshot（node 固定非零以满足 valid()）。
 [[nodiscard]] rin::NodeOutputSnapshot makeSnapshot(const rin::PortType format,

@@ -54,6 +54,8 @@
 // 套件 + 特有检查整体设计 < 60s。
 #include "test_util.hpp"
 
+#include "image_test_util.hpp"
+
 #include <kairo/executor.hpp>
 
 #include <atomic>
@@ -97,23 +99,11 @@ using rin::WorkflowStats;
 constexpr std::uint32_t kFixtureWidth = 128;
 constexpr std::uint32_t kFixtureHeight = 96;
 
-/// 确定性 128×96 Rgba8 图案（共享不可变缓冲；测试断言不依赖具体像素值）。
+/// 确定性 128×96 Rgba8 图案（共享不可变缓冲；公式见
+/// rin_test::deterministicRgbaPixels，M12/CR-41）。
 const std::shared_ptr<const std::vector<std::uint8_t>>& fixturePatternPixels() {
-    static const std::shared_ptr<const std::vector<std::uint8_t>> pixels = [] {
-        auto buffer = std::make_shared<std::vector<std::uint8_t>>(
-            static_cast<std::size_t>(kFixtureWidth) * kFixtureHeight * 4);
-        for (std::uint32_t y = 0; y < kFixtureHeight; ++y) {
-            for (std::uint32_t x = 0; x < kFixtureWidth; ++x) {
-                const std::size_t offset =
-                    (static_cast<std::size_t>(y) * kFixtureWidth + x) * 4;
-                (*buffer)[offset + 0] = static_cast<std::uint8_t>((x * 2 + y) & 0xFF);
-                (*buffer)[offset + 1] = static_cast<std::uint8_t>((x + y * 3) & 0xFF);
-                (*buffer)[offset + 2] = static_cast<std::uint8_t>((x * 5 + y * 7) & 0xFF);
-                (*buffer)[offset + 3] = 0xFF;
-            }
-        }
-        return buffer;
-    }();
+    static const std::shared_ptr<const std::vector<std::uint8_t>> pixels =
+        rin_test::deterministicRgbaPixels(kFixtureWidth, kFixtureHeight);
     return pixels;
 }
 
@@ -660,7 +650,7 @@ int main() {
                               }
                               return false;
                           },
-                          rin_test::kContractQuietWindow),
+                          rin_test::kQuietWindow),
                       "idle frame source must not produce frames");
         RIN_CHECK(stayedRunning);
         RIN_CHECK(engine->state() == WorkflowEngineState::Running);
@@ -719,7 +709,7 @@ int main() {
                               return engine->tryLoadEvent(event) &&
                                      event.kind == WorkflowEventKind::GraphApplied;
                           },
-                          rin_test::kContractQuietWindow),
+                          rin_test::kQuietWindow),
                       "GraphApplied must not be republished per frame after consumption");
 
         // 统计继续推进。
@@ -863,7 +853,7 @@ int main() {
 
             bool reachedFailed = false;
             const auto deadline =
-                std::chrono::steady_clock::now() + rin_test::kContractPollDeadline;
+                std::chrono::steady_clock::now() + rin_test::kPollDeadline;
             while (std::chrono::steady_clock::now() < deadline) {
                 WorkflowEvent sampled;
                 if (engine->tryLoadEvent(sampled)) {
@@ -1088,7 +1078,7 @@ int main() {
                               }
                               return false;
                           },
-                          rin_test::kContractQuietWindow),
+                          rin_test::kQuietWindow),
                       "invalid frame image must be treated as no input");
         RIN_CHECK(stayedRunning);
         RIN_CHECK(engine->state() == WorkflowEngineState::Running);
@@ -1559,7 +1549,7 @@ int main() {
                                   return engine->tryLoadNodeOutput(2, probeSeen2,
                                                                    discarded);
                               },
-                              rin_test::kContractQuietWindow),
+                              rin_test::kQuietWindow),
                           "stale-frame: late generation-A frame must not publish "
                           "into the shared mailbox");
         }
