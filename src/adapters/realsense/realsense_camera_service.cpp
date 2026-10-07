@@ -830,22 +830,24 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             }
         }
 
-        // 分片有界等待（2026-10-07 热插拔反馈第二轮）：阻塞式 wait_for_frames
-        // 在设备移除时可能不超时返回（检查点不可达 → 状态停留 Streaming、
-        // 画面留末帧，真机实证）；改为 ≤200ms 分片 try_wait（超时返 false 不
-        // 抛），循环每 ~1s 必回命令/热插拔检查点——拔线后 3×超时内经
-        // serialOnline 复查转 Waiting，插回走 DeviceLost→重解析→重开路径
-        // （帧序号服务生命周期连续，画面水位直接恢复）。
+        // 分片有界等待（2026-10-07 热插拔反馈第二/三轮）：阻塞式 wait 与
+        // try_wait(timeout) 在设备移除时都不遵守短超时（真机实证 try_wait
+        // (200ms) 实际阻塞 ~15s ≈ RS2_DEFAULT_TIMEOUT，16s 后才经检查点转
+        // Waiting）；改用真非阻塞 poll_for_frames + 50ms 自旋睡眠，deadline
+        // 由本循环自律执行——循环每 ~1s 必回命令/热插拔检查点，拔线后
+        // 3×超时内经 serialOnline 复查转 Waiting，插回走 DeviceLost→重解析
+        // →重开路径（帧序号服务生命周期连续，画面水位直接恢复）。
         rs2::frameset frameset;
         bool haveFrames = false;
         try {
             const auto frameDeadline = std::chrono::steady_clock::now() + kFrameWaitTimeout;
             while (!stopToken.stop_requested() &&
                    std::chrono::steady_clock::now() < frameDeadline) {
-                if (pipeline.try_wait_for_frames(&frameset, 200)) {
+                if (pipeline.poll_for_frames(&frameset)) {
                     haveFrames = true;
                     break;
                 }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
         } catch (const rs2::error&) {
             haveFrames = false;  // 后端真错误与超时同款失败计数路径。
