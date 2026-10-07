@@ -830,13 +830,30 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             }
         }
 
+        // 分片有界等待（2026-10-07 热插拔反馈第二轮）：阻塞式 wait_for_frames
+        // 在设备移除时可能不超时返回（检查点不可达 → 状态停留 Streaming、
+        // 画面留末帧，真机实证）；改为 ≤200ms 分片 try_wait（超时返 false 不
+        // 抛），循环每 ~1s 必回命令/热插拔检查点——拔线后 3×超时内经
+        // serialOnline 复查转 Waiting，插回走 DeviceLost→重解析→重开路径
+        // （帧序号服务生命周期连续，画面水位直接恢复）。
         rs2::frameset frameset;
+        bool haveFrames = false;
         try {
-            frameset = pipeline.wait_for_frames(static_cast<unsigned int>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(kFrameWaitTimeout)
-                    .count()));
-            consecutiveFailures = 0;
+            const auto frameDeadline = std::chrono::steady_clock::now() + kFrameWaitTimeout;
+            while (!stopToken.stop_requested() &&
+                   std::chrono::steady_clock::now() < frameDeadline) {
+                if (pipeline.try_wait_for_frames(&frameset, 200)) {
+                    haveFrames = true;
+                    break;
+                }
+            }
         } catch (const rs2::error&) {
+            haveFrames = false;  // 后端真错误与超时同款失败计数路径。
+        }
+        if (stopToken.stop_requested()) {
+            return StreamExit::Stopped;
+        }
+        if (!haveFrames) {
             if (++consecutiveFailures >= kMaxConsecutiveFrameFailures) {
                 // 设备已不在总线上 → 按热插拔移除处理（Waiting），否则按真实错误上抛。
                 if (!serialOnline(context, activeSerial_)) {
@@ -852,6 +869,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
             }
             continue;
         }
+        consecutiveFailures = 0;
 
         // 运动帧轻量分支（EXEC-06，M3-04）：syncer 按时间戳分组出 frameset，
         // 运动合成帧可能不含视频帧且到达频率为 IMU ODR（~100-400Hz）——必须在
