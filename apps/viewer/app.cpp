@@ -410,6 +410,32 @@ void ViewerContext::pump() {
         statusMessage = event.message;
     }
 
+    // 无设备稳态排空（2026-10-07 热插拔反馈）：Waiting/Failed 下不显示陈旧
+    // 画面——预览卡回空态、监看器预览回占位符（序号水位保持，重连后经服务
+    // 生命周期帧序号恢复推进）；Opening/Restreaming 为瞬态，保留末帧避免闪烁。
+    if (statusState == rin::CameraServiceState::Waiting ||
+        statusState == rin::CameraServiceState::Failed) {
+        if (rgbView.valid() || depthView.valid()) {
+            rgbView.release();
+            depthView.release();
+            rgbMeta = "waiting for device";
+            depthMeta = "waiting for device";
+            frameUpdated = true;
+        }
+        bool drainedMonitor = false;
+        for (auto& [id, monitor] : workflowCanvas.monitors) {
+            (void)id;
+            if (monitor.view.valid() || !monitor.meta.empty()) {
+                monitor.view.release();
+                monitor.meta.clear();
+                drainedMonitor = true;
+            }
+        }
+        if (drainedMonitor) {
+            app::requestUpdate();
+        }
+    }
+
     // 工作流引擎事件（底部事件行 + 节点失败标注；契约 tryLoad* 非阻塞最新态
     // 语义，RULE-05 渲染线程只做有界消费）。NodeFailed 事件驱动画布/面板
     // destructive 徽标（M5-04 §4），Started/Stopped 清空（会话级）。GraphApplied

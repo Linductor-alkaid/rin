@@ -246,6 +246,14 @@ public:
     [[nodiscard]] LatestMailbox<ControlCommand>& commandMailbox() { return commands_; }
     [[nodiscard]] LatestMailbox<int>& hotPlugMailbox() { return hotPlug_; }
 
+    /// 视频帧序号（服务生命周期单调，2026-10-07 热插拔修复）：重连/重开
+    /// 后继续递增——streamLoop 局部序号在 DeviceLost 重连后从 0 重置，消费者
+    /// 水位（预览页/工作流引擎的"上次已见序号"）停在断线前高位，新帧永远
+    /// 不比水位新，表现为"设备状态恢复 Streaming 而画面永久冻结"。
+    [[nodiscard]] std::uint64_t nextFrameSequence() noexcept {
+        return frameSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
     [[nodiscard]] std::uint64_t nextSnapshotSequence() noexcept {
         return snapshotSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
@@ -332,6 +340,7 @@ private:
     kairo::WorkerHandle worker_{};
     std::atomic<bool> workerRunning_{false};
     std::atomic<std::uint64_t> snapshotSequence_{0};
+    std::atomic<std::uint64_t> frameSequence_{0};
 
     mutable std::mutex errorMutex_;
     std::string lastError_;
@@ -686,7 +695,8 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
                                                 const std::string& serial,
                                                 kairo::StopToken stopToken) {
     int consecutiveFailures = 0;
-    std::uint64_t sequence = 0;
+    // 帧序号取服务生命周期计数（热插拔修复，见 nextFrameSequence 注释）：
+    // 本函数在 DeviceLost 重连后会被重新调用，局部序号会使消费者水位饿死。
     std::vector<std::uint8_t> rgba;
     activeSerial_ = serial;
 
@@ -872,7 +882,7 @@ CaptureLoop::StreamExit CaptureLoop::streamLoop(rs2::context& context,
         if (!color || !depth) {
             continue;  // 纯运动 frameset：视频通道无事可做。
         }
-        ++sequence;
+        const std::uint64_t sequence = owner_.nextFrameSequence();
 
         const auto colorWidth = static_cast<std::uint32_t>(color.get_width());
         const auto colorHeight = static_cast<std::uint32_t>(color.get_height());
