@@ -100,65 +100,85 @@ P1（明显应立即整合）/ P2（值得整合）/ P3（可顺手做）。标�
 机械克隆检测（归一化 9 行滑窗，≥11 行克隆区）独立证实的高置信条目：CR-01、CR-23、
 CR-34、CR-39、CR-40、CR-41（tests/ 占 61 个克隆区中的绝大多数）。
 
+### 状态注记（2026-10-07 首轮修复收口）
+
+已整合（36 条）：CR-01..07、09、12、14、15、16..25、27、30..42、47（登记）、
+48（删除）。暂缓/保留（10 条 + 3 变体）：
+
+- CR-08（表驱动工厂）、CR-26（fft_bench 基准 helper）、CR-28（default_catalog
+  参数工厂）、CR-29（imu ingest 对称字段）、CR-43（formatText）、CR-44
+  （requestOrReport）、CR-45（状态徽标/工具栏偏移）、CR-46（帧源包装/快照
+  builder）：P3 遗留，归属 M12-18/19/20 未完成部分，维持 Planned。
+- CR-11（帧元数据 valid 四处平行）：**不整合**——四处分布在不同公共/内部头，
+  共享 helper 需扩大公开面或新建公共头，成本大于 4 行/处模式的收益；各处
+  minStride 逻辑本有格式差异。
+- CR-13（四元数 float/double 两套）：暂缓（见非目标；解除条件不变）。
+- CR-33 变体：issues 卡（标题宽不同）、工具栏卡（kFontBase 标题）、viewCard
+  （双标签叠加）为有意布局变体，不套 composeCardShell。
+- CR-42 部分：悬停行脚手架五处差异大（条件悬停/不同捕获），不强行抽
+  composeHoverRow；透明色字面量已全部令牌化。composeSelect 下沉未做。
+- CR-47（验证轮新发现）：Integer 参数端点为 double，声明 >2^53 端点即量化；
+  如需精确端点须 DEC 变更公开契约（int64 端点），不在 M12 范围。
+
 ## 工作项
 
 修复顺序即下列编号顺序（与审查报告建议顺序一致）。每个工作项完成后由
 Independent-Verification-Agent 独立回归，并在"验证记录"追加条目。
 
-- [ ] `M12-01` CR-15：把参数值匹配规则下沉为 Core 唯一实现（`workflow_types.cpp` 导出
+- [x] `M12-01`（Integer 边界统一 long double；端点 double 量化契约限制登记 CR-47） CR-15：把参数值匹配规则下沉为 Core 唯一实现（`workflow_types.cpp` 导出
   `paramValueMatches`，`param_check.hpp` 转发或删除），`validateWorkflowGraph` 与两个
   引擎的 `requestParamUpdate`/帧边界复核共用；Integer 边界统一为 `long double` 语义
   （以 `param_check.hpp` 注释的精度意图为准），消除 >2⁵³ 边界两路径判定相反。
-- [ ] `M12-02` CR-35：核实 app.cpp Waiting/Failed 排空与 node_canvas 非 Running 排空的
+- [x] `M12-02`（裁决：差异为有意语义（相机服务水位保留 vs 引擎复位），参数化统一 + 注释互指） CR-35：核实 app.cpp Waiting/Failed 排空与 node_canvas 非 Running 排空的
   `lastSeen` 复位差异哪份符合 DEC-021/M11 冻结语义，统一为单一
   `drainMonitorViews(canvas, resetWatermark)` 并让三处调用共用；若差异为缺陷按修复回归，
   若为有意行为在两处补注释并保留参数。
-- [ ] `M12-03` CR-01、CR-07、CR-10：pixel_format.cpp 批量收敛——抽
+- [x] `M12-03` CR-01、CR-07、CR-10：pixel_format.cpp 批量收敛——抽
   `computeFrameQuantile()`（P99 三份）、`validateDepth16Args()`（入口校验 ×4）、
   `grayLevel()`（ramp ×3）；数值行为逐位不变，由 test_pixel_format 回归保证。
-- [ ] `M12-04` CR-02、CR-03：新建 `src/core/` 内部头（仿 `pixel_format.hpp` 先例）承载
+- [x] `M12-04`（守卫统一 size<=1→0（size<=0 分叉不可达，已论证）） CR-02、CR-03：新建 `src/core/` 内部头（仿 `pixel_format.hpp` 先例）承载
   reflect-101 下标与一维高斯核构造唯一实现，image_ops/depth_preproc 两边引用；
   reflect 守卫统一为 `size <= 1 → 0`（两侧对 size≤0 的旧行为分叉按 image_ops 侧防御
   语义统一，size≥1 行为不变）。
-- [ ] `M12-05` CR-04：image_ops.cpp 抽 `requiredParam<T>`（内部走 `typedParam`），
+- [x] `M12-05` CR-04：image_ops.cpp 抽 `requiredParam<T>`（内部走 `typedParam`），
   9 处"缺失/种类错位即抛"样板收敛为薄包装；范围校验保留调用点。
-- [ ] `M12-06` CR-05：深度域五个无状态节点包装器收敛为单一模板基类
+- [x] `M12-06` CR-05：深度域五个无状态节点包装器收敛为单一模板基类
   （构造注入算子 callable），`DepthHistoryNode` 保持独立。
-- [ ] `M12-07` CR-06：环形历史抽样下标公式、入环推进与历史约束校验抽为
+- [x] `M12-07`（分组消息保留 + historyParamsValid 总判据兜底） CR-06：环形历史抽样下标公式、入环推进与历史约束校验抽为
   depth_preproc 共享函数，`DepthHistoryNode` 与 `PolicyDepthHistory` 共用。
-- [ ] `M12-08` CR-16：realsense_camera_service 抽 `rebuildStream()`（stop/startPipeline
+- [x] `M12-08`（首次打开路径生命周期不同保持独立（注释互指），收敛范围为准 restream/设备切换两处） CR-16：realsense_camera_service 抽 `rebuildStream()`（stop/startPipeline
   motion 门控/resetStreamState/重发内参），restream、设备切换、首次打开三处调用。
-- [ ] `M12-09` CR-17、CR-18、CR-19、CR-22、CR-31：adapter 小抽取——
+- [x] `M12-09` CR-17、CR-18、CR-19、CR-22、CR-31：adapter 小抽取——
   `sendControlCommand()`（统一白名单）、`consumeCommand()`/`drainHotPlug()`、
   `handleDeviceRemoved()`、publishFrame 模板化并让右值版委托 shared_ptr 版、
   复用 `depthData` 局部变量。
-- [ ] `M12-10` CR-20、CR-21、CR-24、CR-25、CR-30：engine/adapter 小抽取——
+- [x] `M12-10`（CR-25 按预案取注释互指（预检使拒绝先于状态分支可见，不删）） CR-20、CR-21、CR-24、CR-25、CR-30：engine/adapter 小抽取——
   `formatBuildFailure()`、`checkedParamApply()`、`steadyMs()` 入 src 内部小头、
   maxNodes 预检处理（信任 buildNodeGraph 唯一判据或注释互指）、`consumeFuture()`。
-- [ ] `M12-11` CR-23、CR-39：`pollUntil`/`quietFor`/`runSection`/`nearF` 族/`hasKind`
+- [x] `M12-11`（hasKind 拆 validation_test_util.hpp 保持 test_util 零依赖；bench/hardware 变体保留互指） CR-23、CR-39：`pollUntil`/`quietFor`/`runSection`/`nearF` 族/`hasKind`
   族下沉 `tests/test_util.hpp`，6 个手抄副本改引共享版；workflow_bench 变体保留并
   注释互指来源与语义差异。
-- [ ] `M12-12` CR-34：新建 `tests/fake_camera_service.hpp`，单一可配置槽位
+- [x] `M12-12` CR-34：新建 `tests/fake_camera_service.hpp`，单一可配置槽位
   （Frame/GrayFrame/DepthMetric 可选启用）的 FakeCameraService，stop 排空与水位
   语义唯一化，test_run_control/test_workflow_depth_source 改用。
-- [ ] `M12-13` CR-40、CR-41：新建 `tests/image_test_util.hpp`（makeRgba/makeGray/
+- [x] `M12-13` CR-40、CR-41：新建 `tests/image_test_util.hpp`（makeRgba/makeGray/
   ByteLcg/确定性图案帧），5 个 test_image_ops_* 与 test_workflow_engine/
   test_perf_panel 改用。
-- [ ] `M12-14` CR-32、CR-33：viewer 抽 `composeCardShell()`（卡片+标题栏，返回内容区
+- [x] `M12-14`（6 处同构站点收敛；issues 卡/工具栏/viewCard 有意变体保留（见台账注记）） CR-32、CR-33：viewer 抽 `composeCardShell()`（卡片+标题栏，返回内容区
   几何）与 `inlineInputStyle` 加 radius 参数，8 处卡片脚手架与 2 处 InputStyle 内联
   副本收敛。
 - [ ] `M12-15` CR-36、CR-42：viewer_theme 补 `kOverlayShadow`/`transparent` 令牌与
   `composeFloatingPanel()`、`composeHoverRow()`；浮层壳 ×2、透明色 ×7、悬停行 ×5
-  收敛；composeSelect 下沉共享并集中记录 EUI-20260923-003 绕行依据。
-- [ ] `M12-16` CR-37：app.cpp pump 工作流事件消费块提为 node_canvas.hpp 的
+  收敛；composeSelect 下沉共享并集中记录 EUI-20260923-003 绕行依据。（部分完成：令牌/浮层壳/透明色已收敛，composeSelect 下沉未做——绕行依据注释已集中于实现处。）
+- [x] `M12-16` CR-37：app.cpp pump 工作流事件消费块提为 node_canvas.hpp 的
   `pumpWorkflowEvents()`（平台无关、可测），app.cpp 与 test_run_control 共同消费
   真实现，删除测试内联复刻。
-- [ ] `M12-17` CR-38：抽 `composeLabeledRows()`，`96.0f`/`130.0f` 收进具名常量，
+- [x] `M12-17` CR-38：抽 `composeLabeledRows()`，`96.0f`/`130.0f` 收进具名常量，
   imu_panel 与内参卡共用。
-- [ ] `M12-18` CR-08、CR-09、CR-11、CR-12、CR-14：core P3 杂项——表驱动工厂、
+- [x] `M12-18`（部分完成：CR-09/12/14 已整合；CR-11 暂缓（公开头膨胀成本大于 4 行收益）；CR-08 未做） CR-08、CR-09、CR-11、CR-12、CR-14：core P3 杂项——表驱动工厂、
   bilinear 复用 `quantizeU8`、帧元数据 `valid()` 公共判定、`allFinite` 模板化、
   `policyWidth/Height` 合并。
-- [ ] `M12-19` CR-26、CR-27、CR-28、CR-29：bench/catalog/ingest P3 杂项——fft_bench
+- [x] `M12-19`（部分完成：CR-27 已整合；CR-26/28/29 未做） CR-26、CR-27、CR-28、CR-29：bench/catalog/ingest P3 杂项——fft_bench
   基准 helper 与容差常量、`kStatsWindow` 导出、default_catalog 参数工厂、
   imu ingest 对称字段按 kind 索引。
 - [ ] `M12-20` CR-43、CR-44、CR-45、CR-46：viewer P3 杂项——`formatText()`、
@@ -181,14 +201,15 @@ CR-13（四元数跨层模板化）暂缓，不设工作项；解除条件：出
 ## 测试与退出条件
 
 - [ ] 全部 CR 条目状态为"已整合/已统一/暂缓（记录理由）"，无遗留未登记条目。
-- [ ] 每个完成的工作项有 Independent-Verification-Agent 的独立回归证据（通过测试
+- [x] 每个完成的工作项有 Independent-Verification-Agent 的独立回归证据（通过测试
   清单与输出）。
-- [ ] 全量 `ctest` 在 debug/asan/ubsan（涉并发改动的批次加 tsan）预设 0 失败。
-- [ ] golden/契约测试（image_contracts、workflow_contracts、motion_contracts、
+- [x] 全量 `ctest` 在 debug/asan/ubsan/tsan 预设 0 失败（32/32 × 4；tsan 需
+  `setarch -R` 禁 ASLR——本机内核 mmap 随机化超 TSAN 支持范围，环境限制）。
+- [x] golden/契约测试（image_contracts、workflow_contracts、motion_contracts、
   test_pixel_format、test_depth_preproc、test_public_boundary）逐位通过，证明冻结
   数值语义未漂移。
-- [ ] 台账中标注"已分叉"的条目（CR-15、CR-35）有裁决结论与回归证据。
-- [ ] 受影响设计文档（如需）与总计划索引已同步；验证记录完整。
+- [x] 台账中标注"已分叉"的条目（CR-15、CR-35）有裁决结论与回归证据。
+- [x] 受影响设计文档（如需）与总计划索引已同步；验证记录完整。
 
 ## 验证记录
 
@@ -196,3 +217,28 @@ CR-13（四元数跨层模板化）暂缓，不设工作项；解除条件：出
 apps/viewer、tests 抽样与 tools；机械克隆检测 61 个 ≥11 行克隆区交叉证实（tests 占
 绝大多数；src 侧 pixel_format.cpp 三份克隆被独立检出）。发现 46 条（P1×7、P2×20、
 P3×19，其中 2 条已分叉）登记为 CR-01..CR-46，成立 M12。尚未开始代码修复。
+
+2026-10-07：首轮修复收口（36/46 条整合，分支 refactor/code-reuse-m12，提交
+101e101..cd42a60）。独立验证（Independent-Verification-Agent）四轮：
+
+1. M12-01 轮：发现验收标准错误——minValue/maxValue 契约为 double，声明 2^53+1
+   即量化为 2^53，原断言不可满足；改为契约文档化断言 + 判别用例（2^54−1 对
+   min=2^54 由误接受改正确拒绝）。登记 CR-47。debug/asan/ubsan 32/32，
+   workflow_contracts 332 断言 0 失败。
+2. 核心批次轮（CR-01..07、09）：纸面逐项比对 + 11 个冻结数值判据测试三预设
+   全绿，判定"逐位等价"；同时发现 adapter 批次 publishFrame 重载委托先于声明
+   的编译错误（已修复：shared_ptr 重载前移）与孤儿测试
+   test_depth_policy_preview.cpp（被测对象已随 a03066d 删除、从未注册 CMake，
+   删除并登记 CR-48）。
+3. 修复后 debug 全量 32/32 连续 5 轮全绿；workflow_depth_engine 在构建高负载
+   下出现过 2 次时序抖动（5s 轮询死限），单跑复跑即绿，非本批引入。
+4. 收尾轮（全 11 提交）：debug/asan/ubsan/tsan 四预设 clean rebuild + ctest
+   **32/32 × 4**；tsan 裸跑因本机内核 mmap 随机化超 TSAN 支持范围失败，
+   `setarch -R` 下 32/32（环境限制，建议 CI 固化该说明）。第一方代码零告警
+   （kairo 既有 34 条第三方告警除外）。diff 审查（44 文件 +1813/−1994）：公开头
+   零改动（include/ 无 diff），viewer 重构 id/几何逐位一致，新符号均有调用方；
+   报告-only 残留 include（7 个测试文件的 <map>/<mutex> 等）留待后续清理轮。
+
+行为对齐点（非纯重构，均已在对应提交注明）：CR-15 Integer 边界精度统一；
+CR-35 排空时"仅水位非零"边角补复位；CR-22 首次打开路径保持独立（生命周期
+不同）；CR-25 保留 applyGraph 预检（注释互指）。
