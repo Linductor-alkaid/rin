@@ -39,6 +39,9 @@ add_library(rin::workflow ALIAS rin_workflow)
 target_include_directories(rin_workflow
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/workflow>
+    PRIVATE
+        # M12/CR-15：param_check.hpp 转发到 core 内部头（param_match.hpp）。
+        ${CMAKE_CURRENT_SOURCE_DIR}/core
 )
 target_compile_features(rin_workflow PUBLIC cxx_std_20)
 # kairo 作为运行时契约 PUBLIC 传递（与 adapter 同纪律：引擎任务全部受 Executor 管理）。

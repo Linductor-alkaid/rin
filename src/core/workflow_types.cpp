@@ -1,5 +1,7 @@
 #include "rin/workflow_types.hpp"
 
+#include "param_match.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -138,45 +140,13 @@ bool NodeOutputSnapshot::valid() const noexcept {
 
 namespace {
 
-bool paramValueInRange(const ParamDescriptor& descriptor, const ParamValue& value) noexcept {
-    if (!descriptor.hasRange) {
-        return true;
-    }
-    if (descriptor.kind == ParamKind::Integer) {
-        const auto number = std::get<std::int64_t>(value);
-        return static_cast<double>(number) >= descriptor.minValue &&
-               static_cast<double>(number) <= descriptor.maxValue;
-    }
-    if (descriptor.kind == ParamKind::Real) {
-        const auto number = std::get<double>(value);
-        return number >= descriptor.minValue && number <= descriptor.maxValue;
-    }
-    return true;
-}
-
 bool paramAssignmentValid(const ParamDescriptor& descriptor, const ParamAssignment& assignment,
                           ValidationIssueKind* issueKind) {
-    if (paramKindOf(assignment.value) != descriptor.kind) {
+    // M12/CR-15：种类/范围/枚举成员/finite 判定唯一实现（与引擎热更新路径同一匹配器，
+    // DEC-013）；此处只负责把失败映射为 BadParam。
+    if (!workflow_detail::paramValueMatches(descriptor, assignment.value)) {
         *issueKind = ValidationIssueKind::BadParam;
         return false;
-    }
-    if (!paramValueInRange(descriptor, assignment.value)) {
-        *issueKind = ValidationIssueKind::BadParam;
-        return false;
-    }
-    if (descriptor.kind == ParamKind::Enumeration) {
-        const auto& selected = std::get<std::string>(assignment.value);
-        if (!std::any_of(descriptor.enumOptions.begin(), descriptor.enumOptions.end(),
-                         [&selected](const std::string& option) { return option == selected; })) {
-            *issueKind = ValidationIssueKind::BadParam;
-            return false;
-        }
-    }
-    if (descriptor.kind == ParamKind::RealArray) {
-        if (!allFinite(std::get<std::vector<double>>(assignment.value))) {
-            *issueKind = ValidationIssueKind::BadParam;
-            return false;
-        }
     }
     return true;
 }

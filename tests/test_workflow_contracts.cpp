@@ -33,6 +33,13 @@
 //    实现且 Gray8 apply golden（裁切子矩形 / nearest 面积覆盖采样）、未知
 //    typeId 仍抛 invalid_argument；跨类型连线：source_depth_gray→grayify 报
 //    TypeMismatch、source_depth_gray→crop_gray→gaussian_blur 合法图通过。
+// 9) M12/CR-15 参数匹配器单一实现回归（DEC-013）：Integer 大整数边界（2^53 邻域，
+//    修复前参数面本地 double 实现对值做 double 量化导致误判；修复后
+//    workflow_detail::paramValueMatches 唯一实现、Integer 用 long double 比较）、
+//    端点精确表示时紧贴端点值的判别用例（修复前错误接受的真实分界）、
+//    validateWorkflowGraph（Core 判据）与 src/workflow/param_check.hpp 转发头
+//    （引擎 requestParamUpdate/帧边界复核判据）双路径一致性，及常规
+//    Boolean/Real/Enumeration/RealArray 接受/拒绝语义不变。
 //
 // DOD-02 适用性说明：本契约面全部为单线程纯逻辑值语义（valid() 判定与
 // validateWorkflowGraph 纯函数，无任务提交/队列/取消/超时/shutdown 语义，
@@ -55,6 +62,10 @@
 #include <vector>
 
 #include "default_catalog.hpp"
+// M12/CR-15 回归（第 16 节）：经转发头直接调用引擎侧匹配器
+// workflow_detail::paramValueMatches（src/workflow/param_check.hpp ->
+// src/core/param_match.hpp），与 validateWorkflowGraph 参数面做双路径一致性核对。
+#include "param_check.hpp"
 
 #include <rin/image_ops.hpp>
 #include <rin/image_types.hpp>
@@ -1031,6 +1042,227 @@ int main() {
             const WorkflowValidation v = validateWorkflowGraph(g, def);
             RIN_CHECK_MSG(v.ok, "catalog: gray chain source_depth_gray->crop_gray->"
                                 "gaussian_blur validates");
+        }
+    }
+
+    // --- 16) M12/CR-15 回归：参数匹配器单一实现（DEC-013）与 Integer 2^53 边界 ---
+    // 被测面：validateWorkflowGraph 参数面（src/core/workflow_types.cpp 现经
+    // src/core/param_match.hpp 的 workflow_detail::paramValueMatches 判定）与
+    // src/workflow/param_check.hpp 转发头暴露的同一匹配器（引擎
+    // requestParamUpdate / 帧边界防御复核共用）。修复前参数面是本地
+    // paramValueInRange：Integer 值先 static_cast<double> 再比边界，2^53 以上
+    // 奇数值被量化吞掉；引擎侧实现本就是 long double 精确比较，两路语义分叉。
+    {
+        // 16.a/16.b) Integer 大整数边界（CR-15 验收数值）。
+        // 契约事实：ParamDescriptor::minValue/maxValue 是 double
+        // （include/rin/workflow_types.hpp）。2^53+1 = 9007199254740993 在
+        // double 中不可精确表示，存储量化为 2^53 = 9007199254740992.0；
+        // 2^53+2 = 9007199254740994 精确。
+        ParamDescriptor big;
+        big.id = "big";
+        big.label = "大整数";
+        big.kind = ParamKind::Integer;
+        big.defaultValue = static_cast<std::int64_t>(9007199254740993LL);
+        big.hasRange = true;
+        big.minValue = 9007199254740993.0;  // 存储为 9007199254740992.0（2^53）
+        big.maxValue = 9007199254740994.0;  // 2^53+2，精确
+
+        NodeDescriptor bigNode;
+        bigNode.typeId = "bignum";
+        bigNode.displayName = "大整数节点";
+        bigNode.outputs = {PortType::Rgba8};
+        bigNode.params = {big};
+        NodeCatalog bigCatalog;
+        bigCatalog.nodes = {makeSource(), bigNode};
+        RIN_CHECK(bigCatalog.valid());
+
+        // 单节点无连线：参数面是唯一可能的 issue 来源。
+        const auto bigVerdict = [&bigCatalog](std::int64_t v) {
+            WorkflowGraph g;
+            g.nodes = {makeNode(1, "bignum", {assign("big", ParamValue{v})})};
+            return validateWorkflowGraph(g, bigCatalog);
+        };
+
+        // 16.a 契约文档化断言（CR-15 1a 撤销，主循环裁决 2026-10-07）：赋值
+        // 2^53 被接受——Integer 端点为 double（include/rin/workflow_types.hpp），
+        // 声明 2^53+1 时存储即量化为 2^53，赋值 2^53 恰等于量化后的存储端点。
+        // 端点精度问题登记为 CR-47；如需精确端点须 DEC 变更契约（int64 端点），
+        // 不在 M12 范围。修复前后的参数面判定对这组数值一致（非本次行为变更点，
+        // 仅固化契约事实防回归漂移）。
+        {
+            RIN_CHECK_MSG(big.minValue == 9007199254740992.0,
+                          "CR-47: declared Integer min 2^53+1 quantizes to 2^53 (double endpoint)");
+            const WorkflowValidation v =
+                bigVerdict(static_cast<std::int64_t>(9007199254740992LL));
+            RIN_CHECK_MSG(v.ok,
+                          "CR-15 1a (revoked): Integer 2^53 equals the quantized stored min "
+                          "2^53 and is accepted under the double-endpoint contract");
+            RIN_CHECK(v.issues.empty());
+        }
+        // 16.b 验收（CR-15 1b）：恰为声明 min / max 的值接受；越上界最小步长拒绝。
+        RIN_CHECK(bigVerdict(static_cast<std::int64_t>(9007199254740993LL)).ok);
+        RIN_CHECK(bigVerdict(static_cast<std::int64_t>(9007199254740994LL)).ok);
+        {
+            const WorkflowValidation v =
+                bigVerdict(static_cast<std::int64_t>(9007199254740995LL));
+            RIN_CHECK(!v.ok);
+            RIN_CHECK_EQ(countIssues(v, ValidationIssueKind::BadParam, 1), std::size_t{1});
+        }
+
+        // 16.c 判别用例（行为修复的真实分界）：端点可被 double 精确表示时，
+        // 值侧不再量化——紧贴端点的奇数值与修复前 double 实现判定不同
+        // （修复前：值先经 double 量化被吸入端点内 → 越界被错误接受）。
+        // 同时守卫"不过度收紧"：区间内奇数值仍接受。
+        {
+            ParamDescriptor below;
+            below.id = "big";
+            below.label = "大整数";
+            below.kind = ParamKind::Integer;
+            below.defaultValue = static_cast<std::int64_t>(18014398509481984LL);  // 2^54
+            below.hasRange = true;
+            below.minValue = 18014398509481984.0;  // 2^54，精确
+            below.maxValue = 3.0e16;
+            ParamDescriptor above = below;
+            above.minValue = 0.0;
+            above.maxValue = 9007199254740996.0;  // 2^53+4，精确
+
+            NodeDescriptor belowNode = bigNode;
+            belowNode.typeId = "bignum_below";
+            belowNode.params = {below};
+            NodeDescriptor aboveNode = bigNode;
+            aboveNode.typeId = "bignum_above";
+            aboveNode.params = {above};
+            NodeCatalog divCatalog;
+            divCatalog.nodes = {makeSource(), belowNode, aboveNode};
+            RIN_CHECK(divCatalog.valid());
+
+            const auto divVerdict = [&divCatalog](const std::string& typeId, std::int64_t v) {
+                WorkflowGraph g;
+                g.nodes = {makeNode(1, typeId, {assign("big", ParamValue{v})})};
+                return validateWorkflowGraph(g, divCatalog).ok;
+            };
+            // min=2^54、值 2^54−1：修复前 double(2^54−1) 量化为 2^54 被错误接受。
+            RIN_CHECK_MSG(!divVerdict("bignum_below",
+                                      static_cast<std::int64_t>(18014398509481983LL)),
+                          "CR-15: Integer 2^54-1 must be rejected against exact min 2^54");
+            // max=2^53+4、值 2^53+5：修复前量化为 2^53+4 被错误接受。
+            RIN_CHECK_MSG(!divVerdict("bignum_above",
+                                      static_cast<std::int64_t>(9007199254740997LL)),
+                          "CR-15: Integer 2^53+5 must be rejected against exact max 2^53+4");
+            // 区间 [0, 2^53+4] 内的奇数值 2^53+1：合法，不得过度收紧。
+            RIN_CHECK(divVerdict("bignum_above", static_cast<std::int64_t>(9007199254740993LL)));
+            // 区间内的偶数值 2^53+2 / 端点 2^53+4：合法。
+            RIN_CHECK(divVerdict("bignum_above", static_cast<std::int64_t>(9007199254740994LL)));
+            RIN_CHECK(divVerdict("bignum_above", static_cast<std::int64_t>(9007199254740996LL)));
+        }
+
+        // 16.d 双路径一致性（CR-15 1c）+ 常规语义回归（CR-15 1d）：
+        // 同一用例经 validateWorkflowGraph（Core 判据）与经转发头的
+        // workflow_detail::paramValueMatches（引擎判据）判定一致；常规
+        // Boolean/Real/Enumeration/RealArray 接受/拒绝语义与修复前一致。
+        {
+            // 探针节点：无输入（无 DanglingInput 噪声）、Rgba8 输出、携带
+            // blur 的四种参数声明 + 独立 Boolean 声明节点。
+            NodeDescriptor paramProbe = makeBlur();
+            paramProbe.typeId = "paramprobe";
+            paramProbe.displayName = "参数探针";
+            paramProbe.inputs.clear();
+            paramProbe.outputs = {PortType::Rgba8};
+
+            ParamDescriptor boolD;
+            boolD.id = "flag";
+            boolD.label = "开关";
+            boolD.kind = ParamKind::Boolean;
+            boolD.defaultValue = true;
+            NodeDescriptor boolProbe = paramProbe;
+            boolProbe.typeId = "boolprobe";
+            boolProbe.displayName = "开关探针";
+            boolProbe.params = {boolD};
+
+            NodeCatalog probeCatalog;
+            probeCatalog.nodes = {makeSource(), paramProbe, boolProbe};
+            RIN_CHECK(probeCatalog.valid());
+
+            // 目录定型后再取描述符引用（避免 push_back 重悬垂）。
+            const ParamDescriptor& radiusD = probeCatalog.nodes[1].params[0];
+            const ParamDescriptor& strengthD = probeCatalog.nodes[1].params[1];
+            const ParamDescriptor& modeD = probeCatalog.nodes[1].params[2];
+            const ParamDescriptor& kernelD = probeCatalog.nodes[1].params[3];
+            const ParamDescriptor& flagD = probeCatalog.nodes[2].params[0];
+
+            const auto agree = [&probeCatalog](const std::string& typeId,
+                                               const ParamDescriptor& d, const ParamValue& v,
+                                               bool expectMatch) {
+                WorkflowGraph g;
+                g.nodes = {makeNode(1, typeId, {assign(d.id, v)})};
+                const bool viaValidate = validateWorkflowGraph(g, probeCatalog).ok;
+                const bool viaMatcher = rin::workflow_detail::paramValueMatches(d, v);
+                RIN_CHECK_EQ(viaValidate, viaMatcher);  // 双路径判定一致
+                RIN_CHECK_EQ(viaMatcher, expectMatch);  // 期望语义（常规面回归）
+            };
+            const std::string probeType = "paramprobe";
+            const std::string boolType = "boolprobe";
+
+            // 种类错配（五种各一组）：两路径一致且都拒绝。
+            agree(probeType, radiusD, ParamValue{true}, false);  // bool vs Integer
+            agree(probeType, strengthD, ParamValue{static_cast<std::int64_t>(1)},
+                  false);                                       // int64 vs Real
+            agree(probeType, modeD, ParamValue{0.5}, false);    // double vs Enumeration
+            agree(probeType, kernelD, ParamValue{std::string("x")}, false);  // string vs RealArray
+            agree(boolType, flagD, ParamValue{static_cast<std::int64_t>(1)},
+                  false);  // int64 vs Boolean
+            // 越界（Integer/Real 两侧界外）：一致且拒绝。
+            agree(probeType, radiusD, ParamValue{static_cast<std::int64_t>(0)}, false);
+            agree(probeType, radiusD, ParamValue{static_cast<std::int64_t>(11)}, false);
+            agree(probeType, strengthD, ParamValue{-0.5}, false);
+            agree(probeType, strengthD, ParamValue{1.5}, false);
+            // 界内：一致且接受。
+            agree(probeType, radiusD, ParamValue{static_cast<std::int64_t>(5)}, true);
+            agree(probeType, strengthD, ParamValue{0.25}, true);
+            // 枚举：合法选项接受、越选项拒绝。
+            agree(probeType, modeD, ParamValue{std::string("quality")}, true);
+            agree(probeType, modeD, ParamValue{std::string("ultra")}, false);
+            // RealArray：合法数组接受、含 NaN/Inf 拒绝。
+            agree(probeType, kernelD, ParamValue{std::vector<double>{0.25, 0.5, 0.25}}, true);
+            agree(probeType, kernelD, ParamValue{std::vector<double>{0.5, kNaN}}, false);
+            agree(probeType, kernelD, ParamValue{std::vector<double>{kInf}}, false);
+            // Boolean：true 接受。
+            agree(boolType, flagD, ParamValue{true}, true);
+            // 无范围（hasRange=false）：种类匹配即接受、错种拒绝。
+            ParamDescriptor freeInt = radiusD;
+            freeInt.hasRange = false;
+            WorkflowGraph freeGraph;
+            freeGraph.nodes = {makeNode(1, "paramprobe",
+                                        {assign("radius", ParamValue{static_cast<std::int64_t>(-5)})})};
+            NodeCatalog freeCatalog;
+            freeCatalog.nodes = {makeSource(), [&] {
+                                     NodeDescriptor n = paramProbe;
+                                     n.params = {freeInt};
+                                     return n;
+                                 }()};
+            RIN_CHECK(validateWorkflowGraph(freeGraph, freeCatalog).ok);
+            RIN_CHECK(rin::workflow_detail::paramValueMatches(freeInt,
+                                                              ParamValue{static_cast<std::int64_t>(-5)}));
+            RIN_CHECK(!rin::workflow_detail::paramValueMatches(freeInt, ParamValue{true}));
+
+            // 大整数边界四值同样双路径一致（判定值本身由 16.a/16.b 锁定）。
+            for (const std::int64_t v :
+                 {9007199254740992LL, 9007199254740993LL, 9007199254740994LL,
+                  9007199254740995LL}) {
+                const bool viaValidate = bigVerdict(v).ok;
+                const bool viaMatcher =
+                    rin::workflow_detail::paramValueMatches(big, ParamValue{v});
+                RIN_CHECK_EQ(viaValidate, viaMatcher);
+            }
+
+            // 失败映射保持：拒绝用例恰为一条 BadParam，落在赋值节点。
+            WorkflowGraph badGraph;
+            badGraph.nodes = {makeNode(1, "paramprobe",
+                                       {assign("radius", ParamValue{true})})};
+            const WorkflowValidation bad = validateWorkflowGraph(badGraph, probeCatalog);
+            RIN_CHECK(!bad.ok);
+            RIN_CHECK_EQ(bad.issues.size(), std::size_t{1});
+            RIN_CHECK_EQ(countIssues(bad, ValidationIssueKind::BadParam, 1), std::size_t{1});
         }
     }
 
