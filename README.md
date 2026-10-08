@@ -30,8 +30,9 @@ state machines and sanitizer-tested concurrency.
 
 ## Features
 
-- **Live preview** — RGB + depth streaming with device selection, resolution switching,
-  jet/grayscale depth palettes, and intrinsics display. Hot-plug friendly: the app starts
+- **Live preview** — RGB + depth streaming with device selection, resolution and frame
+  rate switching (paired color/depth capability tiers, e.g. 848x480@60), jet/grayscale
+  depth palettes, and intrinsics display. Hot-plug friendly: the app starts
   without a camera (a `Waiting` steady state) and resumes automatically.
 - **3D pose view** — camera pose in a fixed world frame (view frustum + ground grid),
   fused from accelerometer/gyroscope with a Mahony complementary filter (`ImuFuser`,

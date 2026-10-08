@@ -20,6 +20,7 @@
 #include "navigation.hpp"
 #include "node_canvas.hpp"
 #include "pose_view.hpp"
+#include "resolution_model.hpp"
 #include "viewer_components.hpp"
 #include "viewer_theme.hpp"
 
@@ -40,7 +41,6 @@
 #include <functional>
 #include <iterator>
 #include <memory>
-#include <set>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -56,12 +56,8 @@ using rin::StreamRequest;
 /// 默认流请求（DEC-004 暂定默认值）；设备选择独立于流请求（DEC-006）。M3-06 起
 /// 默认使能运动流（SCOPE-07）：IMU 设备上附加 ACCEL/GYRO 供 3D 位姿视图与 IMU
 /// 面板消费；无 IMU 设备按契约退化为纯视频流（运动通道保持空，不视为错误）。
+/// 视频字段（含 fps）同时是设备变化时档位回选的默认档判据（M13-01）。
 constexpr StreamRequest kDefaultRequest{.enableMotion = true};
-
-struct ResolutionUiOption {
-    StreamRequest request;
-    std::string label;
-};
 
 struct DeviceUiOption {
     std::string serial;
@@ -282,44 +278,18 @@ void ViewerContext::rebuildResolutionOptions() {
         return;  // 未选定设备（等待接入/用户选择）时不提供分辨率档位。
     }
     resolutionOptionsForSerial = device->serial;
-    const auto byWidthHeight = [](const rin::ResolutionOption& option) {
-        return std::pair<std::uint32_t, std::uint32_t>{option.width, option.height};
-    };
-    std::set<std::pair<std::uint32_t, std::uint32_t>> seen;
-    for (const rin::ResolutionOption& color : device->colorOptions) {
-        if (color.fps != kDefaultRequest.colorFps) {
-            continue;  // M1：固定 30fps 档位
-        }
-        if (!seen.insert(byWidthHeight(color)).second) {
-            continue;
-        }
-        bool depthMatch = false;
-        for (const rin::ResolutionOption& depth : device->depthOptions) {
-            if (depth.width == color.width && depth.height == color.height &&
-                depth.fps == kDefaultRequest.depthFps) {
-                depthMatch = true;
-                break;
-            }
-        }
-        if (!depthMatch) {
-            continue;
-        }
-        ResolutionUiOption option;
-        option.request.colorWidth = color.width;
-        option.request.colorHeight = color.height;
-        option.request.colorFps = color.fps;
-        option.request.depthWidth = color.width;
-        option.request.depthHeight = color.height;
-        option.request.depthFps = kDefaultRequest.depthFps;
-        // enableMotion 粘性保持（StreamRequest 契约，camera_types.hpp）：分辨率档位
-        // 只覆盖视频字段，运动流意图沿用会话默认（RIN_DISABLE_MOTION 会话级
-        // 禁用时为 false——否则 restream 命令重新带回运动流，坏 IIO 宿主上
-        // 即 LRS-20261007-001 合成帧饿死的第二入口）。
-        option.request.enableMotion =
-            kDefaultRequest.enableMotion && !motionDisabledByEnv;
-        option.label = std::to_string(color.width) + " x " + std::to_string(color.height);
+    // 档位枚举唯一实现（M13-01，resolution_model.hpp）：彩色∩深度按
+    // (宽, 高, fps) 三元组配对，M1"固定 30fps 档位"范围收缩就此放开——
+    // 设备支持的全部帧率档位（如 D435IF 848x480@60）均可手动选择。
+    // enableMotion 粘性保持（StreamRequest 契约，camera_types.hpp）：分辨率档位
+    // 只覆盖视频字段，运动流意图沿用会话默认（RIN_DISABLE_MOTION 会话级
+    // 禁用时为 false——否则 restream 命令重新带回运动流，坏 IIO 宿主上
+    // 即 LRS-20261007-001 合成帧饿死的第二入口）。
+    resolutionOptions = buildResolutionUiOptions(
+        *device, kDefaultRequest.enableMotion && !motionDisabledByEnv);
+    resolutionLabels.reserve(resolutionOptions.size());
+    for (const ResolutionUiOption& option : resolutionOptions) {
         resolutionLabels.push_back(option.label);
-        resolutionOptions.push_back(std::move(option));
     }
 }
 
@@ -392,12 +362,15 @@ void ViewerContext::pump() {
         const std::string previousOptionsForSerial = resolutionOptionsForSerial;
         rebuildResolutionOptions();
         if (resolutionOptionsForSerial != previousOptionsForSerial) {
-            // 仅设备变化（首次就绪/切换设备）时回到默认档位 848x480（DEC-004）；
-            // 同一设备的目录刷新必须保持用户已选档位。
+            // 仅设备变化（首次就绪/切换设备）时回到默认档位 848x480@30（DEC-004；
+            // M13-01 起帧率同为判据——同宽高存在多帧率档位，必须整体匹配默认
+            // 视频字段）；同一设备的目录刷新必须保持用户已选档位。
             for (std::size_t index = 0; index < resolutionOptions.size(); ++index) {
                 const ResolutionUiOption& option = resolutionOptions[index];
                 if (option.request.colorWidth == kDefaultRequest.colorWidth &&
-                    option.request.colorHeight == kDefaultRequest.colorHeight) {
+                    option.request.colorHeight == kDefaultRequest.colorHeight &&
+                    option.request.colorFps == kDefaultRequest.colorFps &&
+                    option.request.depthFps == kDefaultRequest.depthFps) {
                     resolutionIndex.set(static_cast<int>(index));
                     break;
                 }

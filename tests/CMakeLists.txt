@@ -153,6 +153,20 @@ set_tests_properties(realsense_hardware PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 120)
 
+# M13-03 真机帧率档位切换（hardware 标签，Independent-Verification-Agent；
+# docs/plans/m13-fps-selection.md）：视频-only（enableMotion=false，绕开
+# LRS-20261007-001 本宿主运动流饿死）848x480@30 -> requestResolution 60 ->
+# 回 30 的实测帧率闭环（序号差 x 墙钟窗口测量，≥2s；断言 ≥20 / ≥45 /
+# (20,45) 区间），全程 848x480 分辨率守卫与 stop() 收敛。无设备 SKIP 77
+# 语义与 realsense_hardware 一致。链 rin::realsense_adapter。
+add_executable(test_realsense_fps_hardware test_realsense_fps_hardware.cpp)
+target_link_libraries(test_realsense_fps_hardware PRIVATE rin::realsense_adapter)
+add_test(NAME realsense_fps_hardware COMMAND test_realsense_fps_hardware)
+set_tests_properties(realsense_fps_hardware PROPERTIES
+    LABELS "hardware"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 120)
+
 # M4-09 工作流视图契约（DEC-016，仅公开头 + Core 纯函数）：契约类型 valid()
 # 语义（ParamDescriptor 全分支 / NodeDescriptor / NodeCatalog 唯一性 /
 # NodeOutputSnapshot stride 与容量边界）、paramKindOf 与三组 toString、
@@ -546,4 +560,21 @@ target_include_directories(test_workflow_depth_source PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
 add_test(NAME workflow_depth_source COMMAND test_workflow_depth_source)
 set_tests_properties(workflow_depth_source PROPERTIES LABELS "unit")
+
+# M13-01/M13-02 分辨率档位枚举纯逻辑（apps/viewer/resolution_model.hpp，
+# Independent-Verification-Agent 设计；docs/plans/m13-fps-selection.md）：彩色∩深度
+# 按 (宽, 高, fps) 三元组交集配对（仅彩色/仅深度档位不出现、不同宽高同帧率不算
+# 配对、D435IF 真机档位表 960x540 排除与 90fps 排除）、request 六视频字段成对相等
+# 与 enableMotion 透传（含 rin::operator== 全量相等交叉核对，故链接 rin::core）、
+# 同三元组去重、排序确定性（高度降序→宽度降序→帧率升序）、标签逐字节格式
+# （"848x480 · 60fps"，· 为 U+00B7）、空目录退化与输入顺序无关性。app.cpp 的
+# 接线与默认回选判据绑定 EUI 运行时，headless 不可直接单测（真机验收归 M13-03，
+# 见文件头说明）。单线程纯逻辑：无跨上下文状态/关闭路径（DOD-02 矩阵不适用）。
+add_executable(test_resolution_model test_resolution_model.cpp)
+target_link_libraries(test_resolution_model PRIVATE rin::core)
+target_include_directories(test_resolution_model PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME resolution_model COMMAND test_resolution_model)
+set_tests_properties(resolution_model PROPERTIES LABELS "unit")
 

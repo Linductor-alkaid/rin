@@ -809,14 +809,17 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
         const int count = static_cast<int>(cameraResolution->labels->size());
         const int selectedIndex =
             std::clamp(cameraResolution->selectedIndex, 0, std::max(0, count - 1));
+        // 标签列 0.40 / 胶囊 0.60（M13-01）：档位标签含 fps 后缀（如
+        // "848x480 · 60fps"）后文字加宽，胶囊相应让宽；标签缩短为
+        // "Resolution" 保持在窄列内完整可读。
         ui.text(base + ".label")
             .position(innerX * s, rowY * s)
-            .size(innerW * 0.55f * s, kParamPillHeight * s)
-            .text("Camera resolution")
+            .size(innerW * 0.40f * s, kParamPillHeight * s)
+            .text("Resolution")
             .fontSize(scaledFont(kFontXs, s, 6.0f))
             .color(tokens.fgSubtle)
             .verticalAlign(eui::VerticalAlign::Center)
-            .maxWidth(innerW * 0.55f * s)
+            .maxWidth(innerW * 0.40f * s)
             .build();
         // 下拉触发器（M11 验收反馈：下拉选择；点击打开窗口级选项浮层，
         // composeWorkflowResolutionMenu，由 app.cpp overlay 层合成）。触发用
@@ -824,7 +827,7 @@ inline void composeInlineParams(eui::Ui& ui, WorkflowCanvasState& state,
         // 屏幕原点 + 触发器屏幕偏移）。勘误（resolve 升级分析）：首版
         // "mouseArea 在此嵌套下不响应"的结论不成立——EUI 输入路径经无头
         // 探针实证正常，真实断点是浮层 composer 从未接线。
-        const float pillW = innerW * 0.45f - kSpace1;
+        const float pillW = innerW * 0.60f - kSpace1;
         const float pillX = (innerX + innerW - pillW) * s;
         const float pillY = (rowY + 2.0f) * s;
         const float pillH = (kParamPillHeight - 4.0f) * s;

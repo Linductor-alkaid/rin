@@ -108,11 +108,20 @@
 - 可验收结果：视频-only 请求下双流 30 fps 端到端（29.1 fps 实测）、监看器
   实时预览随 seq 推进、参数下一帧生效（424x240→212x120）、停止排空；运动
   流修复后 `test_realsense_hardware` 全绿 + 默认请求复跑。
-- 状态：Open（间歇性环境缺陷：2026-10-07 晚间复验轮中 IIO 通路恢复健康——
-  enableMotion=true 全程五预设 realsense_hardware 通过、饿死未复现；同日早间
-  两轮（独立验证受控实验 + 主循环仪表化复现）确定性饿死。缺陷真实存在但
-  呈间歇性，触发条件未定位（疑似设备/内核状态相关）。等待再次复现时取证，
-  或 owner 对降级策略的裁定）
+- 状态：Resolved（2026-10-08 owner 裁定"不复现则关闭"，当日取证轮未复现：
+  内核 7.0.0-34-generic 不变（与 10-07 早间饿死轮同版本，排除内核版本因素），
+  IIO accel 三轴实时读数含重力分量且逐秒变化（x≈2-7、y≈-940、z≈306-312，
+  1s 间隔三次采样）；`realsense_hardware`（enableMotion=true 全链路，含 M3-08
+  IMU 频率验收与含运动流 restream）连续 5 次通过（13.2s/次，debug 预设），
+  加当日早间 M13 真机验收轮共 6+ 次开流零饿死。内核签名
+  `hid-sensor-hub ... No report with id 0xffffffff` 仍在设备枚举时出现
+  （journalctl 08:55:50）但数据面健康——该签名不具判定性。缺陷定性：间歇性
+  宿主环境缺陷（10-07 早间两轮确定性饿死；10-07 晚间、10-08 未复现），触发
+  条件未定位。重开条件：`realsense_hardware` 首帧超时型 FAIL，伴 IIO 读数
+  恒零与 librealsense `backend-hid ... Frames didn't arrived` 日志。应用侧
+  绕行保留：`RIN_DISABLE_MOTION=1`（viewer 会话级逃生口，零成本，不随本条
+  关闭移除）；`test_realsense_fps_hardware` 为视频-only，与本条解耦。运动流
+  真机验收（M3-08）阻断解除，其自动化载体已全绿）
 - 跟进：2026-10-07 登记（Independent-Verification-Agent 受控实验证据链 +
   主循环复跑实证）；2026-10-07 增加应用侧最小绕行：viewer 启动请求支持
   `RIN_DISABLE_MOTION=1` 环境变量跳过运动流（用户手动测试/无 IMU 场景，
@@ -120,7 +129,9 @@
   第二入口泄漏——分辨率档位的 enableMotion 粘性恒取默认请求 true，restream
   命令会在禁用会话中重新带回运动流（用户验收发现"切换分辨率后输入停更"，
   根因即本条目饿死机理），现已将环境变量升级为会话级标志（启动请求与档位
-  粘性同源，`ViewerContext::motionDisabledByEnv`）。
+  粘性同源，`ViewerContext::motionDisabledByEnv`）；2026-10-07 晚间复验轮
+  IIO 通路恢复健康（五预设通过，见状态栏历史记录）；2026-10-08 owner 授权
+  审查（M13 收尾），当日取证轮未复现，按裁定转 Resolved（取证数据见状态栏）。
 
 ### LRS-20261007-002：相机被占用时的打开失败拆除路径存在第三方数据竞争（tsan）
 
