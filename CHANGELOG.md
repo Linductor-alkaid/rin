@@ -4,6 +4,62 @@
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-09（预览策略深度可选输出与界面字号设置）
+
+### 新增
+
+- 预览深度可选输出（[PR #50](https://github.com/Linductor-alkaid/rin/pull/50)，
+  用户需求"整个 policy 输出工作流（不带历史分片）的输出进预览深度可选
+  输出"，参考 roboparty E3-Parkour 部署语义）。预览页 Depth 卡新增
+  Raw ⇄ Policy 循环切换：Policy 输出 = 米制深度通道 → O6 冻结单帧组合
+  （无效填充 → 64×36 raw 网格面积降采样 → 裁切 (18,0,16,16) → 高斯模糊 →
+  [0,2.5 m] 归一化，`PolicyDepthConfig` 默认值即 E3 部署参考冻结值）→
+  最近邻放大 ≤512 → [0,1]×255 灰度（无效填充呈白，不随全局配色命令变化）。
+  新组件 `viewer::PolicyDepthOutput`（apps/viewer/policy_depth_output.hpp，
+  无 EUI 类型可 headless 单测）：Executor 20ms 软调度周期 tick
+  （DEC-019 决策 3 纪律：弱引用闭包/busy 跳过/失败显式丢弃计数），
+  渲染线程 pump 非阻塞消费上传；**组件必须 shared_ptr 持有**，`start()`
+  对 unique/栈持有显式拒绝（见修复项）。决策记录
+  [DEC-022](docs/decisions/DEC-022-preview-depth-source-and-font-scale.md)。
+- 设置页字号档位（用户需求）：Preferences 新增 Font size 四档
+  （小 0.85 / 标准 1.0 / 大 1.15 / 特大 1.3），运行期写应用配置
+  `uiScale`——EUI 每帧读取 effectiveScale（输入/布局/绘制同一路径），
+  变更即整页等比重排，避免纯文本缩放的行高裁切；会话级，EUI 契约无变更。
+
+### 修复
+
+- 工作流画布下拉失效（用户真机反馈："接入非监看器下游模块后所有视频源
+  下拉没法点开"）。根因（EUI-20261009-001，真机 A/B 取证）：EUI 命中与
+  绘制按子树最大 zIndex 排序，组件滑条内部 ".hit" 热区自带 zIndex(10)
+  ——画布内存在任一滑条参数节点（深度域模块等，监看器无滑条故此前未
+  暴露）时页面子树 z 上限被抬到 10，默认 z=0 的根级浮层（分辨率下拉
+  scrim/面板、右键创建菜单、拖拽跟随）落到页面之下，点击全部穿透。
+  修复：浮层显式 `kOverlayZIndex=1000`（面板/scrim 分级）；上游化
+  三步走：issue sudoevolve/EUI-NEO#95 → 上游修复 PR sudoevolve/EUI-NEO#96
+  （含回归测试，上游 ctest 34/34）→ 锁清单 eui-neo 升至 fork 修复提交
+  791cb46（基 dev c444e53；上游合入后回迁）。Rin 侧显式 zIndex 保留为
+  防御性声明。IVA 判别性对照：归零 Rin 侧声明后 S1 仍通过，上游修复
+  独立生效。
+- 设置页双下拉纵向重叠区互扰（用户真机反馈两轮）：配色菜单展开区与
+  字号字段重叠（菜单高 110px、字段距 40px），同 z tie 下点配色选项被
+  字号字段截胡/菜单被遮挡；先开字号再开配色时双菜单同层互扰。修复：
+  composeSelect 展开中整栈再升一级 + 同页下拉互斥（展开任一先收起其它，
+  预览页 Device⇄Resolution 同款获益）。
+- PolicyDepthOutput 周期 tick 静默空转（IVA 真机发现，单测漏网案例）：
+  tick 闭包经 weak_from_this 捕获而生产接线 make_unique——弱引用恒空，
+  米制通道健康但策略显示帧永不产生。修复：强制 shared_ptr 持有 +
+  `start()` 显式拒绝无主持有；回归用例固化（unique 持有拒绝、start()
+  周期路径真实产出）。
+
+### 测试
+
+- 新增 `test_policy_depth_output`（37 检查）：常值帧端到端量化、无效像素
+  填充白、最近邻放大尺寸与索引映射、邮箱门控、O6 拒绝/无效源帧显式
+  丢弃、持有契约拒绝、start() 周期路径真实产出；`fake_camera_service`
+  去 final 支持用例级通道特化。IVA 真机矩阵：策略输出 seq 推进
+  dropped=0、Raw⇄Policy 切换、字号四档含缩放后命中一致性、双下拉两
+  方向互扰与互斥、S1-S5 工作流回归 5/5。
+
 ## [0.5.3] - 2026-10-08（M13 帧率档位选择与相机热插拔恢复）
 
 ### 新增
