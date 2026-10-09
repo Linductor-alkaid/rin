@@ -1057,7 +1057,12 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     composeSelect(
                         ui, "controls.device", deviceFieldX, pageTop, 210.0f, "select device",
                         deviceLabels, ctx.deviceIndex.get(), ctx.deviceOpen.get(),
-                        [&] { ctx.deviceOpen.set(!ctx.deviceOpen.get()); },
+                        [&] {
+                            // 下拉互斥（DEC-022 修正）：同页多下拉不共存，
+                            // 展开者收起其它，避免双开菜单同层叠互扰。
+                            ctx.resolutionOpen.set(false);
+                            ctx.deviceOpen.set(!ctx.deviceOpen.get());
+                        },
                         [&ctx](int index) {
                             ctx.deviceOpen.set(false);
                             ctx.deviceIndex.set(index);
@@ -1073,7 +1078,10 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     composeSelect(
                         ui, "controls.resolution", resolutionFieldX, pageTop, 180.0f, "select",
                         resolutionLabels, ctx.resolutionIndex.get(), ctx.resolutionOpen.get(),
-                        [&] { ctx.resolutionOpen.set(!ctx.resolutionOpen.get()); },
+                        [&] {
+                            ctx.deviceOpen.set(false);
+                            ctx.resolutionOpen.set(!ctx.resolutionOpen.get());
+                        },
                         [&ctx](int index) {
                             ctx.resolutionOpen.set(false);
                             ctx.resolutionIndex.set(index);
@@ -1086,7 +1094,11 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 composeSelect(
                     ui, "settings.preferences.palette", ox + 170.0f, pageTop + 48.0f, 170.0f,
                     "select", {"Jet", "Grayscale", "Adaptive"}, ctx.paletteIndex.get(),
-                    ctx.paletteOpen.get(), [&] { ctx.paletteOpen.set(!ctx.paletteOpen.get()); },
+                    ctx.paletteOpen.get(),
+                    [&] {
+                        ctx.fontScaleOpen.set(false);
+                        ctx.paletteOpen.set(!ctx.paletteOpen.get());
+                    },
                     [&ctx](int index) {
                         ctx.paletteOpen.set(false);
                         ctx.paletteIndex.set(index);
@@ -1099,7 +1111,10 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                     "select", std::vector<std::string>(std::begin(kFontScaleLabels),
                                                        std::end(kFontScaleLabels)),
                     ctx.fontScaleIndex.get(), ctx.fontScaleOpen.get(),
-                    [&] { ctx.fontScaleOpen.set(!ctx.fontScaleOpen.get()); },
+                    [&] {
+                        ctx.paletteOpen.set(false);
+                        ctx.fontScaleOpen.set(!ctx.fontScaleOpen.get());
+                    },
                     [&ctx](int index) {
                         ctx.fontScaleOpen.set(false);
                         ctx.fontScaleIndex.set(index);
