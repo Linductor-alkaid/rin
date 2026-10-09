@@ -38,7 +38,10 @@
    拒绝）计入 `droppedFrames`，不静默（AGENTS 规则 10）。生命周期 owner
    为 ViewerContext：服务 start 准入通过后 start，onShutdown 在服务 stop
    之后、executor shutdown 之前析构停止（准入失败路径不创建，tick 不会
-   落在未初始化 executor 上）。
+   落在未初始化 executor 上）。**组件必须由 shared_ptr 持有**（tick 闭包
+   经 weak_from_this 捕获，enable_shared_from_this 契约）——unique/栈持有
+   会使弱引用恒空、周期回调静默空转，`start()` 对此显式拒绝返回 false
+   （独立验证发现的缺陷类，回归用例 test_policy_depth_output 8b/9）。
 3. **字号 = 应用配置 uiScale 的运行期档位**：EUI 每帧读取
    `effectiveScale = dpiScale × uiScale`，变更即整页重排重绘——文字与
    布局同步缩放，避免"字号变大但行高/间距固定"的裁切问题（viewer 布局

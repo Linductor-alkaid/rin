@@ -98,10 +98,16 @@ public:
     PolicyDepthOutput(const PolicyDepthOutput&) = delete;
     PolicyDepthOutput& operator=(const PolicyDepthOutput&) = delete;
 
-    /// 启动周期 tick（20 ms）；重复 start 无效果（幂等）。
-    void start(kairo::Executor& executor) {
+    /// 启动周期 tick（20 ms）；重复 start 无效果（幂等）。组件必须由
+    /// shared_ptr 持有（tick 闭包经 weak_from_this 捕获，enable_shared_from_this
+    /// 契约）——unique/栈持有会使弱引用恒空、周期回调静默空转，此处显式拒绝
+    /// 返回 false（不静默，IVS 复验发现的缺陷类）。
+    [[nodiscard]] bool start(kairo::Executor& executor) {
+        if (weak_from_this().expired()) {
+            return false;
+        }
         if (started_.exchange(true, std::memory_order_relaxed)) {
-            return;
+            return true;
         }
         handle_ = executor.submit_periodic_cancellable(
             20, [weak = weak_from_this()](kairo::StopToken) {
@@ -109,6 +115,7 @@ public:
                     self->tick();
                 }
             });
+        return true;
     }
 
     /// 取消周期 tick（析构同路径）；幂等。已取消后不再有新周期 tick；在途

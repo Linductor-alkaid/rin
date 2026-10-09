@@ -19,9 +19,11 @@
 
 #include <rin/depth_preproc.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -198,26 +200,54 @@ int main() {
         RIN_CHECK(viewer::policyDepthDisplayGray(2.0) == 255);
     }
 
-    // --- 8) start/stop 冒烟（真 Executor；tick 直接驱动不依赖运行态） ---
+    // --- 8) start/stop 冒烟（真 Executor，shared 持有；幂等） ---
     {
         kairo::Executor executor;
         RIN_CHECK(executor.initialize({}));
-        {
-            auto service = std::make_shared<rin_test::FakeCameraService>();
-            viewer::PolicyDepthOutput output(service);
-            output.start(executor);   // 幂等路径覆盖。
-            output.start(executor);
-            output.stop();
-            output.stop();
-            rin::DepthMetricSample sample;
-            sample.sequence = 9;
-            sample.frame = constantDepth(848, 480, 1.25f);
-            service->publishMetric(std::move(sample));
-            output.tick();  // 直接驱动语义：stop 仅取消调度，单步推进仍可用。
-            std::uint64_t lastSeen = 0;
-            rin::Frame frame;
-            RIN_CHECK(output.tryLoadFrame(lastSeen, frame));
+        auto service = std::make_shared<rin_test::FakeCameraService>();
+        auto output = std::make_shared<viewer::PolicyDepthOutput>(service);
+        RIN_CHECK(output->start(executor));
+        RIN_CHECK(output->start(executor));  // 重复 start 幂等。
+        output->stop();
+        output->stop();
+        executor.shutdown(true);
+    }
+
+    // --- 8b) 持有契约：unique 持有（enable_shared_from_this 无主）被 start
+    // 显式拒绝——真机缺陷回归（周期闭包 weak 恒空静默空转的失败类） ---
+    {
+        kairo::Executor executor;
+        RIN_CHECK(executor.initialize({}));
+        auto service = std::make_shared<rin_test::FakeCameraService>();
+        auto output = std::make_unique<viewer::PolicyDepthOutput>(service);
+        RIN_CHECK_MSG(!output->start(executor),
+                      "unique 持有下 start 应显式拒绝（weak_from_this 无主）");
+        executor.shutdown(true);
+    }
+
+    // --- 9) start() 周期回调路径（shared 持有 + 真实周期调度产出帧） ---
+    {
+        kairo::Executor executor;
+        RIN_CHECK(executor.initialize({}));
+        auto service = std::make_shared<rin_test::FakeCameraService>();
+        auto output = std::make_shared<viewer::PolicyDepthOutput>(service);
+        RIN_CHECK(output->start(executor));
+        rin::DepthMetricSample sample;
+        sample.sequence = 77;
+        sample.frame = constantDepth(848, 480, 1.25f);
+        service->publishMetric(std::move(sample));
+
+        // 轮询等待周期 tick（20 ms）经闭包真实执行并发布（死限 2 s）。
+        bool produced = false;
+        std::uint64_t lastSeen = 0;
+        rin::Frame frame;
+        for (int waited = 0; waited < 2000 && !produced; waited += 5) {
+            produced = output->tryLoadFrame(lastSeen, frame);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
+        RIN_CHECK_MSG(produced, "start() 后周期回调应经 weak 闭包真实产出显示帧");
+        RIN_CHECK(produced && frame.width == 512u && frame.height == 288u);
+        output->stop();
         executor.shutdown(true);
     }
 

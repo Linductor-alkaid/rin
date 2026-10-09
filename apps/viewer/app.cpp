@@ -90,7 +90,9 @@ struct ViewerContext {
     std::uint64_t lastCatalogSequence = 0;
     std::uint64_t lastPoseSequence = 0;
 
-    std::unique_ptr<viewer::PolicyDepthOutput> policyDepth;
+    /// shared_ptr 持有（PolicyDepthOutput tick 闭包经 weak_from_this 捕获，
+    /// enable_shared_from_this 契约——unique 持有会被 start() 显式拒绝）。
+    std::shared_ptr<viewer::PolicyDepthOutput> policyDepth;
     GpuFrameView policyDepthView;
     std::string policyDepthMeta = "waiting for metric depth";
 
@@ -226,8 +228,12 @@ void ensureStarted() {
         // 策略深度可选输出 tick（DEC-019 决策 3 纪律：服务 start 准入通过后
         // 启动；onShutdown 在服务 stop 之后、executor shutdown 之前析构停止）。
         // 准入失败路径不创建，tick 不会落在未初始化 executor 上。
-        ctx.policyDepth = std::make_unique<viewer::PolicyDepthOutput>(ctx.service);
-        ctx.policyDepth->start(ctx.executor);
+        ctx.policyDepth = std::make_shared<viewer::PolicyDepthOutput>(ctx.service);
+        if (!ctx.policyDepth->start(ctx.executor)) {
+            ctx.startError = "policy depth tick rejected";
+            ctx.statusMessage = "start failed";
+            return false;
+        }
         ctx.started = true;
         ctx.statusMessage = "opening device";
         return true;
