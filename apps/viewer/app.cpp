@@ -19,6 +19,7 @@
 #include "imu_panel.hpp"
 #include "navigation.hpp"
 #include "node_canvas.hpp"
+#include "policy_depth_output.hpp"
 #include "pose_view.hpp"
 #include "resolution_model.hpp"
 #include "viewer_components.hpp"
@@ -46,6 +47,11 @@
 #include <utility>
 #include <vector>
 
+/// 字号档位写入（定义见文件尾 app 命名空间；设置页 overlay 回调消费）。
+namespace app {
+void setUiScale(float value);
+}
+
 namespace viewer {
 namespace {
 
@@ -59,6 +65,11 @@ using rin::StreamRequest;
 /// 视频字段（含 fps）同时是设备变化时档位回选的默认档判据（M13-01）。
 constexpr StreamRequest kDefaultRequest{.enableMotion = true};
 
+/// 字号档位（DEC-022）：设置页四档界面缩放，运行期写入应用配置 uiScale
+///（EUI 每帧读取 effectiveScale = dpiScale × uiScale，变更即整页重排重绘）。
+constexpr float kFontScales[] = {0.85f, 1.0f, 1.15f, 1.3f};
+constexpr const char* kFontScaleLabels[] = {"小", "标准", "大", "特大"};
+
 struct DeviceUiOption {
     std::string serial;
     std::string label;
@@ -69,13 +80,19 @@ struct ViewerContext {
     std::shared_ptr<rin::ICameraService> service;
     GpuFrameView rgbView;
     GpuFrameView depthView;
-    /// 策略深度预览（M9，DEC-019）：米制深度通道 → 冻结管线 → 历史网格快照。
+    /// 策略深度可选输出（DEC-019 决策 3 的"无历史分片"变体）：米制深度通道 →
+    /// 冻结管线 O6 单帧组合 → 灰度显示帧；tick 组件随服务 start 准入后创建。
 
     std::uint64_t lastRgbSequence = 0;
     std::uint64_t lastDepthSequence = 0;
+    std::uint64_t lastPolicySequence = 0;
     std::uint64_t lastIntrinsicsSequence = 0;
     std::uint64_t lastCatalogSequence = 0;
     std::uint64_t lastPoseSequence = 0;
+
+    std::unique_ptr<viewer::PolicyDepthOutput> policyDepth;
+    GpuFrameView policyDepthView;
+    std::string policyDepthMeta = "waiting for metric depth";
 
     rin::DeviceCatalog catalog;
     bool hasCatalog = false;
@@ -108,6 +125,11 @@ struct ViewerContext {
     /// 不依赖设备目录，Waiting 可预设。
     eui::Signal<int> paletteIndex{0};
     eui::Signal<bool> paletteOpen{false};
+    /// 预览深度可选输出（DEC-022）：0 = 相机深度 rendition，1 = 策略输出。
+    eui::Signal<int> depthSourceIndex{0};
+    /// 字号档位（DEC-022，界面缩放实现）：0..3 → kFontScales，会话级。
+    eui::Signal<int> fontScaleIndex{1};
+    eui::Signal<bool> fontScaleOpen{false};
 
     rin::CameraServiceState statusState = rin::CameraServiceState::Idle;
     std::string statusMessage;
@@ -201,6 +223,11 @@ void ensureStarted() {
             ctx.statusMessage = "start failed";
             return false;
         }
+        // 策略深度可选输出 tick（DEC-019 决策 3 纪律：服务 start 准入通过后
+        // 启动；onShutdown 在服务 stop 之后、executor shutdown 之前析构停止）。
+        // 准入失败路径不创建，tick 不会落在未初始化 executor 上。
+        ctx.policyDepth = std::make_unique<viewer::PolicyDepthOutput>(ctx.service);
+        ctx.policyDepth->start(ctx.executor);
         ctx.started = true;
         ctx.statusMessage = "opening device";
         return true;
@@ -399,8 +426,27 @@ void ViewerContext::pump() {
             depthMeta = "waiting for device";
             frameUpdated = true;
         }
+        if (policyDepthView.valid()) {
+            policyDepthView.release();
+            policyDepthMeta = "waiting for metric depth";
+            frameUpdated = true;
+        }
         if (viewer::drainMonitorViews(workflowCanvas, /*resetWatermark=*/false)) {
             app::requestUpdate();
+        }
+    }
+
+    // 策略深度可选输出（DEC-022）：最新态消费显示帧（tick 侧已完成 O6 组合
+    // 与灰度量化，此处仅上传）。无论卡片当前选择哪个输出都保持消费——邮箱
+    // 单槽换新，切换输出即时呈现最新帧。
+    if (policyDepth != nullptr) {
+        rin::Frame policyFrame;
+        if (policyDepth->tryLoadFrame(lastPolicySequence, policyFrame)) {
+            policyDepthView.update(policyFrame);
+            policyDepthMeta = "policy " + std::to_string(policyFrame.width) + " x " +
+                              std::to_string(policyFrame.height) + " \u00B7 seq " +
+                              std::to_string(policyFrame.sequence);
+            frameUpdated = true;
         }
     }
 
@@ -472,6 +518,10 @@ void ViewerContext::shutdown() {
         service->stop();
         service.reset();
     }
+    // 策略深度 tick 停止（DEC-019 顺序：服务 stop 之后、executor shutdown
+    // 之前；通道已无新发布，析构排空 LatestMailbox）。
+    policyDepth.reset();
+    policyDepthView.release();
     poseView.clear();  // 姿态通道 UI 侧排空（M3-07）：通道已无新发布，消费态归零。
     if (workflow != nullptr) {
         workflow->stop();  // 幂等；Idle 快路径。画布 UI 状态不跨 shutdown 复活
@@ -543,8 +593,11 @@ void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float x, float y, floa
 
 /// 画面卡：card 底 + cardBorder 1px + 圆角 xl；内嵌 surface 画面区圆角 md；
 /// 角标为 caption 次级标签与 xs 元数据（文字层级表达密度，不加多余描边）。
+/// toggleText 非空时在标签右侧绘制输出切换胶囊（DEC-022：深度卡 Raw/Policy
+/// 可选输出；点击回调由调用方注入，样式与工作流枚举胶囊同源）。
 void composeViewCard(eui::Ui& ui, const char* id, float width, float height, const char* label,
-                     const std::string& meta, GpuFrameView& view) {
+                     const std::string& meta, GpuFrameView& view, const char* toggleText = nullptr,
+                     const std::function<void()>& toggleOnClick = {}) {
     const float pad = kSpace3;
     const float labelHeight = kFontCaption + kSpace1;
     const float areaY = pad + labelHeight + kSpace1;
@@ -567,6 +620,27 @@ void composeViewCard(eui::Ui& ui, const char* id, float width, float height, con
                 .fontWeight(kWeightMedium)
                 .color(dark().fgSubtle)
                 .build();
+            if (toggleText != nullptr) {
+                constexpr float kToggleWidth = 76.0f;
+                ui.rect(std::string(id) + ".toggle")
+                    .position(pad + 52.0f, pad - 1.0f)
+                    .size(kToggleWidth, labelHeight)
+                    .radius(kRadiusSm)
+                    .color(dark().input)
+                    .border(kBorderHairline, dark().inputBorder)
+                    .states(dark().input, dark().inputBorderHover, dark().inputBorderHover)
+                    .onClick(toggleOnClick)
+                    .build();
+                ui.text(std::string(id) + ".toggleText")
+                    .position(pad + 52.0f, pad - 1.0f)
+                    .size(kToggleWidth, labelHeight)
+                    .text(toggleText)
+                    .fontSize(kFontXs)
+                    .color(dark().fg)
+                    .horizontalAlign(eui::HorizontalAlign::Center)
+                    .verticalAlign(eui::VerticalAlign::Center)
+                    .build();
+            }
             ui.text(std::string(id) + ".meta")
                 .position(pad, pad)
                 .size(width - pad * 2.0f, labelHeight)
@@ -802,8 +876,16 @@ void composePreviewPage(eui::Ui& ui, ViewerContext& ctx, float ox, float y, floa
         .content([&] {
             composeViewCard(ui, "view.rgb", viewWidth, viewsHeight, "RGB", ctx.rgbMeta,
                             ctx.rgbView);
-            composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth", ctx.depthMeta,
-                            ctx.depthView);
+            // 深度可选输出（DEC-022）：Raw = 相机深度 rendition（配色跟随全局
+            // 配色命令）；Policy = 策略输出（O6 冻结组合单帧，灰度、无历史
+            // 分片）。胶囊显示当前输出，点击循环切换。
+            const bool policySource = ctx.depthSourceIndex.get() != 0;
+            composeViewCard(ui, "view.depth", viewWidth, viewsHeight, "Depth",
+                            policySource ? ctx.policyDepthMeta : ctx.depthMeta,
+                            policySource ? ctx.policyDepthView : ctx.depthView,
+                            policySource ? "Policy" : "Raw", [&ctx] {
+                                ctx.depthSourceIndex.set((ctx.depthSourceIndex.get() + 1) % 2);
+                            });
         })
         .build();
     composeIntrinsicsCard(ui, ctx, width, panelHeight, ox, y + height - panelHeight);
@@ -827,7 +909,7 @@ void composeSettingsPage(eui::Ui& ui, float ox, float y, float width) {
     const theme::ThemeTokens& tokens = dark();
     const float pad = kSpace3;
     const float titleHeight = kFontSm + kSpace1;
-    const float preferencesHeight = 132.0f;
+    const float preferencesHeight = 172.0f;
     const float aboutHeight = 150.0f;
 
     ui.stack("settings.preferences")
@@ -845,10 +927,19 @@ void composeSettingsPage(eui::Ui& ui, float ox, float y, float width) {
                 .color(tokens.fg)
                 .verticalAlign(eui::VerticalAlign::Center)
                 .build();
+            ui.text("settings.preferences.fontLabel")
+                .position(pad, 88.0f)
+                .size(150.0f, 38.0f)
+                .text("Font size")
+                .fontSize(kFontBase)
+                .color(tokens.fg)
+                .verticalAlign(eui::VerticalAlign::Center)
+                .build();
             ui.text("settings.preferences.paletteHint")
-                .position(pad, 96.0f)
+                .position(pad, 136.0f)
                 .size(width - pad * 2.0f, kFontSm + kSpace1)
-                .text("color scheme for the depth preview - applies to the live stream")
+                .text("depth palette applies to the live stream - font size scales the "
+                      "whole interface")
                 .fontSize(kFontSm)
                 .color(tokens.fgSubtlest)
                 .build();
@@ -992,6 +1083,21 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                         ctx.paletteIndex.set(index);
                         ctx.applyPaletteChoice(index);
                     });
+                // 字号档位（DEC-022）：界面缩放实现，运行期写应用配置 uiScale
+                //（框架每帧读取 effectiveScale，变更即整页重排）；会话级。
+                composeSelect(
+                    ui, "settings.preferences.font", ox + 170.0f, pageTop + 88.0f, 170.0f,
+                    "select", std::vector<std::string>(std::begin(kFontScaleLabels),
+                                                       std::end(kFontScaleLabels)),
+                    ctx.fontScaleIndex.get(), ctx.fontScaleOpen.get(),
+                    [&] { ctx.fontScaleOpen.set(!ctx.fontScaleOpen.get()); },
+                    [&ctx](int index) {
+                        ctx.fontScaleOpen.set(false);
+                        ctx.fontScaleIndex.set(index);
+                        app::setUiScale(kFontScales[static_cast<std::size_t>(
+                            std::clamp(index, 0,
+                                       static_cast<int>(std::size(kFontScales)) - 1))]);
+                    });
             }
         })
         .build();
@@ -1095,9 +1201,21 @@ DslAppConfig makeDslAppConfig() {
     return config;
 }
 
-const DslAppConfig& dslAppConfig() {
-    static const DslAppConfig config = makeDslAppConfig();
+/// 应用配置存储（DEC-022）：uiScaleValue 运行期可变——字号档位经 setUiScale
+/// 写入，EUI 每帧读取 effectiveScale = dpiScale × uiScale，变更即整页重排；
+/// 其余字段仅初始化期消费。读写同在 UI 线程，无跨线程竞争。
+DslAppConfig& appConfigStorage() {
+    static DslAppConfig config = makeDslAppConfig();
     return config;
+}
+
+void setUiScale(float value) {
+    appConfigStorage().uiScaleValue = value > 0.0f ? value : 1.0f;
+    requestUpdate();
+}
+
+const DslAppConfig& dslAppConfig() {
+    return appConfigStorage();
 }
 
 void compose(eui::Ui& ui, const eui::Screen& screen) {
