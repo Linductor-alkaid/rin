@@ -1963,6 +1963,9 @@ inline void composeWorkflowDragGhost(eui::Ui& ui, WorkflowCanvasState& state) {
     ui.stack("workflow.ghost")
         .position(state.paletteDragPos.x + 10.0f, state.paletteDragPos.y + 10.0f)
         .size(width, height)
+        // 根级浮层恒在页面内容之上（页面含滑条节点时其子树 z 排序被抬升，
+        // 见 viewer_components.hpp kOverlayZIndex）。
+        .zIndex(kOverlayZIndex)
         .content([&] {
             ui.rect("workflow.ghost.card")
                 .size(width, height)

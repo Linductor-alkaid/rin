@@ -663,9 +663,13 @@ void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
     const float menuHeight = menuPad * 2.0f + itemHeight * count;
     const float totalHeight = fieldHeight + (open ? kSpace1 + menuHeight : 0.0f);
 
+    // 根级下拉浮层显式抬层（kOverlayZIndex）：与 composeFloatingPanel 同理——
+    // 页面内容若含 zIndex 抬升元素（滑条 .hit），默认 z=0 的下拉会在根级兄弟
+    // 命中/绘制排序中落到页面之下，弹层点击穿透（见 viewer_components.hpp）。
     ui.stack(id)
         .position(x, y)
         .size(width, totalHeight)
+        .zIndex(kOverlayZIndex)
         .content([&] {
             ui.rect(std::string(id) + ".field")
                 .size(width, fieldHeight)

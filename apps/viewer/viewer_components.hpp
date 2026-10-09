@@ -52,6 +52,17 @@ inline CardGeometry composeCardShell(eui::Ui& ui, const theme::ThemeTokens& toke
 inline constexpr float kLabeledRowsValueX = 96.0f;
 inline constexpr float kLabeledRowsMetaWidth = 130.0f;
 
+/// 根级浮层的显式层级（画布分辨率下拉无法选择的缺陷修复，EUI-20261009-001）：
+/// EUI 的命中与绘制排序按子树最大 zIndex（dsl.h rebuildOrderedElements 升序
+/// 排序、命中逆序遍历），eui-neo < 791cb46 的滑条组件内部 ".hit" 热区自带
+/// zIndex(10)——画布内出现任一滑条参数节点后，工作流页子树 z 上限即为 10，
+/// 默认 z=0 的浮层在根级兄弟排序中落到页面之下：scrim 与菜单项全部失去命中
+/// 优先级，点击穿透至画布 mouseArea（监看器无滑条故此前未暴露；上游修复见
+/// sudoevolve/EUI-NEO#96，锁清单已包含）。浮层声明不依赖"宿主组件内部不使用
+/// zIndex"这一隐含前提，显式取值恒在页面内容之上；面板在 scrim 之上再升
+/// 一级，scrims→面板的层级关系不依赖 tie 排序行为。
+inline constexpr int kOverlayZIndex = 1000;
+
 /// 名称/值行列表唯一脚手架（M12/CR-38）：行高 kFontBase + kSpace2；名称列
 /// caption/medium/fgSubtle（占位至 valueX），值列 base/fg 自 valueX 起。
 /// 行 id 派生为 "<idPrefix>.<rowIds[i]>.name" / ".value"。
@@ -92,16 +103,19 @@ void composeFloatingPanel(eui::Ui& ui, const theme::ThemeTokens& tokens,
     const float y = std::clamp(posY, 8.0f, std::max(8.0f, windowHeight - height - 8.0f));
 
     // 全窗口透明阻挡层：菜单外任意点击收起（§5.2.2 菜单是模态浮层）。
+    // zIndex 见 kOverlayZIndex 注释（滑条 .hit zIndex(10) 抬升页面子树排序）。
     ui.rect(id + ".scrim")
         .position(0.0f, 0.0f)
         .size(windowWidth, windowHeight)
         .color(theme::kTransparent)
+        .zIndex(kOverlayZIndex)
         .onClick(std::forward<OnDismiss>(onDismiss))
         .build();
 
     ui.stack(id)
         .position(x, y)
         .size(width, height)
+        .zIndex(kOverlayZIndex + 1)
         .content([&] {
             ui.rect(id + ".panel")
                 .size(width, height)
