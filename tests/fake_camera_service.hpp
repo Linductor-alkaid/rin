@@ -22,7 +22,9 @@
 
 namespace rin_test {
 
-class FakeCameraService final : public rin::ICameraService {
+// 可继承（非 final）：个别用例需要特化单条通道语义（如
+// test_policy_depth_output 的"直返无效米制采样"桩），其余方法保持继承复用。
+class FakeCameraService : public rin::ICameraService {
 public:
     // --- 测试脚本面（测试主线程同步调用） ---
     void publish(rin::Frame frame) {

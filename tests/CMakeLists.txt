@@ -499,6 +499,25 @@ target_include_directories(test_depth_metric_convert PRIVATE
 add_test(NAME depth_metric_convert COMMAND test_depth_metric_convert)
 set_tests_properties(depth_metric_convert PROPERTIES LABELS "unit")
 
+# DEC-022 策略深度单帧输出组件测试（apps/viewer/policy_depth_output.hpp，
+# Independent-Verification-Agent；判定依据 = depth_policy_preproc_design.md
+# 冻结公式 + roboparty E3-Parkour 部署参考 + DEC-019 决策 3 同源纪律）：常值帧
+# 端到端量化（1.25 m → 0.5 → 灰度 128）、无效像素 O1 填充远距白（0 → 255）、
+# 最近邻放大尺寸与索引映射（32×18 ×16 → 512×288；4×2 直通映射取样）、序列号/
+# 时间戳透传、邮箱"上次已见序号"门控（无新帧 false、空转快路径）、O6 拒绝
+# （源小于 raw 网格）与无效源帧显式丢弃计数、无服务防御、gray 钳制边界、
+# start/stop 幂等 + 真 Executor 冒烟（tick 直接驱动不依赖运行态）。
+# 单线程 tick 直接驱动，不创建线程（组件唯一跨上下文状态 LatestMailbox 的
+# 并发语义由 kairo::comm 契约保证）。
+add_executable(test_policy_depth_output test_policy_depth_output.cpp)
+target_link_libraries(test_policy_depth_output PRIVATE rin::core kairo::kairo)
+target_include_directories(test_policy_depth_output PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/viewer
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME policy_depth_output COMMAND test_policy_depth_output)
+set_tests_properties(policy_depth_output PROPERTIES LABELS "unit")
+
 # M10 深度域节点 golden 数值测试（DEC-020，Independent-Verification-Agent；数值
 # 判据 = depth_policy_preproc_design.md §5 冻结公式）：工厂分派全分支（真实默认
 # 目录：source_depth_metric → nullptr 注入型、5 个深度算子实现非状态、
