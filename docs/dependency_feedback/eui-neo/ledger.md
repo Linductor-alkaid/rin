@@ -9,8 +9,10 @@
 ## 依赖身份
 
 - 来源：https://github.com/sudoevolve/EUI-NEO（备用镜像 AtomGit）
-- 锁定：`third_party/dependencies.lock` 行 `eui-neo|...|4691fc0a...|...|OFF|external`
-  （2026-10-03 由 `782c5699` 升至 dev `4691fc0a`，验证会话见文末）
+- 锁定：`third_party/dependencies.lock` 行 `eui-neo|...|791cb46b...|...|OFF|external`
+  （2026-10-03 由 `782c5699` 升至 dev `4691fc0a`，验证会话见文末；2026-10-09
+  为包含滑条 zIndex 修复 EUI-20261009-001 / 上游 PR #96 临时改指 fork 分支
+  提交 `791cb46b`（基 dev `c444e53`），上游合入后回迁 upstream，见条目跟进）
 - 许可证：Apache-2.0（上游 LICENSE）
 - 类别：external（FetchContent 源码引入 / 本地 pinned clone）
 - 集成方式：`add_subdirectory` → `eui::neo`；应用目标经 `eui_neo_configure_app()`
@@ -387,8 +389,17 @@
   上限 10，余量充足）。
 - 移除条件：上游组件不再内部使用 zIndex（或提供文档化的浮层层级约定）
   后，可移除显式 z 声明并做浮层点击回归。
-- 状态：Open（绕行已实施；M13 后缺陷修复，引用本编号）
-- 跟进：2026-10-09 登记；修复 commit 见 `fix(viewer)` 系列提交。
+- 状态：Open（绕行已实施；上游修复 PR sudoevolve/EUI-NEO#96 已提交，等待合入）
+- 跟进：2026-10-09 登记；修复 commit 见 `fix(viewer)` 系列提交。2026-10-09 上游
+  化：issue sudoevolve/EUI-NEO#95 + PR #96（fork 分支
+  `fix/slider-hit-zindex-subtree-order` @ `791cb46`，基于 dev `c444e53`；
+  上游 ctest 34/34 含新增回归测试 `slider_subtree_z_order`，修复前该测试
+  复现 `subtreeMaxZIndex=10`）。锁清单同步升级：
+  `third_party/dependencies.lock` eui-neo 行改为 fork URL @ `791cb46`
+  （`4691fc0` → `791cb46`），**回迁条件：PR #96 合入上游后，锁清单回迁
+  upstream dev 对应提交并恢复原 URL**；Rin 侧 `kOverlayZIndex` 声明在
+  回迁复评前保留（防御性：不依赖宿主组件"内部不使用 zIndex"这一隐含
+  前提，且实测同值 tie 的排序行为未在框架层定论）。
 
 
 
@@ -405,7 +416,7 @@
 | EUI-20261003-003 | PR 提交 | P1 | 上游 #81 → PR #86（2026-10-05 error_code 非抛出重载修复+验证）；Rin 侧 `-fexceptions` 追加绕行维持至上游合并 |
 | EUI-20261003-004 | Resolved | P3 | 上游 #82 已由 123f0c5 修复（`tests/unit/image_stream.cpp` 陈旧断言，2026-10-05 Release/Debug 复测通过） |
 | EUI-20261005-001 | Reported | P3 | 上游 #87；Release 下测试夹具/应用目标异常语法编不过（platform_dialog throw、dsl_app_impl try/catch），预存在豁免缺口；不阻断 Rin |
-| EUI-20261009-001 | Open | P2 | 滑条内部 zIndex(10) 经子树排序压过根级浮层（分辨率下拉不可点选）；viewer 浮层显式 kOverlayZIndex=1000 绕行（viewer_components.hpp）；上游出层级约定后移除 |
+| EUI-20261009-001 | Open | P2 | 滑条内部 zIndex(10) 经子树排序压过根级浮层（分辨率下拉不可点选）；viewer 浮层显式 kOverlayZIndex=1000 绕行（viewer_components.hpp）；上游 issue #95 / PR #96（fork `791cb46b`），锁清单已暂指 fork 修复提交，上游合入后回迁 |
 
 ## dev 分支验证会话（2026-10-03）
 

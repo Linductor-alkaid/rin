@@ -52,14 +52,15 @@ inline CardGeometry composeCardShell(eui::Ui& ui, const theme::ThemeTokens& toke
 inline constexpr float kLabeledRowsValueX = 96.0f;
 inline constexpr float kLabeledRowsMetaWidth = 130.0f;
 
-/// 根级浮层的显式层级（画布分辨率下拉无法选择的缺陷修复）：EUI 的命中与绘制
-/// 排序按子树最大 zIndex（dsl.h rebuildOrderedElements 升序排序、命中逆序
-/// 遍历），而组件滑条内部的 ".hit" 热区自带 zIndex(10)（components/slider.h）
-/// ——画布内出现任一滑条参数节点后，工作流页子树 z 上限即为 10，默认 z=0 的
-/// 浮层在根级兄弟排序中落到页面之下：scrim 与菜单项全部失去命中优先级，点击
-/// 穿透至画布 mouseArea（监看器无滑条故此前未暴露）。浮层一律声明显著更高的
-/// zIndex，保证恒在页面内容之上；实测同值 tie 时先合成的 scrim 反而抢先命中
-/// （真机 A/B 复现），故面板在 scrim 之上再升一级，层级关系显式化。
+/// 根级浮层的显式层级（画布分辨率下拉无法选择的缺陷修复，EUI-20261009-001）：
+/// EUI 的命中与绘制排序按子树最大 zIndex（dsl.h rebuildOrderedElements 升序
+/// 排序、命中逆序遍历），eui-neo < 791cb46 的滑条组件内部 ".hit" 热区自带
+/// zIndex(10)——画布内出现任一滑条参数节点后，工作流页子树 z 上限即为 10，
+/// 默认 z=0 的浮层在根级兄弟排序中落到页面之下：scrim 与菜单项全部失去命中
+/// 优先级，点击穿透至画布 mouseArea（监看器无滑条故此前未暴露；上游修复见
+/// sudoevolve/EUI-NEO#96，锁清单已包含）。浮层声明不依赖"宿主组件内部不使用
+/// zIndex"这一隐含前提，显式取值恒在页面内容之上；面板在 scrim 之上再升
+/// 一级，scrims→面板的层级关系不依赖 tie 排序行为。
 inline constexpr int kOverlayZIndex = 1000;
 
 /// 名称/值行列表唯一脚手架（M12/CR-38）：行高 kFontBase + kSpace2；名称列
