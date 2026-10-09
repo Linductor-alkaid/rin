@@ -746,10 +746,13 @@ void composeSelect(eui::Ui& ui, const char* id, float x, float y, float width,
     // 根级下拉浮层显式抬层（kOverlayZIndex）：与 composeFloatingPanel 同理——
     // 页面内容若含 zIndex 抬升元素（滑条 .hit），默认 z=0 的下拉会在根级兄弟
     // 命中/绘制排序中落到页面之下，弹层点击穿透（见 viewer_components.hpp）。
+    // 展开中的下拉再升一级：同页多个下拉纵向相邻时（如设置页配色菜单展开
+    // 区恰与下方字号字段重叠），同级 tie 的排序不保证菜单压过兄弟字段——
+    // 展开者必须恒在其它下拉之上（模态语义：展开的弹层最先命中、最后绘制）。
     ui.stack(id)
         .position(x, y)
         .size(width, totalHeight)
-        .zIndex(kOverlayZIndex)
+        .zIndex(open ? kOverlayZIndex + 1 : kOverlayZIndex)
         .content([&] {
             ui.rect(std::string(id) + ".field")
                 .size(width, fieldHeight)
