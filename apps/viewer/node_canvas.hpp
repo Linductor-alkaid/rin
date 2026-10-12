@@ -25,7 +25,7 @@
 //
 // 监看器（M11/DEC-021 决策 2）：typeId "viewer"，画布隐藏输出端口（纯逻辑
 // portAt 同步跳过），节点内嵌预览窗显示输入图像（pumpMonitorViews 拉取
-// tryLoadNodeOutput 上传 GpuFrameView；非 Running 整体排空释放，§4 语义）。
+// tryLoadNodeOutput 提交 FrameStreamView；非 Running 整体排空释放，§4 语义）。
 //
 // 连线即时类型过滤（§5.3）：拖线中兼容输入端口高亮 brand、不兼容端口降为
 // 次级色；Any 输入端口（监看器）恒兼容。
@@ -45,7 +45,7 @@
 // [DEC-021]: ../../docs/decisions/DEC-021-monitor-node-and-inline-editing.md
 
 #include "canvas_model.hpp"
-#include "gpu_frame_view.hpp"
+#include "frame_stream_view.hpp"
 #include "param_model.hpp"
 #include "perf_model.hpp"
 #include "viewer_components.hpp"
@@ -90,12 +90,12 @@ struct NodeParamControls {
     std::map<std::string, ParamControlState> controls;
 };
 
-/// 监看器预览视图（M11/DEC-021）：每监看器节点一枚 GL 纹理视图与产物水位；
-/// 上传/释放只能发生在渲染线程（pump/onFrame），节点删除与非 Running 排空
+/// 监看器预览视图（M11/DEC-021）：每监看器节点一枚帧流视图与产物水位；
+/// 提交/释放只能发生在渲染线程（pump/onFrame），节点删除与非 Running 排空
 /// 经 pumpMonitorViews 完成。
 struct MonitorView {
     std::uint64_t lastSeen = 0;  /// 该节点产物通道的上次已见序号。
-    GpuFrameView view;
+    FrameStreamView view;
     std::string meta;  /// "宽 x 高 · seq N"（无产物为空）。
 };
 
@@ -1253,7 +1253,7 @@ inline void composeCanvasNode(eui::Ui& ui, WorkflowCanvasState& state, const Can
                     ui.image(base + ".previewImg")
                         .position(previewX, previewY)
                         .size(previewW, previewHpx)
-                        .texture(it->second.view.image(), it->second.view.revision())
+                        .stream(it->second.view.stream())
                         .contain()
                         .radius(kRadiusSm * s)
                         .build();
@@ -2189,14 +2189,14 @@ inline bool drainMonitorViews(WorkflowCanvasState& canvas, bool resetWatermark) 
 }
 
 /// pump 边界的监看器预览消费（M11/DEC-021）：引擎 Running 时逐监看器节点拉取
-/// 最新产物并上传预览纹理（GL 当前线程）；非 Running 整体排空释放（§4 停止/
+/// 最新产物并提交预览帧流（渲染线程）；非 Running 整体排空释放（§4 停止/
 /// 关闭排空，stale 快照不得显示活动状态）。已删除/不再是监看器的节点条目
-/// 同步清理（afterGraphChange 只移除条目、GL 释放在此完成——渲染线程纪律）。
+/// 同步清理（afterGraphChange 只移除条目、流释放在此完成——渲染线程纪律）。
 /// 返回 true 表示有可见变更（调用方需 requestUpdate）。
 inline bool pumpMonitorViews(WorkflowCanvasState& canvas, rin::IWorkflowEngine& engine) {
     const bool running = engine.state() == rin::WorkflowEngineState::Running;
 
-    // 清理不再有效的条目（节点删除/类型不再是监看器）：GL 释放仅渲染线程。
+    // 清理不再有效的条目（节点删除/类型不再是监看器）：流释放仅渲染线程。
     bool changed = false;
     for (auto it = canvas.monitors.begin(); it != canvas.monitors.end();) {
         const CanvasNode* node = canvas.model.findNode(it->first);

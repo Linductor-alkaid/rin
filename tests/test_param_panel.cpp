@@ -38,7 +38,7 @@
 // 产物到达用秒级死限的有界轮询等待；帧输入为 32x24 Rgba8 合成图案的饱和帧源，
 // crop 节点显式携带合法 ROI 参数——默认 64x64 ROI 越出 32x24 帧会被真实 crop
 // 算子运行期拒绝）；其余分区单线程纯逻辑。
-// param_panel.hpp 的 EUI 组装与 pumpNodeOutput（GpuFrameView GL 上传）headless
+// param_panel.hpp 的 EUI 组装与 pumpNodeOutput（FrameStreamView 提交）headless
 // 不可测，不在本文件范围（与 test_navigation/test_node_canvas 同纪律）。
 
 #include "param_model.hpp"

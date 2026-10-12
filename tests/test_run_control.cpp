@@ -605,8 +605,8 @@ void testEngineUiEndToEnd() {
     // stop 排空（§4）：stop 返回后状态 Idle、缓存清空语义、无新发布、stale
     // 保持旧值、幂等双 stop。
     // M11/DEC-021 起 pump 消费面 = pumpMonitorViews（监看器预览）+ pumpDriverSizes
-    // （ROI 联动尺寸源），替代 M5-04 的 WorkflowPanelState/pumpNodeOutput。GL 上传
-    // 分支（GpuFrameView::update）headless 不可测，本处驱动其平台无关分支：
+    // （ROI 联动尺寸源），替代 M5-04 的 WorkflowPanelState/pumpNodeOutput。帧流提交
+    // 分支（FrameStreamView::update）headless 不可测，本处驱动其平台无关分支：
     // Running 无产物 no-op、已删节点条目清理、非 Running 排空（一次 true、幂等
     // 二次 false）。画布节点用引擎图之外的 id（引擎产物通道只覆盖图内节点 1..3，
     // pump 拉取恒"无产物"，不触 GL 路径）。

@@ -15,7 +15,7 @@
 // 消费同一份快照呈现源频率与姿态数值；onShutdown 在服务停止后排空 UI 侧姿态
 // 状态（关闭顺序回归 M3-07）。
 
-#include "gpu_frame_view.hpp"
+#include "frame_stream_view.hpp"
 #include "imu_panel.hpp"
 #include "navigation.hpp"
 #include "node_canvas.hpp"
@@ -78,8 +78,8 @@ struct DeviceUiOption {
 struct ViewerContext {
     kairo::Executor executor;
     std::shared_ptr<rin::ICameraService> service;
-    GpuFrameView rgbView;
-    GpuFrameView depthView;
+    FrameStreamView rgbView;
+    FrameStreamView depthView;
     /// 策略深度可选输出（DEC-019 决策 3 的"无历史分片"变体）：米制深度通道 →
     /// 冻结管线 O6 单帧组合 → 灰度显示帧；tick 组件随服务 start 准入后创建。
 
@@ -93,7 +93,7 @@ struct ViewerContext {
     /// shared_ptr 持有（PolicyDepthOutput tick 闭包经 weak_from_this 捕获，
     /// enable_shared_from_this 契约——unique 持有会被 start() 显式拒绝）。
     std::shared_ptr<viewer::PolicyDepthOutput> policyDepth;
-    GpuFrameView policyDepthView;
+    FrameStreamView policyDepthView;
     std::string policyDepthMeta = "waiting for metric depth";
 
     rin::DeviceCatalog catalog;
@@ -371,7 +371,7 @@ void ViewerContext::pump() {
     bool frameUpdated = false;
     rin::Frame frame;
     if (service->tryLoadFrame(FrameKind::Rgb, lastRgbSequence, frame)) {
-        rgbView.update(frame);  // UI/渲染线程上传（EUI-20260923-003 绕行）
+        rgbView.update(frame);  // UI/渲染线程提交（ImageStream 官方路径）
         rgbMeta = std::to_string(frame.width) + " x " + std::to_string(frame.height);
         frameUpdated = true;
     }
@@ -502,7 +502,7 @@ void ViewerContext::pump() {
     }
 
     if (frameUpdated || poseUpdated) {
-        app::requestUpdate();  // 外部纹理/最新态快照非动画元素，需显式请求重绘
+        app::requestUpdate();  // 帧流提交/最新态快照非动画元素，需显式请求重绘
     }
 }
 
@@ -513,7 +513,8 @@ void ViewerContext::pump() {
 /// engine.hpp；帧源以 shared_ptr 持有相机服务，服务已停后引擎侧残余 tick 的
 /// 取帧恒为"无新帧"，闭包不悬垂）→ 工作流面板 UI 侧排空（M5-04 §4：缩略图
 /// 清空、控件绑定与失败标注复位；M5-05：性能统计消费态清空；M5-06：待生效
-/// 标注随引擎释放复位）→ GPU 设备销毁前释放导入引用 → executor.shutdown(true)。
+/// 标注随引擎释放复位）→ 帧流视图排空（换入空流，陈旧末帧不跨 shutdown 存活）→
+/// executor.shutdown(true)。
 /// 全部在主线程 onShutdown 内完成；幂等。
 void ViewerContext::shutdown() {
     if (shutdownDone) {
@@ -535,7 +536,7 @@ void ViewerContext::shutdown() {
         workflowCanvas.graphPending = false;
     }
     // 工作流画布 UI 侧排空（M5-04 §4 语义随 M11/DEC-021 迁移）：监看器预览
-    // GL 引用释放（GPU 设备销毁前）、内嵌控件与驱动尺寸缓存清空、失败标注
+    // 帧流排空（换入空流）、内嵌控件与驱动尺寸缓存清空、失败标注
     // 清空——stale 产物与控件态不跨 shutdown 存活。性能统计消费态同址排空
     // （M5-05 §4：clear 后 stale 统计不跨 shutdown 复活）。
     for (auto& [id, monitor] : workflowCanvas.monitors) {
@@ -547,7 +548,7 @@ void ViewerContext::shutdown() {
     workflowCanvas.driverSizes.clear();
     workflowCanvas.failures.clear();
     workflowCanvas.perf.clear();
-    rgbView.release();  // GPU 设备销毁前释放导入引用（框架 retirement 完成删除）
+    rgbView.release();  // 帧流排空（空流换入，陈旧末帧不跨 shutdown 存活）
     depthView.release();
     if (started) {
         (void)executor.shutdown(true);
@@ -602,7 +603,7 @@ void composeHeader(eui::Ui& ui, const ViewerContext& ctx, float x, float y, floa
 /// toggleText 非空时在标签右侧绘制输出切换胶囊（DEC-022：深度卡 Raw/Policy
 /// 可选输出；点击回调由调用方注入，样式与工作流枚举胶囊同源）。
 void composeViewCard(eui::Ui& ui, const char* id, float width, float height, const char* label,
-                     const std::string& meta, GpuFrameView& view, const char* toggleText = nullptr,
+                     const std::string& meta, FrameStreamView& view, const char* toggleText = nullptr,
                      const std::function<void()>& toggleOnClick = {}) {
     const float pad = kSpace3;
     const float labelHeight = kFontCaption + kSpace1;
@@ -664,7 +665,7 @@ void composeViewCard(eui::Ui& ui, const char* id, float width, float height, con
             ui.image(std::string(id) + ".img")
                 .position(pad, areaY)
                 .size(width - pad * 2.0f, areaHeight)
-                .texture(view.image(), view.revision())
+                .stream(view.stream())
                 .contain()
                 .radius(kRadiusMd)
                 .build();

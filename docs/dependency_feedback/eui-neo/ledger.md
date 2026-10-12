@@ -88,15 +88,14 @@
 - 期望语义：RGBA8/YUV 帧上传后纹理内容完整、按提交序呈现。
 - 建议最小能力：修复 ImageStream 的纹理上传路径（疑似 PBO/行距/异步映射处理）；
   或在文档标注已知不兼容的驱动范围。
-- 状态：Open（绕行维持；2026-10-04 真机回归证实 dev `4691fc0` 的 #71 修复
-  （e5ca594）对本机环境无效，切回尝试已回滚，见下。2026-10-12 v0.6.1 的
-  f8caff1 定位根因，待真机回归后切回 `.stream()` 并移除 GpuFrameView）
+- 状态：Resolved（v0.6.1 f8caff1 根因修复；合成探针真机定量 PASS + 切回后
+  真机验证通过，2026-10-12 绕行移除、切回 `.stream()` 官方路径，见跟进）
 - 绕行方案（单一边界内，符合台账纪律）：`apps/viewer/gpu_frame_view.hpp`——
   UI/渲染线程以自有 GL 纹理 `glTexSubImage2D` 上传 RGBA8，经
   `eui::image::importGpuImage` 导入绘制；revision 失效 + `app::requestUpdate()`
   驱动重绘；分辨率切换换新纹理导入，旧纹理由框架 retirement 队列经 owner deleter
   回收；`onShutdown` 释放引用。移除条件：上游修复 ImageStream 并经真机回归后，
-  切回 `.stream()` 路径并删除 GpuFrameView。
+  切回 `.stream()` 路径并删除 GpuFrameView。（2026-10-12 绕行已移除，见跟进）
 - 跟进：2026-09-23 登记；同日真机验证绕行后完整画面 + 键盘/鼠标切换 + 干净退出。
   2026-10-04 切回尝试（独立验证会话，dev `4691fc0`，D435IF 真机）：viewer 与
   合成探针双重复现——viewer RGB/Depth 卡逐像素差分仅左缘第 1 列更新、区域纯单色
@@ -124,6 +123,19 @@
   漏推进目标指针（每行写回同一首地址 → 仅左缘数像素列有效，其余冻结），
   与本条探针症状（仅 x=52-53 窄条帧间变化、其余逐位冻结）精确吻合，判定
   为根因修复；真机切回 `.stream()` 回归待相机接入执行（另见升级会话）。
+  2026-10-12 修复确认（相机接入，D435IF）：同一合成探针在 v0.6.1 下定量
+  PASS——图像区帧间变化 60.33%/96.51%（两组双帧、判据 >15%），变化列跨度
+  93.0%/99.5%（判据 >60%），左缘 4px 红参考列恒亮，seq 60fps 推进、无
+  REJECTED，SIGTERM 退出码 143；截图存档
+  `screenshots/upstream-repro/imagestream_v061_probe_area_{a,b}.png`。
+  同日切回实施：新增 `apps/viewer/frame_stream_view.hpp`（`FrameStreamView`，
+  `eui::ImageStream` 容量 2，`release()` 换空流依赖运行时 sourceChanged
+  释放纹理回空态），`app.cpp`/`node_canvas.hpp` 全部消费点改 `.stream()`，
+  `gpu_frame_view.hpp` 绕行删除。切回后 viewer 真机验证（用户手动全量：
+  RGB/深度预览、分辨率切换、深度卡 Policy 输出、下拉浮层、退出）通过。
+  环境记录：bundled GLFW 3.4 为 X11+Wayland 双后端，本机默认会话变量
+  （XDG_SESSION_TYPE=wayland）下应用走 Wayland 客户端，xwd 取证需
+  `XDG_SESSION_TYPE=x11 WAYLAND_DISPLAY=` 强制 X11/XWayland。
 
 ### EUI-20260923-004：`eui_neo_configure_app` 目标被施加 `-fno-exceptions`，与 Executor 异常式 API 冲突
 
@@ -422,7 +434,7 @@
 | --- | --- | --- | --- |
 | EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
-| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 同机 A/B 证实 e5ca594 对 RGBA8 流路径零改善，切回已回滚；A/B 证据已评论上游 #71；2026-10-12 v0.6.1 f8caff1（PR #97）定位根因（convertToRgba8 目标指针未推进），真机切回回归待相机 |
+| EUI-20260923-003 | Resolved | P1 | 上游 #71（附复现截图）；2026-10-04 同机 A/B 证实 e5ca594 零改善，A/B 证据评论上游；2026-10-12 v0.6.1 f8caff1（PR #97）根因修复（convertToRgba8 目标指针未推进），合成探针定量 PASS，GpuFrameView 绕行移除、切回 ImageStream（frame_stream_view.hpp），真机验证通过 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
@@ -494,7 +506,8 @@
   - debug 全量构建 184/184 步通过；debug ctest 35 项：33 通过 / 0 失败 /
     2 跳过（`realsense_hardware`/`realsense_fps_hardware`，无相机预期跳过）。
   - viewer 双配置产物产出（build/{debug,release}/apps/viewer/rin）。
-- 残余风险（不变）：ImageStream 真机切回回归（EUI-20260923-003，PR #97
-  根因修复的真机确认）与浮层点击真机回归均待相机接入；公开头变化为增量
-  （transparent / beginWindowMove/beginWindowResize / framebufferTransparent），
-  对 Rin 无破坏。
+- 残余风险（闭环，2026-10-12 同日跟进）：ImageStream 真机回归已完成——合成
+  探针定量 PASS（f8caff1 根因修复确认），viewer 切回 `.stream()` 官方路径
+  （GpuFrameView 绕行移除，`FrameStreamView` 替代）并经真机验证通过，详见
+  EUI-20260923-003 跟进；公开头变化为增量（transparent /
+  beginWindowMove/beginWindowResize / framebufferTransparent），对 Rin 无破坏。
