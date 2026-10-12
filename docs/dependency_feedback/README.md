@@ -9,7 +9,7 @@ Rin 要求所有第三方依赖分别建立独立台账（AGENTS.md“依赖独�
 | kairo | [../../kairo_feedback/ledger.md](../../kairo_feedback/ledger.md)（模板固定路径） | `EXE-` | `162aa5db7a8e7867aafa71cb9a5ebbd5f7867435`（master HEAD，v0.6.0-10） | external |
 | kairo（索引镜像） | [kairo/ledger.md](kairo/ledger.md) | — | 同上 | external |
 | librealsense2 | [librealsense/ledger.md](librealsense/ledger.md) | `LRS-` | `2.58.3`（源 `7c3ee3fb7c640e9f315e663907208cb56c4febfd`） | system |
-| eui-neo | [eui-neo/ledger.md](eui-neo/ledger.md) | `EUI-` | `4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722`（上游 dev） | external |
+| eui-neo | [eui-neo/ledger.md](eui-neo/ledger.md) | `EUI-` | `0.6.1`（源 `1647709068e36834ab26da5a97ef4ad98aa34c9d`） | external |
 | kissfft | [kissfft/ledger.md](kissfft/ledger.md) | `KIS-` | `131.2.0`（源 `7bce4153c6bc8aba2db0e889e576f9d00505cbe1`） | external |
 
 新增依赖时：在本表追加一行，并创建 `docs/dependency_feedback/<dep>/ledger.md`。
