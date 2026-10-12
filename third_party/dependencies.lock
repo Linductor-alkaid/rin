@@ -4,8 +4,9 @@
 # 配置阶段由 cmake/Dependencies.cmake 校验：本地源目录（RIN_<NAME>_SOURCE_DIR）HEAD 必须等于
 # pinned_commit；否则按 URL 拉取 pinned_commit。class=system 依赖按 expected 版本 find_package 校验。
 kairo|https://github.com/Linductor-alkaid/kairo.git|162aa5db7a8e7867aafa71cb9a5ebbd5f7867435|162aa5db7a8e7867aafa71cb9a5ebbd5f7867435|OFF|external
-# eui-neo 暂指向 fork 修复分支（滑条内部 zIndex 压过根级浮层，上游 PR sudoevolve/EUI-NEO#96、
-# issue #95；台账 EUI-20261009-001）。上游合入后回迁 upstream dev 对应提交。
-eui-neo|https://github.com/Linductor-alkaid/EUI-NEO.git|791cb46b6476c0a4fffa45405dc049c42e23a257|791cb46b6476c0a4fffa45405dc049c42e23a257|OFF|external
+# eui-neo 2026-10-12 回迁 upstream v0.6.1（1647709）：含滑条 zIndex 修复 PR #96（台账
+# EUI-20261009-001）、GLFW/no-exceptions 修复 PR #84/#85/#86（台账 EUI-20261003-001/002/003）
+# 与 ImageStream convertToRgba8 修复 PR #97（对应 EUI-20260923-003 症状，真机回归待相机）。
+eui-neo|https://github.com/sudoevolve/EUI-NEO.git|1647709068e36834ab26da5a97ef4ad98aa34c9d|1647709068e36834ab26da5a97ef4ad98aa34c9d|OFF|external
 realsense2|https://github.com/realsenseai/librealsense.git|7c3ee3fb7c640e9f315e663907208cb56c4febfd|7c3ee3fb7c640e9f315e663907208cb56c4febfd|OFF|external
 kissfft|https://github.com/mborgerding/kissfft.git|7bce4153c6bc8aba2db0e889e576f9d00505cbe1|7bce4153c6bc8aba2db0e889e576f9d00505cbe1|OFF|external

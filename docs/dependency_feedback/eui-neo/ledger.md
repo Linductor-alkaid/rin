@@ -1,26 +1,28 @@
 # EUI-NEO 依赖台账
 
 > 状态：Active
-> 依赖：EUI-NEO（pinned `4691fc0a5c1fde6f3e22f1ac454ed87c7a17f722`，上游 dev 分支——
-> 含 #71/#72/#73/#76/#77/#78 修复；待上游发布正式版本后回迁 main/tag，
+> 依赖：EUI-NEO（pinned `1647709068e36834ab26da5a97ef4ad98aa34c9d`，上游 v0.6.1
+> tag——含本台账 #96/#84/#85/#86/#97 对应上游修复；自 v0.6.1 起跟随上游正式版本，
 > https://github.com/sudoevolve/EUI-NEO ，Apache-2.0）
 > 记录纪律：工程规范第 9.4 节（台账部分由 AGENTS.md“依赖独立台账”节扩展到所有依赖）。
 
 ## 依赖身份
 
 - 来源：https://github.com/sudoevolve/EUI-NEO（备用镜像 AtomGit）
-- 锁定：`third_party/dependencies.lock` 行 `eui-neo|...|791cb46b...|...|OFF|external`
+- 锁定：`third_party/dependencies.lock` 行 `eui-neo|...|16477090...|...|OFF|external`
   （2026-10-03 由 `782c5699` 升至 dev `4691fc0a`，验证会话见文末；2026-10-09
   为包含滑条 zIndex 修复 EUI-20261009-001 / 上游 PR #96 临时改指 fork 分支
-  提交 `791cb46b`（基 dev `c444e53`），上游合入后回迁 upstream，见条目跟进）
+  提交 `791cb46b`（基 dev `c444e53`）；2026-10-12 上游发布 v0.6.1 合入全部
+  相关修复后回迁 upstream tag `16477090`，见各条目跟进与升级会话记录）
 - 许可证：Apache-2.0（上游 LICENSE）
 - 类别：external（FetchContent 源码引入 / 本地 pinned clone）
 - 集成方式：`add_subdirectory` → `eui::neo`；应用目标经 `eui_neo_configure_app()`
   获得入口与资源部署（[DEC-002](../../decisions/DEC-002-runtime-ui-integration.md)）。
-  GLFW 引入当前经 `cmake/Dependencies.cmake` 特例路由（见 EUI-20261003-001/002/003
-  绕行；上游 #79/#80/#81 修复前维持）。
-- 后端：GLFW 3.4（依赖自带 `3rd/glfw`，已含上游 X11 IME 修复）+ OpenGL；
-  glad/FreeType 等其余由上游 3rd/ 提供。
+  GLFW 引入自 v0.6.1 起走上游原生路径（`FetchContent_MakeAvailable`，auto 模式：
+  系统 GLFW ≥ 3.4 用系统目标，否则回退依赖自带 bundled 3.4；EUI-20261003-001/002
+  的 Rin 特例路由已按移除条件删除）。
+- 后端：GLFW 3.4（依赖自带 `3rd/glfw`，X11 IME 修复经上游补丁脚本注入，v0.6.1
+  起脚本哈希校验正常）+ OpenGL；glad/FreeType 等其余由上游 3rd/ 提供。
 
 ## 集成决策
 
@@ -87,7 +89,8 @@
 - 建议最小能力：修复 ImageStream 的纹理上传路径（疑似 PBO/行距/异步映射处理）；
   或在文档标注已知不兼容的驱动范围。
 - 状态：Open（绕行维持；2026-10-04 真机回归证实 dev `4691fc0` 的 #71 修复
-  （e5ca594）对本机环境无效，切回尝试已回滚，见下）
+  （e5ca594）对本机环境无效，切回尝试已回滚，见下。2026-10-12 v0.6.1 的
+  f8caff1 定位根因，待真机回归后切回 `.stream()` 并移除 GpuFrameView）
 - 绕行方案（单一边界内，符合台账纪律）：`apps/viewer/gpu_frame_view.hpp`——
   UI/渲染线程以自有 GL 纹理 `glTexSubImage2D` 上传 RGBA8，经
   `eui::image::importGpuImage` 导入绘制；revision 失效 + `app::requestUpdate()`
@@ -116,7 +119,11 @@
   通过不构成修复有效的证据。附加线索：探针在同上下文含 EUI 文字渲染时即
   复现，指向同上下文其他 GL 上传方与 ImageStream 渲染路径的交互。A/B 证据
   （含探针源码与截图对）已作为评论提交上游
-  sudoevolve/EUI-NEO#71（issuecomment-5980595234）。
+  sudoevolve/EUI-NEO#71（issuecomment-5980595234）。2026-10-12 上游 v0.6.1
+  含 `f8caff1`（PR #97）：`ImageFrame::convertToRgba8` 的 RGBA8/BGRA8 分支
+  漏推进目标指针（每行写回同一首地址 → 仅左缘数像素列有效，其余冻结），
+  与本条探针症状（仅 x=52-53 窄条帧间变化、其余逐位冻结）精确吻合，判定
+  为根因修复；真机切回 `.stream()` 回归待相机接入执行（另见升级会话）。
 
 ### EUI-20260923-004：`eui_neo_configure_app` 目标被施加 `-fno-exceptions`，与 Executor 异常式 API 冲突
 
@@ -248,13 +255,15 @@
   dev 包、走默认 Wayland+X11。
 - 移除条件：上游修复 #79 并被锁定版本包含后，恢复 `FetchContent_MakeAvailable`
   原生路径并删除该特例。
-- 状态：PR 已提交（上游 sudoevolve/EUI-NEO#85；2026-10-05 受开发者邀请在
-  Linux 本机复现、修复并提交）
+- 状态：Resolved（上游 PR #85 已合入 dcef7f9，随 v0.6.1 发布；2026-10-12 Rin
+  特例路由已按移除条件删除，原生路径 configure/build 验证通过，见升级会话）
 - 跟进：2026-10-03 登记；同日干净 dev 检出复现并上报 #79。2026-10-05 修复：
   `window_backend.cpp` 桌面标识 hint 宏守卫 + auto 模式 `find_package(glfw3 3.4)`
   回退 bundled（PR #85）。独立验证：预定义系统 3.3 目标路径编译通过（阴性
   对照 base 复现报错）、auto 回退 bundled 生效、bundled 3.4 下 `.appId` 运行时
-  WM_CLASS 读回一致；上游合并后随锁清单升级移除 Rin 侧同型绕行。
+  WM_CLASS 读回一致；上游合并后随锁清单升级移除 Rin 侧同型绕行。2026-10-12
+  PR #85 随 v0.6.1 合入，Rin 特例路由删除（本机 libxkbcommon 已具备，bundled
+  走默认 Wayland+X11）。
 
 ### EUI-20261003-002：dev `4691fc0` GLFW X11 IME 补丁脚本哈希常量与真实 GLFW 3.4 不符，bundled/fetch 路径配置期 FATAL
 
@@ -284,14 +293,15 @@
   校正（`expected_output_hash` → `8CE625AA...`），仅供跑上游自带测试套件使用，
   不影响 Rin 构建。
 - 移除条件：上游修正脚本（#80）并被锁定版本包含后，恢复原生路径并还原本地克隆。
-- 状态：PR 已提交（上游 sudoevolve/EUI-NEO#84；d7ccfc2 仅修正 source hash，
-  output hash 仍错——Linux bundled/fetch 双路径 configure 期依然 FATAL，已在
-  #80 评论附证据并提一行修复 PR #84）
+- 状态：Resolved（上游 PR #84 已合入 00cd6fd，随 v0.6.1 发布；v0.6.1 脚本接受
+  pristine `617C5088...`、patched `8CE625AA...` 与 bundled 直改 `A4B7E673...`
+  三种源状态，2026-10-12 原生路径 configure 验证补丁脚本不再 FATAL，见升级会话）
 - 跟进：2026-10-03 登记+哈希取证（官方 3.4=`7C5A60A5...`、变换产物=dev 捆绑
   文件=`8CE625AA...`）；2026-10-04 上游 d7ccfc2 关闭 #80（半修）；2026-10-05
   复测发现残余缺陷（bundled 源 8CE625AA 两分支均不匹配 / fetch 产物校验
-  mismatch），评论 #80 + PR #84（expected_output_hash → 8CE625AA）。
-- 跟进：2026-10-03 登记。
+  mismatch），评论 #80 + PR #84（expected_output_hash → 8CE625AA）。2026-10-12
+  PR #84 随 v0.6.1 合入（另经 ee5965a/88a9ec1 补全），Rin 绕行删除、本地克隆
+  哈希校正不再需要（工作树已还原）。
 
 ### EUI-20261003-003：dev `c7efcf1`（#76 修复）在库本体引入 `catch(...)`，与 `eui_apply_compile_options` 非 Debug 的 `-fno-exceptions` 冲突，eui_neo 库非 Debug 配置无法编译
 
@@ -317,13 +327,16 @@
   的 app 目标绕行同型；Debug 配置上游本就不施加）。本机 debug/release 两预设
   全量构建验证通过。
 - 移除条件：上游修复 #81 并被锁定版本包含后，删除该追加。
-- 状态：PR 已提交（上游 sudoevolve/EUI-NEO#86；2026-10-05 受开发者邀请在
-  Linux 本机复现、修复并提交）
+- 状态：Resolved（上游 PR #86 已合入 661aa6f，随 v0.6.1 发布；2026-10-12 Rin
+  `-fexceptions` 追加已按移除条件删除，Release 构建验证 eui_neo 在上游默认
+  `-fno-exceptions` 下编译通过，见升级会话）
 - 跟进：2026-10-03 登记；同日干净 dev 检出 + Release 复现 platform.cpp:286
   编译失败。2026-10-05 修复：`temp_directory_path()` 抛出重载 + `catch(...)`
   改 `error_code` 非抛出重载（PR #86）。独立验证：Release `-fno-exceptions`
   下库本体建成；platform_dialog Debug 常规通过 + Release 经 `-fexceptions`
   fixture 链接 Release 库运行通过。附带发现测试侧同型缺口（上游 #87）。
+  2026-10-12 PR #86 随 v0.6.1 合入（另有上游 b10e4ab/88a9ec1 异常选项重构），
+  Rin 绕行删除。
 
 ### EUI-20261003-004：上游测试 `tests/unit/image_stream.cpp` 与实现脱节，Debug 构建下确定性 SIGABRT
 
@@ -389,17 +402,19 @@
   上限 10，余量充足）。
 - 移除条件：上游组件不再内部使用 zIndex（或提供文档化的浮层层级约定）
   后，可移除显式 z 声明并做浮层点击回归。
-- 状态：Open（绕行已实施；上游修复 PR sudoevolve/EUI-NEO#96 已提交，等待合入）
+- 状态：Resolved（上游修复已合入：PR #96 merge 5da6133，随 v0.6.1 发布；
+  2026-10-12 锁清单回迁 upstream v0.6.1，回迁条件满足）
 - 跟进：2026-10-09 登记；修复 commit 见 `fix(viewer)` 系列提交。2026-10-09 上游
   化：issue sudoevolve/EUI-NEO#95 + PR #96（fork 分支
   `fix/slider-hit-zindex-subtree-order` @ `791cb46`，基于 dev `c444e53`；
   上游 ctest 34/34 含新增回归测试 `slider_subtree_z_order`，修复前该测试
   复现 `subtreeMaxZIndex=10`）。锁清单同步升级：
   `third_party/dependencies.lock` eui-neo 行改为 fork URL @ `791cb46`
-  （`4691fc0` → `791cb46`），**回迁条件：PR #96 合入上游后，锁清单回迁
-  upstream dev 对应提交并恢复原 URL**；Rin 侧 `kOverlayZIndex` 声明在
-  回迁复评前保留（防御性：不依赖宿主组件"内部不使用 zIndex"这一隐含
-  前提，且实测同值 tie 的排序行为未在框架层定论）。
+  （`4691fc0` → `791cb46`）。2026-10-12 回迁条件满足（PR #96 合入上游并随
+  v0.6.1 发布），锁清单回迁 upstream tag `16477090` 并恢复原 URL；Rin 侧
+  `kOverlayZIndex` 复评后保留（防御性：不依赖宿主组件"内部不使用 zIndex"
+  这一隐含前提，且实测同值 tie 的排序行为未在框架层定论；移除条件不变——
+  上游提供文档化的浮层层级约定后移除并做浮层点击回归）。
 
 
 
@@ -407,16 +422,16 @@
 | --- | --- | --- | --- |
 | EUI-20260923-001 | Reported | P3 | 上游 #73；设计已按幂等 owner 规避 |
 | EUI-20260923-002 | Reported | P3 | 上游 #72；viewer 已按现语义接线并完成真机点击验收 |
-| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 同机 A/B 证实 e5ca594 对 RGBA8 流路径零改善，切回已回滚；A/B 证据已评论上游 #71，待上游回应 |
+| EUI-20260923-003 | Reported | P1 | 上游 #71（附复现截图）；viewer 绕行维持（GpuFrameView）；2026-10-04 同机 A/B 证实 e5ca594 对 RGBA8 流路径零改善，切回已回滚；A/B 证据已评论上游 #71；2026-10-12 v0.6.1 f8caff1（PR #97）定位根因（convertToRgba8 目标指针未推进），真机切回回归待相机 |
 | EUI-20260923-004 | Reported | P3 | 2026-09-23 登记；viewer 目标以 `-fexceptions -frtti` 绕行，Release 打包验证通过 |
 | EUI-20260924-001 | Open | P1 | 2026-09-24 登记；retained layer 签名缺 polygon points 致 3D 位姿视图冻结（插桩+像素差分取证）；viewer 已以 pose 场景 polygon dirtyKey 绕行（pose_view.hpp）；待上报上游，修复后回归移除绕行 |
 | EUI-20260928-001 | Open | P3 | 2026-09-28 登记；sidebar=右锚定抽屉、tabs/segmented 横向、navbar 未文档化且绑定组件主题体系；viewer 自绘窄边导航栏（navigation.hpp），上游出文档化 rail 后替换 |
-| EUI-20261003-001 | PR 提交 | P2 | 上游 #79 → PR #85（2026-10-05 Linux 本机修复+验证）；Rin 侧 bundled 绕行维持至上游合并 |
-| EUI-20261003-002 | PR 提交 | P2 | 上游 #80 半修（d7ccfc2 仅 source hash）；残余 output hash 缺陷评论 #80 + PR #84（2026-10-05） |
-| EUI-20261003-003 | PR 提交 | P1 | 上游 #81 → PR #86（2026-10-05 error_code 非抛出重载修复+验证）；Rin 侧 `-fexceptions` 追加绕行维持至上游合并 |
+| EUI-20261003-001 | Resolved | P2 | 上游 #79 → PR #85（2026-10-05 修复）已合入 dcef7f9，随 v0.6.1 发布；2026-10-12 Rin 特例路由删除，原生路径验证通过 |
+| EUI-20261003-002 | Resolved | P2 | 上游 #80 → PR #84（2026-10-05 修复）已合入 00cd6fd，随 v0.6.1 发布（ee5965a/88a9ec1 补全）；2026-10-12 原生路径补丁脚本验证通过 |
+| EUI-20261003-003 | Resolved | P1 | 上游 #81 → PR #86（2026-10-05 error_code 非抛出重载修复）已合入 661aa6f，随 v0.6.1 发布；2026-10-12 Rin `-fexceptions` 追加删除，Release 构建验证通过 |
 | EUI-20261003-004 | Resolved | P3 | 上游 #82 已由 123f0c5 修复（`tests/unit/image_stream.cpp` 陈旧断言，2026-10-05 Release/Debug 复测通过） |
 | EUI-20261005-001 | Reported | P3 | 上游 #87；Release 下测试夹具/应用目标异常语法编不过（platform_dialog throw、dsl_app_impl try/catch），预存在豁免缺口；不阻断 Rin |
-| EUI-20261009-001 | Open | P2 | 滑条内部 zIndex(10) 经子树排序压过根级浮层（分辨率下拉不可点选）；viewer 浮层显式 kOverlayZIndex=1000 绕行（viewer_components.hpp）；上游 issue #95 / PR #96（fork `791cb46b`），锁清单已暂指 fork 修复提交，上游合入后回迁 |
+| EUI-20261009-001 | Resolved | P2 | 滑条内部 zIndex(10) 经子树排序压过根级浮层；上游 issue #95 / PR #96 已合入（5da6133，含回归测试），随 v0.6.1 发布；2026-10-12 锁清单回迁 upstream `16477090`；Rin kOverlayZIndex 复评后防御性保留（viewer_components.hpp），移除条件不变 |
 
 ## dev 分支验证会话（2026-10-03）
 
@@ -447,3 +462,39 @@
 - 残余风险：#71 相机帧真机回归（GpuFrameView → `.stream()` 切回）待相机接入；
   Release/打包构建被 EUI-20261003-003 阻断；上游新缺陷已上报：#79（EUI-20261003-001）、#80（EUI-20261003-002）、
   #81（EUI-20261003-003）、#82（EUI-20261003-004）。
+
+## 升级会话（2026-10-12：回迁 upstream v0.6.1）
+
+- 背景：上游发布 v0.6.1（`1647709068e36834ab26da5a97ef4ad98aa34c9d`，main，
+  含 dev 近期修复合并），本台账全部已提交 PR 均随版发布：#96（滑条 zIndex，
+  EUI-20261009-001，merge 5da6133）、#85（GLFW 3.3 兼容，EUI-20261003-001，
+  merge dcef7f9）、#84（补丁脚本 output hash，EUI-20261003-002，merge 00cd6fd，
+  另有 ee5965a/88a9ec1 补全）、#86（platform 无异常化，EUI-20261003-003，
+  merge 661aa6f）；另含 PR #97（`f8caff1`，convertToRgba8 RGBA8/BGRA8 目标
+  指针推进，与 EUI-20260923-003 症状精确吻合的根因修复）。锁清单按既定
+  回迁条件由 fork `791cb46b` 回迁 upstream v0.6.1。
+- 代码变更：
+  - `third_party/dependencies.lock`：URL 恢复 upstream，pinned `16477090`。
+  - `cmake/Dependencies.cmake`：删除 eui-neo 特例路由（GLFW 预定义 +
+    Populate 特例 add_subdirectory）与 `eui_neo` `-fexceptions` 追加，
+    恢复 `FetchContent_MakeAvailable` 原生路径（EUI-20261003-001/002/003
+    移除条件全部满足）。viewer 目标 `-fexceptions -frtti`（EUI-20260923-004）
+    保留：上游 v0.6.1 仍对 app 目标统一施加 `-fno-exceptions/-fno-rtti`
+    且无 opt-out。
+- 独立验证结果（Independent-Verification-Agent，2026-10-12，日志
+  `build/{debug,release}-build-verify.log`）：
+  - debug/release 双预设 configure 通过；`_deps/eui-neo-src` HEAD 与 origin
+    均核验为 upstream v0.6.1。release 全新 configure 走 auto 模式：系统
+    GLFW 3.3 未过 `find_package(glfw3 3.4)`，回退 bundled（Wayland+X11），
+    X11 IME 补丁脚本执行无 FATAL（bundled 源哈希 `A4B7E673...` 命中脚本
+    "已修复"白名单，短路复制）。
+  - release 全量构建 508/508 步通过；compile_commands 抽查：eui_neo 28 个
+    自源编译单元在 `-fno-exceptions` 下全部编译成功、零条 `-fexceptions`
+    ——库本体绕行删除安全（EUI-20261003-003 移除条件的行为级证实）。
+  - debug 全量构建 184/184 步通过；debug ctest 35 项：33 通过 / 0 失败 /
+    2 跳过（`realsense_hardware`/`realsense_fps_hardware`，无相机预期跳过）。
+  - viewer 双配置产物产出（build/{debug,release}/apps/viewer/rin）。
+- 残余风险（不变）：ImageStream 真机切回回归（EUI-20260923-003，PR #97
+  根因修复的真机确认）与浮层点击真机回归均待相机接入；公开头变化为增量
+  （transparent / beginWindowMove/beginWindowResize / framebufferTransparent），
+  对 Rin 无破坏。

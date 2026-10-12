@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 依赖
+
+- eui-neo 由 fork 修复分支 `791cb46` 回迁上游正式版 **v0.6.1**（`16477090`，
+  external）：上游已合入本台账全部提交的 PR——#96（组件滑条内部 zIndex 压过
+  根级浮层修复，EUI-20261009-001；Rin `kOverlayZIndex` 复评后防御性保留）、
+  #84/#85/#86（GLFW 引入与库本体 no-exceptions 修复，EUI-20261003-001/002/003）、
+  #97（`convertToRgba8` RGBA8/BGRA8 分支漏推进目标指针——与 EUI-20260923-003
+  ImageStream"仅左缘窄条更新"症状精确吻合的根因修复，真机切回回归待相机）。
+  `cmake/Dependencies.cmake` 据此删除两处 eui-neo 特例（GLFW 预定义路由、
+  `eui_neo` `-fexceptions` 追加），恢复 `FetchContent_MakeAvailable` 原生路径。
+  新增公开 API 均为增量（`transparent` 窗口透明、`beginWindowMove/Resize`
+  合成器交互式移动缩放、`framebufferTransparent` 查询），对 Rin 无破坏。
+  独立验证：debug/release 双预设 configure + 全量构建通过（Release 下 eui_neo
+  于上游 `-fno-exceptions` 编译通过、bundled GLFW + X11 IME 补丁脚本无
+  FATAL）；debug ctest 33 通过 / 0 失败 / 2 跳过（hardware 用例，无相机预期）；
+  真机 GUI 回归（ImageStream 切回、浮层点击）待相机接入。
+
 ## [0.5.4] - 2026-10-09（预览策略深度可选输出与界面字号设置）
 
 ### 新增
